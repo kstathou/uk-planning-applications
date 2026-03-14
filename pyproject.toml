@@ -1,0 +1,16 @@
+[project]
+name = "uk-planning-applications"
+version = "0.1.0"
+description = "Centralised planning application data for England"
+requires-python = ">=3.13"
+dependencies = [
+    "browser-use",
+    "modal",
+    "python-dotenv",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest",
+    "pytest-asyncio",
+]
