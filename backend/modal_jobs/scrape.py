@@ -25,7 +25,7 @@ SCRAPERS = {
     timeout=600,
     secrets=[modal.Secret.from_name("vllm-config")],
 )
-async def scrape_council(council: str):
+async def scrape_council(council: str) -> None:
     import importlib
     import os
 
@@ -45,5 +45,5 @@ async def scrape_council(council: str):
 
 
 @app.local_entrypoint()
-async def main(council: str = "haringey"):
+async def main(council: str = "haringey") -> None:
     await scrape_council.remote.aio(council)

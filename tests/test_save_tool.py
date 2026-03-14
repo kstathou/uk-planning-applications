@@ -3,8 +3,6 @@ import json
 import os
 import tempfile
 
-import pytest
-
 from backend.tools.save import create_save_tools
 
 

@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from browser_use import Tools
 
@@ -39,7 +39,7 @@ def create_save_tools(output_dir: str = "data") -> Tools:
             "council": council,
             "url": url,
             "raw_fields": raw_fields,
-            "scraped_at": datetime.now(timezone.utc).isoformat(),
+            "scraped_at": datetime.now(UTC).isoformat(),
         }
         os.makedirs(output_dir, exist_ok=True)
         safe_council = council.replace(os.sep, "_").replace("/", "_").replace("..", "_")

@@ -1,4 +1,3 @@
-import pytest
 from backend.scrapers.base import create_agent
 
 
