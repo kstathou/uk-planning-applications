@@ -42,9 +42,10 @@ def create_save_tools(output_dir: str = "data") -> Tools:
             "scraped_at": datetime.now(timezone.utc).isoformat(),
         }
         os.makedirs(output_dir, exist_ok=True)
-        filepath = os.path.join(output_dir, f"{council}.jsonl")
+        safe_council = council.replace(os.sep, "_").replace("/", "_").replace("..", "_")
+        filepath = os.path.join(output_dir, f"{safe_council}.jsonl")
         with open(filepath, "a") as f:
-            f.write(json.dumps(record) + "\n")
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         return f"Saved application {reference}"
 
     return tools
