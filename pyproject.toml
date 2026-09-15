@@ -1,0 +1,119 @@
+[project]
+name = "yimby"
+version = "0.1.0"
+description = "Tools for working with UK planning applications."
+readme = "README.md"
+authors = [
+    { name = "Kostas Stathoulopoulos", email = "k.stathoylopoylos@gmail.com" }
+]
+requires-python = ">=3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["planning", "uk", "yimby"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Issues = "https://github.com/kstathou/uk-planning-applications/issues"
+Repository = "https://github.com/kstathou/uk-planning-applications"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = ">=0.12.15"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--cov=yimby",
+    "--cov-branch",
+    "--cov-report=term-missing:skip-covered",
+    "--cov-report=xml",
+    "--cov-fail-under=100",
+]
+filterwarnings = ["error"]
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.coverage.run]
+branch = true
+source = ["yimby"]
+
+[tool.coverage.paths]
+source = ["src/yimby", "*/site-packages/yimby"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+files = ["src", "tests"]
+pretty = true
+python_version = "3.13"
+show_error_codes = true
+strict = true
+warn_unreachable = true
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+target-version = "py313"
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+ignore = [
+    # Ruff formatter incompatibilities documented by Astral.
+    "COM812",
+    "COM819",
+    "D203",
+    "D206",
+    "D300",
+    "E111",
+    "E114",
+    "E117",
+    "ISC002",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "Q004",
+    "W191",
+]
+select = ["ALL"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["yimby"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    # Pytest tests conventionally use plain assert statements.
+    "S101",
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+docstring-code-format = true
+indent-style = "space"
+line-ending = "auto"
+quote-style = "double"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.3.1",
+    "pre-commit>=4.6.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.16.7",
+]
