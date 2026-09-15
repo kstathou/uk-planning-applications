@@ -4,18 +4,35 @@
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING
 
 from yimby.domain import (
     AuthorityId,
     CollectionReport,
     DiscoveryWindow,
+    RunMetrics,
+    RunOutcome,
+    RunStatus,
+    SourceReference,
 )
 
 if TYPE_CHECKING:
     from yimby.registry import AuthorityRegistry
     from yimby.store import SqliteStore
     from yimby.transport import PortalSession
+
+
+@dataclass(slots=True)
+class _RunContext:
+    run_id: str
+    authority_id: AuthorityId
+    session: PortalSession
+    started: float
+    storage_before: int
+    active_reference: SourceReference | None = None
 
 
 class Collector:
@@ -25,6 +42,7 @@ class Collector:
         """Bind an authority registry to its single writer."""
         self._registry = registry
         self._store = store
+        self._store.register_authorities(registry.manifests())
 
     async def collect(
         self,
@@ -35,24 +53,100 @@ class Collector:
         """Discover, queue, fetch, normalise, and commit one authority."""
         package = self._registry.get(authority_id)
         run_id = self._store.begin_run(authority_id)
+        context = _RunContext(
+            run_id=run_id,
+            authority_id=authority_id,
+            session=session,
+            started=monotonic(),
+            storage_before=self._store.storage_bytes(),
+        )
         checkpoint = self._store.discovery_state(authority_id).checkpoint
         application_ids = []
         attachment_urls: set[str] = set()
-        async for batch in package.discover(session, window, checkpoint):
-            self._store.commit_discovery(run_id, authority_id, batch)
-            for reference in batch.references:
-                collected = await package.collect(session, reference)
-                attachment_urls.update(
-                    str(document.url) for document in collected.normalised.documents
-                )
-                application_ids.append(
-                    self._store.commit_observation(run_id, collected)
-                )
+        try:
+            async for batch in package.discover(session, window, checkpoint):
+                self._store.commit_discovery(run_id, authority_id, batch)
+                for reference in batch.references:
+                    context.active_reference = reference
+                    collected = await package.collect(session, reference)
+                    attachment_urls.update(
+                        str(document.url) for document in collected.normalised.documents
+                    )
+                    application_ids.append(
+                        self._store.commit_observation(run_id, collected)
+                    )
+                    self._store.mark_retry_succeeded(authority_id, reference)
+                    context.active_reference = None
+        except asyncio.CancelledError as error:
+            self._finish_failed_run(
+                context,
+                RunStatus.INTERRUPTED,
+                error,
+            )
+            raise
+        except Exception as error:
+            self._finish_failed_run(
+                context,
+                RunStatus.FAILED,
+                error,
+            )
+            raise
         retrieved_attachment_urls = attachment_urls.intersection(session.requested_urls)
+        self._store.finish_run(
+            run_id,
+            authority_id,
+            RunOutcome(
+                status=RunStatus.SUCCEEDED,
+                metrics=self._metrics(context),
+                transport_mode=session.mode,
+            ),
+        )
         return CollectionReport(
             applications=tuple(application_ids),
             requested_urls=session.requested_urls,
             attachment_body_requests=(
                 session.attachment_body_requests + len(retrieved_attachment_urls)
+            ),
+        )
+
+    def _finish_failed_run(
+        self,
+        context: _RunContext,
+        status: RunStatus,
+        error: BaseException,
+    ) -> None:
+        error_name = type(error).__name__
+        if context.active_reference is not None:
+            self._store.enqueue_retry(
+                context.authority_id,
+                context.active_reference,
+                error_name,
+            )
+        self._store.record_failure(
+            context.authority_id,
+            context.run_id,
+            error_name,
+            error_name,
+            retryable=context.active_reference is not None,
+        )
+        self._store.finish_run(
+            context.run_id,
+            context.authority_id,
+            RunOutcome(
+                status=status,
+                metrics=self._metrics(context),
+                transport_mode=context.session.mode,
+                failure_message=error_name,
+            ),
+        )
+
+    def _metrics(self, context: _RunContext) -> RunMetrics:
+        return RunMetrics(
+            request_count=len(context.session.requested_urls),
+            transferred_bytes=context.session.transferred_bytes,
+            duration_ms=max(0, round((monotonic() - context.started) * 1000)),
+            storage_growth_bytes=max(
+                0,
+                self._store.storage_bytes() - context.storage_before,
             ),
         )

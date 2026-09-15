@@ -1,0 +1,7 @@
+[Unit]
+Description=Example disabled YIMBY planning sync
+ConditionPathExists=/path/to/enable-yimby-sync
+
+[Service]
+Type=oneshot
+ExecStart=/path/to/yimby --data-dir /path/to/yimby-data sync --authority all

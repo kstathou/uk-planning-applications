@@ -13,6 +13,7 @@ from urllib.parse import quote
 from pydantic import HttpUrl
 
 from yimby.domain import (
+    ApplicationMetadata,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
@@ -34,6 +35,7 @@ from yimby.domain import (
     UnavailableSection,
     collection_state,
 )
+from yimby.geo import bng_to_wgs84
 from yimby.transport import PortalRequest, RequestIntent
 
 if TYPE_CHECKING:
@@ -197,6 +199,12 @@ class CamdenAdapter:
                 Provenance(field="status", evidence=evidence),
             ),
             normaliser_version="camden-v1",
+            metadata=ApplicationMetadata(
+                location=bng_to_wgs84(
+                    snapshot.payload.grid_easting,
+                    snapshot.payload.grid_northing,
+                )
+            ),
         )
 
 

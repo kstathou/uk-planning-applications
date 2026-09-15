@@ -10,7 +10,7 @@ from yimby.authorities.camden.adapter import (
 )
 
 CAMDEN_PACKAGE: AuthorityPackage[CamdenApplicationV1, CamdenCheckpointV1] = (
-    AuthorityPackage(CamdenAdapter(), CamdenCheckpointV1)
+    AuthorityPackage(CamdenAdapter(), CamdenApplicationV1, CamdenCheckpointV1)
 )
 
 __all__ = ["CAMDEN_PACKAGE"]

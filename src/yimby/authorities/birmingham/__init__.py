@@ -11,6 +11,8 @@ from yimby.authorities.birmingham.adapter import (
 
 BIRMINGHAM_PACKAGE: AuthorityPackage[
     BirminghamApplicationV1, BirminghamCheckpointV1
-] = AuthorityPackage(BirminghamAdapter(), BirminghamCheckpointV1)
+] = AuthorityPackage(
+    BirminghamAdapter(), BirminghamApplicationV1, BirminghamCheckpointV1
+)
 
 __all__ = ["BIRMINGHAM_PACKAGE"]

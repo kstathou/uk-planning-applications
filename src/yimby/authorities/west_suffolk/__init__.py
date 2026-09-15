@@ -11,6 +11,8 @@ from yimby.authorities.west_suffolk.adapter import (
 
 WEST_SUFFOLK_PACKAGE: AuthorityPackage[
     WestSuffolkApplicationV1, WestSuffolkCheckpointV1
-] = AuthorityPackage(WestSuffolkAdapter(), WestSuffolkCheckpointV1)
+] = AuthorityPackage(
+    WestSuffolkAdapter(), WestSuffolkApplicationV1, WestSuffolkCheckpointV1
+)
 
 __all__ = ["WEST_SUFFOLK_PACKAGE"]

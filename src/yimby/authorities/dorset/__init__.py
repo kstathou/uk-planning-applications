@@ -10,7 +10,7 @@ from yimby.authorities.dorset.adapter import (
 )
 
 DORSET_PACKAGE: AuthorityPackage[DorsetApplicationV1, DorsetCheckpointV1] = (
-    AuthorityPackage(DorsetAdapter(), DorsetCheckpointV1)
+    AuthorityPackage(DorsetAdapter(), DorsetApplicationV1, DorsetCheckpointV1)
 )
 
 __all__ = ["DORSET_PACKAGE"]

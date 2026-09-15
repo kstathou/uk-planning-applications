@@ -10,7 +10,7 @@ from yimby.authorities.barnet.adapter import (
 )
 
 BARNET_PACKAGE: AuthorityPackage[BarnetApplicationV1, BarnetCheckpointV1] = (
-    AuthorityPackage(BarnetAdapter(), BarnetCheckpointV1)
+    AuthorityPackage(BarnetAdapter(), BarnetApplicationV1, BarnetCheckpointV1)
 )
 
 __all__ = ["BARNET_PACKAGE"]

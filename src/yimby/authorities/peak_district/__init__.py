@@ -11,6 +11,8 @@ from yimby.authorities.peak_district.adapter import (
 
 PEAK_DISTRICT_PACKAGE: AuthorityPackage[
     PeakDistrictApplicationV1, PeakDistrictCheckpointV1
-] = AuthorityPackage(PeakDistrictAdapter(), PeakDistrictCheckpointV1)
+] = AuthorityPackage(
+    PeakDistrictAdapter(), PeakDistrictApplicationV1, PeakDistrictCheckpointV1
+)
 
 __all__ = ["PEAK_DISTRICT_PACKAGE"]

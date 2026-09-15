@@ -10,7 +10,7 @@ from yimby.authorities.durham.adapter import (
 )
 
 DURHAM_PACKAGE: AuthorityPackage[DurhamApplicationV1, DurhamCheckpointV1] = (
-    AuthorityPackage(DurhamAdapter(), DurhamCheckpointV1)
+    AuthorityPackage(DurhamAdapter(), DurhamApplicationV1, DurhamCheckpointV1)
 )
 
 __all__ = ["DURHAM_PACKAGE"]

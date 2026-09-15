@@ -11,6 +11,8 @@ from yimby.authorities.cheshire_east.adapter import (
 
 CHESHIRE_EAST_PACKAGE: AuthorityPackage[
     CheshireEastApplicationV1, CheshireEastCheckpointV1
-] = AuthorityPackage(CheshireEastAdapter(), CheshireEastCheckpointV1)
+] = AuthorityPackage(
+    CheshireEastAdapter(), CheshireEastApplicationV1, CheshireEastCheckpointV1
+)
 
 __all__ = ["CHESHIRE_EAST_PACKAGE"]

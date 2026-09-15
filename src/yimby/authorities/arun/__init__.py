@@ -10,7 +10,7 @@ from yimby.authorities.arun.adapter import (
 )
 
 ARUN_PACKAGE: AuthorityPackage[ArunApplicationV1, ArunCheckpointV1] = AuthorityPackage(
-    ArunAdapter(), ArunCheckpointV1
+    ArunAdapter(), ArunApplicationV1, ArunCheckpointV1
 )
 
 __all__ = ["ARUN_PACKAGE"]

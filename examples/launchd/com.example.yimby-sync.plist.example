@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.yimby-sync</string>
+  <key>Disabled</key>
+  <true/>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/path/to/yimby</string>
+    <string>--data-dir</string>
+    <string>/path/to/yimby-data</string>
+    <string>sync</string>
+    <string>--authority</string>
+    <string>all</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>3</integer>
+  </dict>
+</dict>
+</plist>

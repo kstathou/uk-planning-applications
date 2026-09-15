@@ -1,0 +1,8 @@
+[Unit]
+Description=Example YIMBY weekly planning sync timer
+
+[Timer]
+OnCalendar=Mon *-*-* 03:00:00
+Persistent=false
+
+# Intentionally lacks an installation section; review before manually enabling.

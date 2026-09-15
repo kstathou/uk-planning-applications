@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from pydantic import HttpUrl
 
-from yimby.domain import EvidenceCapture, EvidenceDigest, FrozenModel
+from yimby.domain import EvidenceCapture, EvidenceDigest, FrozenModel, TransportMode
 
 
 class SourceUnavailableError(RuntimeError):
@@ -57,6 +57,14 @@ class PortalSession(Protocol):
     def attachment_body_requests(self) -> int:
         """Return the number of blocked attachment-body attempts."""
 
+    @property
+    def transferred_bytes(self) -> int:
+        """Return response-body bytes transferred through this session."""
+
+    @property
+    def mode(self) -> TransportMode:
+        """Identify whether fixture or live transport served the run."""
+
 
 class FixtureSession:
     """Replay sanitised source responses without network access."""
@@ -66,6 +74,7 @@ class FixtureSession:
         self._responses = responses
         self._requested_urls: list[str] = []
         self._attachment_body_requests = 0
+        self._transferred_bytes = 0
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         """Return one fixture response after applying attachment policy."""
@@ -78,6 +87,7 @@ class FixtureSession:
         if response is None:
             raise SourceUnavailableError(url)
         self._requested_urls.append(url)
+        self._transferred_bytes += len(response.body)
         digest = EvidenceDigest(sha256(response.body).hexdigest())
         return EvidenceCapture(
             url=request.url,
@@ -100,3 +110,13 @@ class FixtureSession:
     def attachment_body_requests(self) -> int:
         """Return blocked attachment-body attempts."""
         return self._attachment_body_requests
+
+    @property
+    def transferred_bytes(self) -> int:
+        """Return fixture bytes replayed to adapters."""
+        return self._transferred_bytes
+
+    @property
+    def mode(self) -> TransportMode:
+        """Identify this deterministic session as fixture-backed."""
+        return TransportMode.FIXTURE

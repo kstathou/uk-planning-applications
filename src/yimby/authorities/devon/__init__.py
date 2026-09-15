@@ -10,7 +10,7 @@ from yimby.authorities.devon.adapter import (
 )
 
 DEVON_PACKAGE: AuthorityPackage[DevonApplicationV1, DevonCheckpointV1] = (
-    AuthorityPackage(DevonAdapter(), DevonCheckpointV1)
+    AuthorityPackage(DevonAdapter(), DevonApplicationV1, DevonCheckpointV1)
 )
 
 __all__ = ["DEVON_PACKAGE"]

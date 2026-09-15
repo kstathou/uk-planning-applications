@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from yimby.adapters import RunnableAuthority
-    from yimby.domain import AuthorityId
+    from yimby.domain import AuthorityId, AuthorityManifest
 
 
 class DuplicateAuthorityError(ValueError):
@@ -54,6 +54,10 @@ class AuthorityRegistry:
     def ids(self) -> tuple[AuthorityId, ...]:
         """Return registered authority identifiers in stable order."""
         return tuple(self._packages)
+
+    def manifests(self) -> tuple[AuthorityManifest, ...]:
+        """Return typed manifests in the same stable ownership order."""
+        return tuple(package.manifest for package in self._packages.values())
 
 
 def barnet_registry() -> AuthorityRegistry:

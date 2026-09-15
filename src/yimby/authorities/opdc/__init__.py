@@ -10,7 +10,7 @@ from yimby.authorities.opdc.adapter import (
 )
 
 OPDC_PACKAGE: AuthorityPackage[OpdcApplicationV1, OpdcCheckpointV1] = AuthorityPackage(
-    OpdcAdapter(), OpdcCheckpointV1
+    OpdcAdapter(), OpdcApplicationV1, OpdcCheckpointV1
 )
 
 __all__ = ["OPDC_PACKAGE"]

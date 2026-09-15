@@ -10,7 +10,7 @@ from yimby.authorities.haringey.adapter import (
 )
 
 HARINGEY_PACKAGE: AuthorityPackage[HaringeyApplicationV1, HaringeyCheckpointV1] = (
-    AuthorityPackage(HaringeyAdapter(), HaringeyCheckpointV1)
+    AuthorityPackage(HaringeyAdapter(), HaringeyApplicationV1, HaringeyCheckpointV1)
 )
 
 __all__ = ["HARINGEY_PACKAGE"]

@@ -10,7 +10,7 @@ from yimby.authorities.leeds.adapter import (
 )
 
 LEEDS_PACKAGE: AuthorityPackage[LeedsApplicationV1, LeedsCheckpointV1] = (
-    AuthorityPackage(LeedsAdapter(), LeedsCheckpointV1)
+    AuthorityPackage(LeedsAdapter(), LeedsApplicationV1, LeedsCheckpointV1)
 )
 
 __all__ = ["LEEDS_PACKAGE"]

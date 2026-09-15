@@ -16,6 +16,7 @@ from yimby.domain import (
     DurableDiscoveryBatch,
     NativeSnapshot,
     NormalisedObservation,
+    RetainedNativeRecord,
     SourceReference,
     StoredCheckpoint,
 )
@@ -78,6 +79,18 @@ class RunnableAuthority(Protocol):
         """Fetch and normalise one application without losing native data."""
         ...
 
+    def rebuild(self, retained: RetainedNativeRecord) -> NormalisedObservation:
+        """Normalise a retained native payload without authority contact."""
+        ...
+
+
+class NativeSchemaMismatchError(ValueError):
+    """A retained payload does not belong to the registered package schema."""
+
+    def __init__(self, expected: str, received: str) -> None:
+        """Describe the incompatible retained schema names."""
+        super().__init__(f"expected native schema {expected}, received {received}")
+
 
 class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
     """Preserve native type relationships behind the runtime interface."""
@@ -85,11 +98,13 @@ class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
     def __init__(
         self,
         adapter: AuthorityAdapter[NativeT, CheckpointT],
+        native_model: type[NativeT],
         checkpoint_model: type[CheckpointT],
     ) -> None:
         """Bind one adapter to its checkpoint model."""
         self.manifest = adapter.manifest
         self._adapter = adapter
+        self._native_model = native_model
         self._checkpoint_model = checkpoint_model
 
     async def discover(
@@ -132,3 +147,17 @@ class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
             evidence=snapshot.evidence,
             observed_at=snapshot.observed_at,
         )
+
+    def rebuild(self, retained: RetainedNativeRecord) -> NormalisedObservation:
+        """Recreate the typed snapshot needed by the authority normaliser."""
+        expected = self._native_model.__name__
+        if retained.native_schema != expected:
+            raise NativeSchemaMismatchError(expected, retained.native_schema)
+        snapshot = NativeSnapshot[NativeT](
+            reference=retained.reference,
+            observed_at=retained.observed_at,
+            payload=self._native_model.model_validate_json(retained.native_json),
+            completeness=retained.completeness,
+            evidence=retained.evidence,
+        )
+        return self._adapter.normalise(snapshot)

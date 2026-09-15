@@ -10,7 +10,7 @@ from yimby.authorities.cornwall.adapter import (
 )
 
 CORNWALL_PACKAGE: AuthorityPackage[CornwallApplicationV1, CornwallCheckpointV1] = (
-    AuthorityPackage(CornwallAdapter(), CornwallCheckpointV1)
+    AuthorityPackage(CornwallAdapter(), CornwallApplicationV1, CornwallCheckpointV1)
 )
 
 __all__ = ["CORNWALL_PACKAGE"]

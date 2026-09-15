@@ -7,10 +7,12 @@ from __future__ import annotations
 import gzip
 from typing import TYPE_CHECKING
 
+from pydantic import HttpUrl
+
+from yimby.domain import EvidenceCapture, EvidenceDigest
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from yimby.domain import EvidenceCapture
 
 
 class EvidenceStore:
@@ -31,3 +33,23 @@ class EvidenceStore:
         temporary.write_bytes(gzip.compress(capture.body, mtime=0))
         temporary.replace(path)
         return path
+
+    def relative_path(self, path: Path) -> str:
+        """Return a backup-portable path below the evidence root."""
+        return str(path.relative_to(self.root))
+
+    def read_capture(
+        self,
+        digest: EvidenceDigest,
+        stored_path: str,
+        source_url: str,
+        media_type: str,
+    ) -> EvidenceCapture:
+        """Rehydrate retained evidence for offline normalisation."""
+        candidate = self.root / stored_path
+        return EvidenceCapture(
+            url=HttpUrl(source_url),
+            media_type=media_type,
+            body=gzip.decompress(candidate.read_bytes()),
+            digest=digest,
+        )
