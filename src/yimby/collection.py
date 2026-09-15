@@ -145,6 +145,7 @@ class Collector:
             request_count=len(context.session.requested_urls),
             transferred_bytes=context.session.transferred_bytes,
             duration_ms=max(0, round((monotonic() - context.started) * 1000)),
+            browser_time_ms=context.session.browser_time_ms,
             storage_growth_bytes=max(
                 0,
                 self._store.storage_bytes() - context.storage_before,

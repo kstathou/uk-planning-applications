@@ -20,13 +20,26 @@ from yimby.backup import (
     default_backup_path,
     restore_backup,
 )
-from yimby.collection import Collector
 from yimby.dashboard import dashboard_snapshot, search_dashboard
+from yimby.dashboard_app import launch_dashboard
 from yimby.doctor import run_doctor
-from yimby.domain import ApplicationId, AuthorityId, DiscoveryWindow
+from yimby.domain import (
+    ApplicationId,
+    AuthorityCollectionResult,
+    AuthorityCollectionStatus,
+    AuthorityId,
+    DiscoveryWindow,
+)
 from yimby.evidence import EvidenceStore
 from yimby.exporting import ExportFormat, ExportProfile, export_records
 from yimby.normalise import rebuild_normalised
+from yimby.orchestration import (
+    CollectionAlreadyRunningError,
+    CollectionOrchestrator,
+    LiveSessionFactory,
+    ProcessLock,
+    SessionFactory,
+)
 from yimby.pilot_fixtures import FIXTURE_BUILDERS
 from yimby.registry import AuthorityRegistry, pilot_registry
 from yimby.store import SqliteStore
@@ -34,16 +47,7 @@ from yimby.store import SqliteStore
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-
-class LiveTransportUnavailableError(RuntimeError):
-    """Live authority transport is intentionally deferred to unit four."""
-
-    def __init__(self) -> None:
-        """Provide the fixture-mode remediation."""
-        super().__init__(
-            "live transport is not available yet; rerun with --fixture for "
-            "sanitised local data"
-        )
+    from yimby.transport import PortalSession
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -86,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     dashboard = commands.add_parser("dashboard", help="show local coverage metrics")
     dashboard.add_argument("--search")
+    dashboard.add_argument(
+        "--json",
+        action="store_true",
+        help="print the testable dashboard model instead of launching Streamlit",
+    )
 
     backup = commands.add_parser("backup", help="create a verified local backup")
     backup.add_argument("--output", type=Path)
@@ -110,20 +119,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             restored = restore_backup(args.backup, target)
             _write_json({"restored": str(restored)})
             return 0
-        store = _open_store(args.data_dir, registry)
-        try:
-            return _dispatch(args, registry, store)
-        finally:
-            store.close()
+        if args.command in {"bootstrap", "sync"}:
+            with ProcessLock(args.data_dir / "collection.lock"):
+                return _run_with_store(args, registry)
+        return _run_with_store(args, registry)
     except (
         BackupTargetExistsError,
         BackupVerificationError,
+        CollectionAlreadyRunningError,
         KeyError,
-        LiveTransportUnavailableError,
         RestoreTargetExistsError,
     ) as error:
         sys.stderr.write(f"error: {error}\n")
         return 2
+
+
+def _run_with_store(
+    args: argparse.Namespace,
+    registry: AuthorityRegistry,
+) -> int:
+    store = _open_store(args.data_dir, registry)
+    try:
+        return _dispatch(args, registry, store)
+    finally:
+        store.close()
 
 
 def _dispatch(
@@ -137,20 +156,32 @@ def _dispatch(
             [manifest.model_dump(mode="json") for manifest in registry.manifests()]
         )
     elif args.command in {"bootstrap", "sync"}:
-        if not args.fixture:
-            raise LiveTransportUnavailableError
         days = args.days if args.command == "bootstrap" else 30
         include_open = args.include_open if args.command == "bootstrap" else True
+        end = datetime.now(UTC).date()
+        window = DiscoveryWindow(
+            start=end - timedelta(days=days),
+            end=end,
+            include_open=include_open,
+        )
         reports = asyncio.run(
-            _collect_fixtures(
+            _collect_authorities(
                 registry,
                 store,
                 args.authority,
-                days,
-                include_open=include_open,
+                window,
+                fixture=args.fixture,
             )
         )
-        _write_json(reports)
+        _write_json([report.model_dump(mode="json") for report in reports])
+        exit_code = (
+            0
+            if all(
+                report.status == AuthorityCollectionStatus.SUCCEEDED
+                for report in reports
+            )
+            else 1
+        )
     elif args.command == "inspect":
         view = store.application_view(ApplicationId(args.application_id))
         _write_json(view.model_dump(mode="json"))
@@ -166,6 +197,8 @@ def _dispatch(
         count = export_records(store, destination, output_format, profile)
         _write_json({"exported": count, "path": str(destination)})
     elif args.command == "dashboard":
+        if not args.json:
+            return launch_dashboard(args.data_dir)
         snapshot = dashboard_snapshot(store, registry)
         payload: dict[str, object] = {"snapshot": snapshot.model_dump(mode="json")}
         if args.search is not None:
@@ -189,37 +222,31 @@ def _dispatch(
     return exit_code
 
 
-async def _collect_fixtures(
+async def _collect_authorities(
     registry: AuthorityRegistry,
     store: SqliteStore,
     authority: str,
-    days: int,
+    window: DiscoveryWindow,
     *,
-    include_open: bool,
-) -> list[dict[str, object]]:
-    end = datetime.now(UTC).date()
-    window = DiscoveryWindow(
-        start=end - timedelta(days=days),
-        end=end,
-        include_open=include_open,
-    )
+    fixture: bool,
+) -> tuple[AuthorityCollectionResult, ...]:
     selected = registry.ids() if authority == "all" else (AuthorityId(authority),)
-    collector = Collector(registry, store)
-    reports = []
-    for authority_id in selected:
-        report = await collector.collect(
-            authority_id,
-            window,
-            FIXTURE_BUILDERS[authority_id](window),
-        )
-        reports.append(
-            {
-                "authority_id": str(authority_id),
-                "applications": [str(value) for value in report.applications],
-                "attachment_body_requests": report.attachment_body_requests,
-            }
-        )
-    return reports
+    if fixture:
+
+        async def fixture_session_factory(authority_id: AuthorityId) -> PortalSession:
+            return FIXTURE_BUILDERS[authority_id](window)
+
+        session_factory: SessionFactory = fixture_session_factory
+
+    else:
+        session_factory = LiveSessionFactory(registry)
+    orchestrator = CollectionOrchestrator(registry, store)
+    return await orchestrator.collect(
+        selected,
+        window,
+        session_factory,
+        fixture=fixture,
+    )
 
 
 def _open_store(data_dir: Path, registry: AuthorityRegistry) -> SqliteStore:

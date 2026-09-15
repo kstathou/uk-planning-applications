@@ -62,8 +62,15 @@ class PortalSession(Protocol):
         """Return response-body bytes transferred through this session."""
 
     @property
+    def browser_time_ms(self) -> int:
+        """Return wall time spent inside a browser worker."""
+
+    @property
     def mode(self) -> TransportMode:
         """Identify whether fixture or live transport served the run."""
+
+    async def aclose(self) -> None:
+        """Release transport resources."""
 
 
 class FixtureSession:
@@ -80,7 +87,7 @@ class FixtureSession:
         """Return one fixture response after applying attachment policy."""
         url = str(request.url)
         suffix = PurePosixPath(urlsplit(url).path).suffix.lower()
-        if suffix in {".pdf", ".doc", ".docx"}:
+        if suffix in {".doc", ".docx", ".pdf", ".xls", ".xlsx", ".zip"}:
             self._attachment_body_requests += 1
             raise AttachmentBodyBlockedError(url)
         response = self._responses.get(url)
@@ -117,6 +124,14 @@ class FixtureSession:
         return self._transferred_bytes
 
     @property
+    def browser_time_ms(self) -> int:
+        """Fixture replay does not use a browser."""
+        return 0
+
+    @property
     def mode(self) -> TransportMode:
         """Identify this deterministic session as fixture-backed."""
         return TransportMode.FIXTURE
+
+    async def aclose(self) -> None:
+        """Fixture sessions hold no external resources."""

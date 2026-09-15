@@ -15,6 +15,7 @@ from yimby.store import SqliteStore
 
 PILOT_AUTHORITY_COUNT = 15
 ERROR_EXIT = 2
+UNAVAILABLE_EXIT = 1
 
 
 def _args(data_dir: Path, *command: str) -> list[str]:
@@ -44,9 +45,11 @@ def test_cli_collection_inspection_normalisation_export_and_dashboard(
                 "--include-open",
             )
         )
-        == ERROR_EXIT
+        == UNAVAILABLE_EXIT
     )
-    assert "rerun with --fixture" in capsys.readouterr().err
+    unavailable = json.loads(capsys.readouterr().out)[0]
+    assert unavailable["status"] == "unavailable"
+    assert unavailable["failure_code"] == "LiveTransportUnavailable"
 
     assert (
         main(
@@ -116,11 +119,11 @@ def test_cli_collection_inspection_normalisation_export_and_dashboard(
     default_export = json.loads(capsys.readouterr().out)["path"]
     assert Path(default_export).is_file()
 
-    assert main(_args(data, "dashboard")) == 0
+    assert main(_args(data, "dashboard", "--json")) == 0
     dashboard = json.loads(capsys.readouterr().out)
     assert dashboard["snapshot"]["coverage_denominator"] == PILOT_AUTHORITY_COUNT
     assert "search" not in dashboard
-    assert main(_args(data, "dashboard", "--search", "two homes")) == 0
+    assert main(_args(data, "dashboard", "--json", "--search", "two homes")) == 0
     dashboard_search = json.loads(capsys.readouterr().out)
     assert dashboard_search["search"][0]["application_id"] == application_id
 

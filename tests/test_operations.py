@@ -252,6 +252,7 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
         "request_count": 1,
         "transferred_bytes": 21,
         "duration_ms": 3,
+        "browser_time_ms": 0,
         "storage_growth_bytes": 5,
     }
     states = store.authority_states(datetime(2020, 1, 1, tzinfo=UTC))
@@ -529,7 +530,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2)
+    assert store.migration_versions() == (1, 2, 3)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -543,6 +544,8 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     dashboard = dashboard_snapshot(store, pilot_registry())
     assert dashboard.coverage_implemented == PILOT_AUTHORITY_COUNT
     assert dashboard.coverage_denominator == PILOT_AUTHORITY_COUNT
+    assert dashboard.live_ready == 0
+    assert dashboard.live_readiness_denominator == PILOT_AUTHORITY_COUNT
     assert dashboard.application_count == 1
     assert dashboard.request_count == BARNET_REQUEST_COUNT
     hits = search_dashboard(store, "two homes")
@@ -563,7 +566,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2)
+    assert reopened.migration_versions() == (1, 2, 3)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()
@@ -607,8 +610,15 @@ class _CancellingSession:
         return self._inner.transferred_bytes
 
     @property
+    def browser_time_ms(self) -> int:
+        return 0
+
+    @property
     def mode(self) -> TransportMode:
         return TransportMode.FIXTURE
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 def test_failed_interrupted_and_retried_detail_state(tmp_path: Path) -> None:

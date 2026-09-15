@@ -44,8 +44,34 @@ class TransportMode(StrEnum):
     """Transport most recently used for an authority."""
 
     FIXTURE = "fixture"
+    BROWSER = "browser"
     LIVE = "live"
     NOT_RUN = "not-run"
+
+
+class LiveReadiness(StrEnum):
+    """Truthful authority status at the live collection boundary."""
+
+    BLOCKED = "blocked"
+    BROWSER_ONLY = "browser-only"
+    DISCOVERY_ONLY = "discovery-only"
+    LIVE_READY = "live-ready"
+
+
+class LiveTransportKind(StrEnum):
+    """Transport required by a live-ready authority package."""
+
+    BROWSER = "browser"
+    HTTP = "http"
+
+
+class LiveStatus(FrozenModel):
+    """Auditable live readiness, separate from fixture implementation."""
+
+    readiness: LiveReadiness
+    reason: str = Field(min_length=1)
+    evidence: tuple[str, ...] = Field(min_length=1)
+    transport: LiveTransportKind | None = None
 
 
 class RunStatus(StrEnum):
@@ -83,6 +109,11 @@ class AuthorityManifest(FrozenModel):
     kind: AuthorityKind
     sources: tuple[SourceDefinition, ...] = Field(min_length=1)
     capabilities: AuthorityCapabilities = AuthorityCapabilities()
+    live_status: LiveStatus = LiveStatus(
+        readiness=LiveReadiness.BLOCKED,
+        reason="live collection has not been assessed",
+        evidence=("no live evidence recorded",),
+    )
 
 
 class CompleteSection(FrozenModel):
@@ -340,6 +371,25 @@ class CollectionReport(FrozenModel):
     attachment_body_requests: int
 
 
+class AuthorityCollectionStatus(StrEnum):
+    """Per-authority result emitted by failure-isolated orchestration."""
+
+    FAILED = "failed"
+    SUCCEEDED = "succeeded"
+    UNAVAILABLE = "unavailable"
+
+
+class AuthorityCollectionResult(FrozenModel):
+    """Structured outcome for one authority in a coordinated run."""
+
+    authority_id: AuthorityId
+    status: AuthorityCollectionStatus
+    applications: tuple[ApplicationId, ...] = ()
+    attachment_body_requests: int = Field(default=0, ge=0)
+    failure_code: str | None = None
+    message: str | None = None
+
+
 class RetainedNativeRecord(FrozenModel):
     """Latest retained native input sufficient for offline normalisation."""
 
@@ -359,6 +409,7 @@ class RunMetrics(FrozenModel):
     request_count: int = Field(ge=0)
     transferred_bytes: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
+    browser_time_ms: int = Field(default=0, ge=0)
     storage_growth_bytes: int = Field(ge=0)
 
 
@@ -385,7 +436,7 @@ class AuthorityOperationalState(FrozenModel):
     """Registry ownership, collection freshness, failures, and backlog."""
 
     manifest: AuthorityManifest
-    implementation_status: Literal["fixture-ready", "live-ready"]
+    implementation_status: Literal["fixture-ready"]
     transport_mode: TransportMode
     last_success_at: datetime | None
     freshness_days: int | None = Field(default=None, ge=0)
@@ -435,6 +486,9 @@ class DashboardAuthority(FrozenModel):
     authority_id: AuthorityId
     name: str
     implementation_status: str
+    live_readiness: LiveReadiness
+    live_reason: str
+    live_evidence: tuple[str, ...]
     transport_mode: TransportMode
     freshness_days: int | None
     failures: int = Field(ge=0)
@@ -446,10 +500,13 @@ class DashboardSnapshot(FrozenModel):
 
     coverage_implemented: int = Field(ge=0)
     coverage_denominator: int = Field(ge=1)
+    live_ready: int = Field(ge=0)
+    live_readiness_denominator: int = Field(ge=1)
     authorities: tuple[DashboardAuthority, ...]
     request_count: int = Field(ge=0)
     transferred_bytes: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
+    browser_time_ms: int = Field(ge=0)
     storage_growth_bytes: int = Field(ge=0)
     application_count: int = Field(ge=0)
     observed_change_count: int = Field(ge=0)

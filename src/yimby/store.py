@@ -94,12 +94,17 @@ class SqliteStore:
                     INSERT INTO authorities(
                         authority_id, name, kind, implementation_status,
                         transport_mode, capabilities_json, source_manifest_json,
-                        last_success_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                        last_success_at, updated_at, live_readiness, live_reason,
+                        live_evidence_json, live_transport
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
                     ON CONFLICT(authority_id) DO UPDATE SET
                         name = excluded.name,
                         kind = excluded.kind,
                         source_manifest_json = excluded.source_manifest_json,
+                        live_readiness = excluded.live_readiness,
+                        live_reason = excluded.live_reason,
+                        live_evidence_json = excluded.live_evidence_json,
+                        live_transport = excluded.live_transport,
                         updated_at = excluded.updated_at
                     """,
                     (
@@ -111,6 +116,10 @@ class SqliteStore:
                         manifest.capabilities.model_dump_json(),
                         manifest.model_dump_json(),
                         now,
+                        manifest.live_status.readiness,
+                        manifest.live_status.reason,
+                        json.dumps(manifest.live_status.evidence),
+                        manifest.live_status.transport,
                     ),
                 )
 
@@ -142,7 +151,8 @@ class SqliteStore:
                 UPDATE run_details SET
                     status = ?, finished_at = ?, request_count = ?,
                     transferred_bytes = ?, duration_ms = ?,
-                    storage_growth_bytes = ?, failure_message = ?
+                    browser_time_ms = ?, storage_growth_bytes = ?,
+                    failure_message = ?
                 WHERE run_id = ?
                 """,
                 (
@@ -151,6 +161,7 @@ class SqliteStore:
                     outcome.metrics.request_count,
                     outcome.metrics.transferred_bytes,
                     outcome.metrics.duration_ms,
+                    outcome.metrics.browser_time_ms,
                     outcome.metrics.storage_growth_bytes,
                     outcome.failure_message,
                     run_id,
@@ -821,6 +832,7 @@ class SqliteStore:
                     COALESCE(SUM(request_count), 0) AS request_count,
                     COALESCE(SUM(transferred_bytes), 0) AS transferred_bytes,
                     COALESCE(SUM(duration_ms), 0) AS duration_ms,
+                    COALESCE(SUM(browser_time_ms), 0) AS browser_time_ms,
                     COALESCE(SUM(storage_growth_bytes), 0) AS storage_growth_bytes
                 FROM run_details
                 """
@@ -830,6 +842,7 @@ class SqliteStore:
             request_count=row["request_count"],
             transferred_bytes=row["transferred_bytes"],
             duration_ms=row["duration_ms"],
+            browser_time_ms=row["browser_time_ms"],
             storage_growth_bytes=row["storage_growth_bytes"],
         )
 

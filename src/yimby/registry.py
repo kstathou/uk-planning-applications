@@ -21,12 +21,123 @@ from yimby.authorities.leeds import LEEDS_PACKAGE
 from yimby.authorities.opdc import OPDC_PACKAGE
 from yimby.authorities.peak_district import PEAK_DISTRICT_PACKAGE
 from yimby.authorities.west_suffolk import WEST_SUFFOLK_PACKAGE
+from yimby.domain import (
+    AuthorityId,
+    AuthorityManifest,
+    LiveReadiness,
+    LiveStatus,
+    LiveTransportKind,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from yimby.adapters import RunnableAuthority
-    from yimby.domain import AuthorityId, AuthorityManifest
+
+
+def _status(
+    readiness: LiveReadiness,
+    reason: str,
+    evidence: str,
+    transport: LiveTransportKind | None = None,
+) -> LiveStatus:
+    return LiveStatus(
+        readiness=readiness,
+        reason=reason,
+        evidence=(evidence,),
+        transport=transport,
+    )
+
+
+PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
+    AuthorityId("barnet"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("camden"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("haringey"): _status(
+        LiveReadiness.BROWSER_ONLY,
+        "the investigated Salesforce journey requires a browser adapter",
+        "portal inventory records a JavaScript and Salesforce boundary",
+        LiveTransportKind.BROWSER,
+    ),
+    AuthorityId("devon"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("peak-district"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "JavaScript-loaded sections still need a live adapter agreement",
+        "portal inventory records pending JavaScript section research",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("arun"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("opdc"): _status(
+        LiveReadiness.BLOCKED,
+        "the investigated client bootstrap returned a blank application",
+        "portal inventory records an unresolved blank client bootstrap",
+    ),
+    AuthorityId("dorset"): _status(
+        LiveReadiness.BROWSER_ONLY,
+        "the JavaScript map has no bounded implemented discovery path",
+        "portal inventory records a client-rendered map boundary",
+        LiveTransportKind.BROWSER,
+    ),
+    AuthorityId("cheshire-east"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "discovery was verified but detail collection remains inconclusive",
+        "portal inventory records discovery-only evidence",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("blackburn-with-darwen"): _status(
+        LiveReadiness.BLOCKED,
+        "the investigated public portal was in maintenance",
+        "portal inventory records a maintenance boundary",
+    ),
+    AuthorityId("birmingham"): _status(
+        LiveReadiness.BLOCKED,
+        "the investigated public portal returned HTTP 503",
+        "portal inventory records an HTTP 503 boundary",
+    ),
+    AuthorityId("leeds"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "discovery was verified but detail collection remains inconclusive",
+        "portal inventory records discovery-only evidence",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("cornwall"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("durham"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+    AuthorityId("west-suffolk"): _status(
+        LiveReadiness.DISCOVERY_ONLY,
+        "live detail agreement is not implemented by the fixture adapter",
+        "portal inventory records discovery and detail investigation",
+        LiveTransportKind.HTTP,
+    ),
+}
 
 
 class DuplicateAuthorityError(ValueError):
@@ -40,12 +151,27 @@ class DuplicateAuthorityError(ValueError):
 class AuthorityRegistry:
     """Resolve each authority to one independently owned package."""
 
-    def __init__(self, packages: Iterable[RunnableAuthority]) -> None:
+    def __init__(
+        self,
+        packages: Iterable[RunnableAuthority],
+        live_statuses: dict[AuthorityId, LiveStatus] | None = None,
+    ) -> None:
         """Index packages by their stable authority identifier."""
         package_list = tuple(packages)
         self._packages = {package.manifest.id: package for package in package_list}
         if len(self._packages) != len(package_list):
             raise DuplicateAuthorityError
+        statuses = live_statuses or {}
+        self._manifests = {
+            authority_id: package.manifest.model_copy(
+                update={
+                    "live_status": statuses.get(
+                        authority_id, package.manifest.live_status
+                    )
+                }
+            )
+            for authority_id, package in self._packages.items()
+        }
 
     def get(self, authority_id: AuthorityId) -> RunnableAuthority:
         """Return the registered authority package."""
@@ -55,14 +181,18 @@ class AuthorityRegistry:
         """Return registered authority identifiers in stable order."""
         return tuple(self._packages)
 
+    def manifest(self, authority_id: AuthorityId) -> AuthorityManifest:
+        """Return the operational manifest for one authority."""
+        return self._manifests[authority_id]
+
     def manifests(self) -> tuple[AuthorityManifest, ...]:
         """Return typed manifests in the same stable ownership order."""
-        return tuple(package.manifest for package in self._packages.values())
+        return tuple(self._manifests.values())
 
 
 def barnet_registry() -> AuthorityRegistry:
     """Return the unit-one registry containing Barnet."""
-    return AuthorityRegistry((BARNET_PACKAGE,))
+    return AuthorityRegistry((BARNET_PACKAGE,), PILOT_LIVE_STATUS)
 
 
 def pilot_registry() -> AuthorityRegistry:
@@ -84,5 +214,6 @@ def pilot_registry() -> AuthorityRegistry:
             CORNWALL_PACKAGE,
             DURHAM_PACKAGE,
             WEST_SUFFOLK_PACKAGE,
-        )
+        ),
+        PILOT_LIVE_STATUS,
     )

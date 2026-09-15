@@ -10,6 +10,7 @@ from yimby.domain import (
     ApplicationSearchHit,
     DashboardAuthority,
     DashboardSnapshot,
+    LiveReadiness,
 )
 
 if TYPE_CHECKING:
@@ -28,6 +29,9 @@ def dashboard_snapshot(
             authority_id=state.manifest.id,
             name=state.manifest.name,
             implementation_status=state.implementation_status,
+            live_readiness=state.manifest.live_status.readiness,
+            live_reason=state.manifest.live_status.reason,
+            live_evidence=state.manifest.live_status.evidence,
             transport_mode=state.transport_mode,
             freshness_days=state.freshness_days,
             failures=state.failure_count,
@@ -39,10 +43,16 @@ def dashboard_snapshot(
     return DashboardSnapshot(
         coverage_implemented=len(authorities),
         coverage_denominator=len(registry.ids()),
+        live_ready=sum(
+            state.manifest.live_status.readiness == LiveReadiness.LIVE_READY
+            for state in states
+        ),
+        live_readiness_denominator=len(registry.ids()),
         authorities=authorities,
         request_count=metrics.request_count,
         transferred_bytes=metrics.transferred_bytes,
         duration_ms=metrics.duration_ms,
+        browser_time_ms=metrics.browser_time_ms,
         storage_growth_bytes=metrics.storage_growth_bytes,
         application_count=store.application_count(),
         observed_change_count=store.observed_change_count(),
