@@ -7,6 +7,7 @@ Build `yimby` into a local Python collection system, starting with **15 authorit
 | Area | Decision |
 |---|---|
 | National scope | All English local planning authorities, including counties, national parks, and development corporations |
+| National rollout target | 332 authority-specific scraper packages, including the 15 pilot authorities; baseline dated 15 September 2026 |
 | Initial collection | Last 30 days plus older open applications |
 | Refresh | Weekly for active cases and active appeals |
 | Decided cases | Weekly for 90 days after decision, then quarterly |
@@ -149,7 +150,40 @@ Prevent overlapping collectors and resume interrupted work. Report request count
 3. Implement the three pilot waves, adding normalisation and fixtures with each scraper.
 4. Complete exports, dashboard, backup/restore, and operating documentation.
 5. Validate all 15 through two weekly collection cycles and report completeness, runtime, and growth.
-6. Expand nationally in batches of ten authorities, keeping each implementation independent and unresolved coverage gaps visible.
+6. After the pilot passes, implement and run scrapers for the remaining 317 authorities to reach all 332 authorities in the national baseline. Roll out in batches of up to ten, keeping each implementation independent and unresolved coverage gaps visible.
+
+### Next step after the pilot: all 332 authorities
+
+The national rollout must cover every authority in the following breakdown, with one scraper package and native schema per authority. The 15 pilot authorities count towards these totals.
+
+| Authority type | National target |
+|---|---:|
+| District councils | 164 |
+| Unitary councils, excluding the Isles of Scilly | 62 |
+| Metropolitan borough councils | 36 |
+| London borough councils | 32 |
+| County councils | 21 |
+| City of London Corporation | 1 |
+| Council of the Isles of Scilly | 1 |
+| **Council subtotal** | **317** |
+| National Park Authorities | 9 |
+| Broads Authority | 1 |
+| Development corporations with planning powers | 5 |
+| **Total** | **332** |
+
+The five development corporations are Ebbsfleet, Hartlepool, Middlesbrough, Old Oak and Park Royal, and Oxford Street. County council coverage includes minerals, waste, and county development applications. Parish and town councils are not separate application sources; capture their representations within the relevant planning applications where exposed.
+
+This is a baseline as of **15 September 2026**, calculated from the [government's total of 331 planning authorities](https://www.gov.uk/government/statistics/planning-applications-in-england-january-to-march-2026/planning-applications-in-england-january-to-march-2026-technical-notes), plus [Oxford Street Development Corporation taking on planning powers on 10 August 2026](https://www.oxfordstreetdc.org.uk/). The [government council list](https://assets.publishing.service.gov.uk/media/67371541c0b2bbee1a1271ed/List_of_councils_in_England_2023.pdf) provides the council breakdown, and the [Planning Data organisation directory](https://provide.planning.data.gov.uk/organisations) lists the National Park Authorities and Broads Authority.
+
+Keep authority counts separate from website and portal counts. Shared portals may serve several authorities, while one authority may require multiple current registers, legacy registers, or supporting services. Confirm the actual portal inventory during browser investigation and associate every source with its authorities and covered periods.
+
+For each rollout batch:
+
+1. Verify the authorities' current planning responsibilities and portal sources, then complete the same browser investigation, extraction, normalisation, and tests used for the pilot.
+2. Bootstrap the last 30 days plus older open applications, then validate two weekly incremental collection cycles while continuing refreshes for authorities already onboarded.
+3. Report coverage by authority type, section completeness, freshness, backlog, failures, runtime, and storage growth in the dashboard. Blocked or partially implemented authorities remain visible as coverage gaps.
+
+National rollout is complete when all 332 baseline authorities, or their documented successors following reorganisations, have passed the pilot acceptance criteria and entered ongoing refresh. Maintain dated registry changes and predecessor/successor mappings so reorganisations update the coverage denominator without losing records or silently dropping an authority's coverage.
 
 ### Required tests
 
