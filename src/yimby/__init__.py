@@ -1,10 +1,16 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
 
-"""Tools for working with UK planning applications."""
+"""Collect public planning application records."""
 
-__all__ = ["hello"]
+from yimby.collection import Collector
+from yimby.domain import AuthorityId, CollectionReport, DiscoveryWindow
+from yimby.registry import AuthorityRegistry, barnet_registry
 
-
-def hello() -> str:
-    """Return a friendly package greeting."""
-    return "Hello from yimby!"
+__all__ = [
+    "AuthorityId",
+    "AuthorityRegistry",
+    "CollectionReport",
+    "Collector",
+    "DiscoveryWindow",
+    "barnet_registry",
+]

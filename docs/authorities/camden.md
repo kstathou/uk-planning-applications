@@ -1,0 +1,36 @@
+# Camden portal walkthrough
+
+Walkthrough date: 15 September 2026.
+
+## Sources
+
+- Current search: `https://accountforms.camden.gov.uk/planning-search/`
+- Northgate Planning Explorer: `https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer/`
+- Document service: `https://camdocs.camden.gov.uk/CMWebDrawer/PlanRec`
+
+The current search covers applications made since 1 January 2010. It links to the Northgate search for older records. A result redirects to a Northgate detail record. Documents live on a third service.
+
+## Discovery
+
+The current search uses a JSF POST with a search term and `javax.faces.ViewState`. The observed exact-reference search for `2026/2706/L` returned one result. The result included the address, reference, status, decision date, application type, and proposal.
+
+The search supports status-change sorting but does not expose a date range on its first page. Incremental discovery must inspect the search requests and retain Northgate or weekly-list coverage where the current search cannot prove a bounded enumeration.
+
+## Application record
+
+The Northgate detail page identified the record by an internal numeric key. It exposed registered, consultation, committee, decision, appeal, application type, development type, proposal, current status, applicant, agent, ward, British National Grid coordinates, case officer, determination level, land uses, and a map link.
+
+Related pages covered dates, checks, meetings, constraints, documents, and consultees. The document service query used the public reference rather than the Northgate numeric key.
+
+The observed coordinates were easting `530748` and northing `182755`. Normalisation must convert supplied grid coordinates to WGS84 while retaining the native pair.
+
+## Completeness rules
+
+The current search, Northgate detail pages, and document service are separate sources in one authority package. A successful detail page does not prove document completeness. A failure in the document service must retain earlier document metadata and mark the documents section failed.
+
+The current search explicitly limits its coverage to records since 2010. Older records use the legacy search and need a separate covered period.
+
+## Known limits
+
+This walkthrough covered one exact-reference search and one decided record. It did not enumerate a date window, open cases, document rows, comments, pagination, or incremental changes.
+
