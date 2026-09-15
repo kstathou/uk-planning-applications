@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Python 3.13 quality gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+          python-version: "3.13"
+          version: "0.12.15"
+
+      - name: Verify lockfile
+        run: uv lock --check
+
+      - name: Install project
+        run: uv sync --locked
+
+      - name: Lint
+        run: uv run --frozen ruff check --output-format=github .
+
+      - name: Check formatting
+        run: uv run --frozen ruff format --check .
+
+      - name: Type check
+        run: uv run --frozen mypy
+
+      - name: Test
+        run: uv run --frozen pytest
+
+      - name: Build distributions
+        run: uv build --no-sources
