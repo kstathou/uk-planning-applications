@@ -4,7 +4,7 @@
 
 from yimby.collection import Collector
 from yimby.domain import AuthorityId, CollectionReport, DiscoveryWindow
-from yimby.registry import AuthorityRegistry, barnet_registry
+from yimby.registry import AuthorityRegistry, barnet_registry, pilot_registry
 
 __all__ = [
     "AuthorityId",
@@ -13,4 +13,5 @@ __all__ = [
     "Collector",
     "DiscoveryWindow",
     "barnet_registry",
+    "pilot_registry",
 ]

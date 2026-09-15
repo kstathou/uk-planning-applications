@@ -92,6 +92,11 @@ class FixtureSession:
         return tuple(self._requested_urls)
 
     @property
+    def available_urls(self) -> tuple[str, ...]:
+        """Return fixture URLs in declaration order."""
+        return tuple(self._responses)
+
+    @property
     def attachment_body_requests(self) -> int:
         """Return blocked attachment-body attempts."""
         return self._attachment_body_requests

@@ -23,7 +23,13 @@ class FrozenModel(BaseModel):
 class AuthorityKind(StrEnum):
     """Planning authority classification."""
 
+    COUNTY = "county"
+    DEVELOPMENT_CORPORATION = "development-corporation"
+    DISTRICT = "district"
     LONDON_BOROUGH = "london-borough"
+    METROPOLITAN = "metropolitan"
+    NATIONAL_PARK = "national-park"
+    UNITARY = "unitary"
 
 
 class SourceDefinition(FrozenModel):
@@ -86,6 +92,13 @@ SectionState = Annotated[
     | FailedSection,
     Field(discriminator="kind"),
 ]
+
+
+def collection_state(count: int) -> CompleteSection | EmptySection:
+    """Describe a successfully enumerated collection section."""
+    if count == 0:
+        return EmptySection()
+    return CompleteSection(item_count=count)
 
 
 class Completeness(FrozenModel):

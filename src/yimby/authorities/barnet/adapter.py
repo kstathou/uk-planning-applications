@@ -33,6 +33,7 @@ from yimby.domain import (
     SourceDefinition,
     SourceId,
     SourceReference,
+    collection_state,
 )
 from yimby.transport import (
     PortalRequest,
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
     from yimby.transport import PortalSession
 
 CURRENT_SOURCE = SourceId("barnet-idox-current")
-BASE_URL = "https://planningrecords.barnet.gov.uk"
+BASE_URL = "https://publicaccess.barnet.gov.uk/online-applications"
 
 
 class BarnetCheckpointV1(FrozenModel):
@@ -73,14 +74,17 @@ class BarnetAdapter:
         kind=AuthorityKind.LONDON_BOROUGH,
         sources=(
             SourceDefinition(
-                id=SourceId("barnet-idox-legacy"),
-                base_url=HttpUrl("https://legacy-planningrecords.barnet.gov.uk"),
-                valid_to=date(2020, 12, 31),
+                id=SourceId("barnet-council-entry"),
+                base_url=HttpUrl(
+                    "https://www.barnet.gov.uk/planning-and-building-control/"
+                    "planning-applications-and-permissions/"
+                    "view-search-and-comment"
+                ),
+                valid_from=date(2026, 9, 15),
             ),
             SourceDefinition(
                 id=CURRENT_SOURCE,
-                base_url=HttpUrl(BASE_URL),
-                valid_from=date(2021, 1, 1),
+                base_url=HttpUrl(f"{BASE_URL}/"),
             ),
         ),
     )
@@ -152,7 +156,7 @@ class BarnetAdapter:
                     comments_capture.body.decode(),
                 )
             )
-            comments_state = _collection_state(len(comments))
+            comments_state = collection_state(len(comments))
         payload = BarnetApplicationV1(
             proposal=unescape(_required(html, r'id="proposal">([^<]+)</')),
             status=unescape(_required(html, r'id="status">([^<]+)</')),
@@ -165,7 +169,7 @@ class BarnetAdapter:
             payload=payload,
             completeness=Completeness(
                 application=CompleteSection(item_count=1),
-                documents=_collection_state(len(documents)),
+                documents=collection_state(len(documents)),
                 comments=comments_state,
             ),
             evidence=tuple(evidence),
@@ -204,12 +208,6 @@ def _required(value: str, pattern: str) -> str:
     if match is None:
         raise BarnetParseError(pattern)
     return match.group(1).strip()
-
-
-def _collection_state(count: int) -> CompleteSection | EmptySection:
-    if count == 0:
-        return EmptySection()
-    return CompleteSection(item_count=count)
 
 
 class BarnetParseError(ValueError):

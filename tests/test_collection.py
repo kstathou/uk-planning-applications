@@ -83,9 +83,9 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
     )
 
     assert requested_urls == (
-        "https://planningrecords.barnet.gov.uk/search?start=2026-08-16&end=2026-09-15&cursor=start",
-        "https://planningrecords.barnet.gov.uk/application/23/0001",
-        "https://planningrecords.barnet.gov.uk/application/23/0001/comments",
+        "https://publicaccess.barnet.gov.uk/online-applications/search?start=2026-08-16&end=2026-09-15&cursor=start",
+        "https://publicaccess.barnet.gov.uk/online-applications/application/23/0001",
+        "https://publicaccess.barnet.gov.uk/online-applications/application/23/0001/comments",
     )
     assert attachment_requests == 0
     assert store.get_application(application_id).model_dump(mode="json") == {
@@ -97,7 +97,7 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
         "documents": [
             {
                 "title": "Site plan",
-                "url": "https://planningrecords.barnet.gov.uk/documents/site-plan.pdf",
+                "url": "https://publicaccess.barnet.gov.uk/online-applications/files/site-plan.pdf",
             }
         ],
         "comments": [
@@ -204,7 +204,7 @@ def test_attachment_policy_blocks_body_before_fixture_lookup() -> None:
             session.fetch(
                 PortalRequest(
                     url=HttpUrl(
-                        "https://planningrecords.barnet.gov.uk/documents/plan.pdf"
+                        "https://publicaccess.barnet.gov.uk/online-applications/files/plan.pdf"
                     ),
                     intent=RequestIntent.DETAIL,
                 )
@@ -243,9 +243,12 @@ def test_manifest_contains_multiple_dated_sources() -> None:
     sources = BARNET_PACKAGE.manifest.sources
     assert len(sources) == EXPECTED_SOURCE_COUNT
     assert sources[0] == SourceDefinition(
-        id=SourceId("barnet-idox-legacy"),
-        base_url=HttpUrl("https://legacy-planningrecords.barnet.gov.uk"),
-        valid_to=date(2020, 12, 31),
+        id=SourceId("barnet-council-entry"),
+        base_url=HttpUrl(
+            "https://www.barnet.gov.uk/planning-and-building-control/"
+            "planning-applications-and-permissions/view-search-and-comment"
+        ),
+        valid_from=date(2026, 9, 15),
     )
 
 
@@ -254,7 +257,7 @@ def test_malformed_search_fails_at_the_authority_boundary(tmp_path: Path) -> Non
     store = _store(tmp_path)
     collector = Collector(barnet_registry(), store)
     search_url = (
-        "https://planningrecords.barnet.gov.uk/search?"
+        "https://publicaccess.barnet.gov.uk/online-applications/search?"
         "start=2026-08-16&end=2026-09-15&cursor=start"
     )
     session = FixtureSession(
