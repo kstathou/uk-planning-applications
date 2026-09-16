@@ -185,16 +185,10 @@ def test_registry_reregistration_merges_declared_capabilities(tmp_path: Path) ->
         comments=CapabilityState.UNKNOWN,
         coordinates=CapabilityState.UNKNOWN,
     )
-    observed = unknown.model_copy(
-        update={"documents": CapabilityState.SUPPORTED}
-    )
+    observed = unknown.model_copy(update={"documents": CapabilityState.SUPPORTED})
     store = _store(tmp_path)
-    store.register_authorities(
-        (current.model_copy(update={"capabilities": observed}),)
-    )
-    store.register_authorities(
-        (current.model_copy(update={"capabilities": unknown}),)
-    )
+    store.register_authorities((current.model_copy(update={"capabilities": observed}),))
+    store.register_authorities((current.model_copy(update={"capabilities": unknown}),))
     preserved = store.authority_states()[0].manifest.capabilities
     assert preserved.documents == CapabilityState.SUPPORTED
     assert preserved.discovery == CapabilityState.UNKNOWN
