@@ -1396,6 +1396,22 @@ def test_west_suffolk_weekly_count_rejects_empty_page_marker() -> None:
     asyncio.run(discover_all())
 
 
+def test_west_suffolk_count_accepts_stale_hidden_marker_on_terminal_page() -> None:
+    """The visible range outranks IDOX's stale hidden first-page marker."""
+    rows = tuple((f"DC/26/{index:04d}/FUL", f"KEY{index}") for index in range(5))
+    page = _result_page_with_showing_markers(
+        rows,
+        ("Showing 41-45 of 45", "Showing 41-45 of 45"),
+        current_page="1",
+        numbered_page=4,
+    )
+
+    parsed = west_suffolk_adapter._parse_search_page(page)
+
+    assert parsed.reported == 45
+    assert len(parsed.references) == 5
+
+
 async def _collect_live_case(
     case: _Case,
     root: Path,
