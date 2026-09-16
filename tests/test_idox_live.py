@@ -468,7 +468,7 @@ def _west_suffolk_open_page(
                     (weekly.references[0], weekly.locators[0]),
                     *open_rows[:6],
                 ),
-                current_page="",
+                current_page="1",
             )
         if value in {
             "Appeal Remitted to Secretary of State ",
