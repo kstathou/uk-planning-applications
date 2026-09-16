@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from pydantic import HttpUrl
 
@@ -302,9 +302,32 @@ def test_blackburn_qualification_persists_complete_zero_network_receipt(
 def test_blackburn_qualification_writes_truthful_blocked_receipt(
     tmp_path: Path,
     capsys: Any,
+    monkeypatch: Any,
 ) -> None:
     module = _qualification_module()
     sessions: list[_QualificationSession] = []
+    locked = False
+    lock = MagicMock()
+
+    def enter() -> MagicMock:
+        nonlocal locked
+        locked = True
+        return lock
+
+    def exit_lock(*_args: object) -> None:
+        nonlocal locked
+        locked = False
+
+    lock.__enter__.side_effect = enter
+    lock.__exit__.side_effect = exit_lock
+    monkeypatch.setattr(module, "ProcessLock", lambda _path: lock)
+    write_receipt = module._write_receipt
+
+    def checked_write(path: Path, receipt: Any) -> None:
+        assert locked
+        write_receipt(path, receipt)
+
+    monkeypatch.setattr(module, "_write_receipt", checked_write)
 
     async def session_factory() -> _QualificationSession:
         session = _QualificationSession(fail=True)
@@ -330,6 +353,32 @@ def test_blackburn_qualification_writes_truthful_blocked_receipt(
     assert receipt["outcome"] == "blocked"
     assert receipt["blocker_code"] == "RuntimeError"
     assert receipt["weekly_cycles"][0]["status"] == "pending"
+
+
+def test_blackburn_lock_contention_preserves_active_receipt(
+    tmp_path: Path,
+    capsys: Any,
+    monkeypatch: Any,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "contended"
+    data_dir.mkdir()
+    receipt_path = data_dir / "blackburn-with-darwen-qualification-v1.json"
+    receipt_path.write_text("active-run-receipt\n", encoding="utf-8")
+    lock = MagicMock()
+    lock.__enter__.side_effect = module.CollectionAlreadyRunningError("busy")
+    monkeypatch.setattr(module, "ProcessLock", lambda _path: lock)
+
+    result = module.main(
+        _args(data_dir, resume=True),
+        session_factory=AsyncMock(side_effect=AssertionError),
+    )
+
+    assert result == 1
+    assert receipt_path.read_text(encoding="utf-8") == "active-run-receipt\n"
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-already-running"
+    }
 
 
 def test_blackburn_qualification_requires_exact_safe_scope(
