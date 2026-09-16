@@ -584,6 +584,7 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     assert registered.registrations
     assert registered.database_objects
     assert registered.unlinked_digests == ()
+    assert registered.current_rebuild_coherent
     assert registered.missing_digests == ()
     store.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
@@ -607,14 +608,24 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     )
     reopened.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
-        connection.execute(
-            "UPDATE native_rebuild_inputs SET evidence_digests_json = '[]'"
-        )
+        connection.execute("DELETE FROM observation_evidence")
         connection.commit()
     reopened = _store(tmp_path)
     empty = reopened.evidence_registration_audit(AuthorityId("barnet"))
     assert empty.applications_with_evidence == 0
     reopened.close()
+    for malformed in ("{", "[]"):
+        with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+            connection.execute(
+                "UPDATE native_rebuild_inputs SET evidence_digests_json = ?",
+                (malformed,),
+            )
+            connection.commit()
+        reopened = _store(tmp_path)
+        assert not reopened.evidence_registration_audit(
+            AuthorityId("barnet")
+        ).current_rebuild_coherent
+        reopened.close()
 
 
 def test_retained_evidence_rejects_valid_gzip_with_wrong_digest(
@@ -791,10 +802,11 @@ def test_evidence_audit_preserves_observation_history(tmp_path: Path) -> None:
     store.commit_observation(second_run, second)
 
     audit = store.evidence_registration_audit(AuthorityId("barnet"))
+    expected_observations = len((first, second))
     assert audit.application_count == 1
-    assert audit.observation_count == 2
+    assert audit.observation_count == expected_observations
     assert audit.applications_with_evidence == 1
-    assert audit.observations_with_evidence == 2
+    assert audit.observations_with_evidence == expected_observations
     assert {item.digest for item in audit.registrations} == {
         first.evidence[0].digest,
         second_digest,
@@ -805,6 +817,7 @@ def test_evidence_audit_preserves_observation_history(tmp_path: Path) -> None:
     }
     assert audit.missing_digests == ()
     assert audit.unlinked_digests == ()
+    assert audit.current_rebuild_coherent
     store.close()
 
 

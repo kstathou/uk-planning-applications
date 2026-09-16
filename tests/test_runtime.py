@@ -630,6 +630,62 @@ def test_http_session_retains_allowed_redirect_destination() -> None:
     asyncio.run(exercise())
 
 
+def test_http_session_rejects_initial_url_outside_redirect_boundary() -> None:
+    """A boundary also constrains the first URL before transport."""
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=b"must not run")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/allowed",),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(RedirectBoundaryError):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl("https://example.test/unobserved"),
+                    intent=RequestIntent.SEARCH,
+                    redirect_boundary=boundary,
+                )
+            )
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert calls == 0
+
+
+def test_http_session_bounds_redirect_loops() -> None:
+    """A redirect cycle terminates without reading a response body."""
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(302, headers={"location": "/loop"})
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(SourceUnavailableError, match="redirect limit"):
+            await session.fetch(_request("https://example.test/loop"))
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert calls > 1
+
+
 def test_http_session_retry_after_and_transport_failures() -> None:
     """Retries are bounded and honor numeric and dated Retry-After values."""
     attempts = 0

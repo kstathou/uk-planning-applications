@@ -57,8 +57,8 @@ Associated documents are already present in the returned HTML. Their
 identifier, plan flag, and filename metadata. The qualification retained 1,368
 current document metadata rows across 56 applications. It made zero attachment
 body requests. Public comments and consultee responses remain represented only
-as published document metadata, so the common comments section is explicitly
-excluded by policy.
+as published document attachments, so their text is explicitly unavailable in
+the common comments section.
 
 ## Live qualification receipt
 

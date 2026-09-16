@@ -269,26 +269,31 @@ def _evidence_integrity(
 ) -> bool:
     inventory = _evidence_inventory(data_dir)
     registrations = audit.registrations
-    registered_paths = tuple(item.path for item in registrations)
+    database_objects = audit.database_objects
+    database_paths = tuple(item.path for item in database_objects)
     registered_pairs = tuple(
-        (item.application_id, item.digest) for item in registrations
+        (item.observation_id, item.digest) for item in registrations
     )
     if (
         not inventory
         or audit.application_count != application_count
         or audit.applications_with_evidence != application_count
+        or audit.observation_count < application_count
+        or audit.observations_with_evidence != audit.observation_count
         or audit.missing_digests
+        or audit.unlinked_digests
+        or not audit.current_rebuild_coherent
         or len(registered_pairs) != len(set(registered_pairs))
-        or set(registered_paths) != set(inventory)
+        or set(database_paths) != set(inventory)
     ):
         return False
     evidence_root = data_dir / "evidence"
-    for registration in registrations:
-        digest = str(registration.digest)
+    for evidence in database_objects:
+        digest = str(evidence.digest)
         expected_path = f"{digest[:2]}/{digest}.gz"
-        if registration.path != expected_path:
+        if evidence.path != expected_path:
             return False
-        path = evidence_root / registration.path
+        path = evidence_root / evidence.path
         try:
             body = gzip.decompress(path.read_bytes())
         except (OSError, EOFError):

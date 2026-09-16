@@ -86,6 +86,14 @@ class RetainedEvidenceRegistration(FrozenModel):
     """One application's durable link to a registered evidence object."""
 
     application_id: ApplicationId
+    observation_id: int
+    digest: EvidenceDigest
+    path: str
+
+
+class RegisteredEvidenceObject(FrozenModel):
+    """One digest and storage path present in the evidence registry."""
+
     digest: EvidenceDigest
     path: str
 
@@ -94,9 +102,14 @@ class EvidenceRegistrationAudit(FrozenModel):
     """Authority-scoped reconciliation facts for retained native evidence."""
 
     application_count: int
+    observation_count: int
     applications_with_evidence: int
+    observations_with_evidence: int
     registrations: tuple[RetainedEvidenceRegistration, ...]
+    database_objects: tuple[RegisteredEvidenceObject, ...]
     missing_digests: tuple[EvidenceDigest, ...]
+    unlinked_digests: tuple[EvidenceDigest, ...]
+    current_rebuild_coherent: bool
 
 
 class SqliteStore:
@@ -366,6 +379,14 @@ class SqliteStore:
                         str(capture.url),
                         capture.media_type,
                     ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO observation_evidence(
+                        observation_id, digest
+                    ) VALUES (?, ?)
+                    """,
+                    (observation_id, capture.digest),
                 )
             self._connection.execute(
                 """
@@ -1503,49 +1524,136 @@ class SqliteStore:
         """Reconcile authority applications, native links, and evidence rows."""
         registrations: list[RetainedEvidenceRegistration] = []
         missing: list[EvidenceDigest] = []
-        applications_with_evidence = 0
         rows = tuple(
             self._connection.execute(
                 """
-                SELECT application.id, rebuild.evidence_digests_json
+                SELECT application.id AS application_id,
+                    observation.id AS observation_id,
+                    linked.digest,
+                    evidence.path
                 FROM applications AS application
-                LEFT JOIN native_rebuild_inputs AS rebuild
-                    ON rebuild.application_id = application.id
+                JOIN observations AS observation
+                    ON observation.application_id = application.id
+                JOIN observation_evidence AS linked
+                    ON linked.observation_id = observation.id
+                LEFT JOIN evidence ON evidence.digest = linked.digest
                 WHERE application.authority_id = ?
-                ORDER BY application.id
+                ORDER BY application.id, observation.id, linked.digest
                 """,
                 (authority_id,),
             )
         )
         for row in rows:
-            digest_values = (
-                ()
-                if row["evidence_digests_json"] is None
-                else tuple(json.loads(row["evidence_digests_json"]))
-            )
-            if digest_values:
-                applications_with_evidence += 1
-            for digest_value in digest_values:
-                digest = EvidenceDigest(digest_value)
-                evidence = self._connection.execute(
-                    "SELECT path FROM evidence WHERE digest = ?",
-                    (digest,),
-                ).fetchone()
-                if evidence is None:
-                    missing.append(digest)
-                    continue
-                registrations.append(
-                    RetainedEvidenceRegistration(
-                        application_id=ApplicationId(row["id"]),
-                        digest=digest,
-                        path=evidence["path"],
-                    )
+            digest = EvidenceDigest(row["digest"])
+            if row["path"] is None:
+                missing.append(digest)
+                continue
+            registrations.append(
+                RetainedEvidenceRegistration(
+                    application_id=ApplicationId(row["application_id"]),
+                    observation_id=row["observation_id"],
+                    digest=digest,
+                    path=row["path"],
                 )
+            )
+        database_objects = tuple(
+            RegisteredEvidenceObject(
+                digest=EvidenceDigest(row["digest"]),
+                path=row["path"],
+            )
+            for row in self._connection.execute(
+                "SELECT digest, path FROM evidence ORDER BY digest"
+            )
+        )
+        linked_digests = {
+            EvidenceDigest(row["digest"])
+            for row in self._connection.execute(
+                "SELECT DISTINCT digest FROM observation_evidence"
+            )
+        }
+        application_count = int(
+            next(
+                self._connection.execute(
+                    "SELECT COUNT(*) FROM applications WHERE authority_id = ?",
+                    (authority_id,),
+                )
+            )[0]
+        )
+        observation_count = int(
+            next(
+                self._connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM observations AS observation
+                    JOIN applications AS application
+                        ON application.id = observation.application_id
+                    WHERE application.authority_id = ?
+                    """,
+                    (authority_id,),
+                )
+            )[0]
+        )
+        current_rebuild_coherent = True
+        for row in self._connection.execute(
+            """
+            SELECT application.id AS application_id,
+                rebuild.evidence_digests_json,
+                MAX(observation.id) AS latest_observation_id
+            FROM applications AS application
+            LEFT JOIN native_rebuild_inputs AS rebuild
+                ON rebuild.application_id = application.id
+            LEFT JOIN observations AS observation
+                ON observation.application_id = application.id
+            WHERE application.authority_id = ?
+            GROUP BY application.id, rebuild.evidence_digests_json
+            ORDER BY application.id
+            """,
+            (authority_id,),
+        ):
+            try:
+                decoded = json.loads(row["evidence_digests_json"])
+            except (TypeError, json.JSONDecodeError):
+                current_rebuild_coherent = False
+                continue
+            if (
+                not isinstance(decoded, list)
+                or not decoded
+                or not all(isinstance(value, str) for value in decoded)
+                or len(decoded) != len(set(decoded))
+                or row["latest_observation_id"] is None
+            ):
+                current_rebuild_coherent = False
+                continue
+            latest_digests = {
+                linked["digest"]
+                for linked in self._connection.execute(
+                    """
+                    SELECT digest FROM observation_evidence
+                    WHERE observation_id = ?
+                    """,
+                    (row["latest_observation_id"],),
+                )
+            }
+            if set(decoded) != latest_digests:
+                current_rebuild_coherent = False
         return EvidenceRegistrationAudit(
-            application_count=len(rows),
-            applications_with_evidence=applications_with_evidence,
+            application_count=application_count,
+            observation_count=observation_count,
+            applications_with_evidence=len(
+                {item.application_id for item in registrations}
+            ),
+            observations_with_evidence=len(
+                {item.observation_id for item in registrations}
+            ),
             registrations=tuple(registrations),
+            database_objects=database_objects,
             missing_digests=tuple(missing),
+            unlinked_digests=tuple(
+                item.digest
+                for item in database_objects
+                if item.digest not in linked_digests
+            ),
+            current_rebuild_coherent=current_rebuild_coherent,
         )
 
     def migration_versions(self) -> tuple[int, ...]:

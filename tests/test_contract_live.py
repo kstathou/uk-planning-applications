@@ -1229,6 +1229,26 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
             ),
             all_query_keys=keys,
         )
+    with pytest.raises(devon.DevonCheckpointError, match="pager-terminal"):
+        devon._advance_checkpoint(
+            progress,
+            query=query,
+            page=devon._DiscoveryPage(
+                references=(
+                    SourceReference(
+                        source_id=devon.SOURCE,
+                        reference="OPEN/011/2026",
+                        locator=f"{devon.BASE_URL}/Planning/Display/OPEN/011/2026",
+                    ),
+                ),
+                page=2,
+                numbered_pages=proof.numbered_pages,
+                numbered_links=links,
+                next_locator=None,
+                terminal=True,
+            ),
+            all_query_keys=keys,
+        )
 
     with pytest.raises(devon.DevonParseError, match="advanced form"):
         devon._parse_advanced_form(b"<html></html>")
@@ -1591,6 +1611,7 @@ def test_devon_qualification_reconciles_registered_evidence(
         "error": "qualification-failed",
         "failed_checks": ["evidence-integrity"],
     }
+
     orphan.unlink()
 
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
@@ -1605,6 +1626,26 @@ def test_devon_qualification_reconciles_registered_evidence(
                 devon.BASE_URL,
                 "text/html",
             ),
+        )
+        connection.commit()
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["evidence-integrity"],
+    }
+
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM evidence WHERE digest = ?", ("0" * 64,))
+        connection.execute(
+            """
+            UPDATE native_rebuild_inputs
+            SET evidence_digests_json = ?
+            WHERE application_id = (
+                SELECT application_id FROM native_rebuild_inputs
+                ORDER BY application_id LIMIT 1
+            )
+            """,
+            (json.dumps(["0" * 64]),),
         )
         connection.commit()
     assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1

@@ -25,7 +25,6 @@ from yimby.domain import (
     DiscoveryBatch,
     DiscoveryWindow,
     DocumentRecord,
-    ExcludedSection,
     FrozenModel,
     NativeSnapshot,
     NormalisedObservation,
@@ -34,9 +33,16 @@ from yimby.domain import (
     SourceId,
     SourceReference,
     TransportMode,
+    UnavailableSection,
     collection_state,
 )
-from yimby.transport import FormField, PortalRequest, RequestIntent, RequestMethod
+from yimby.transport import (
+    FormField,
+    PortalRequest,
+    RedirectBoundary,
+    RequestIntent,
+    RequestMethod,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -52,6 +58,15 @@ _DATE_FORMATS = ("%d/%m/%Y", "%d %B %Y", "%d %b %Y", "%Y-%m-%d")
 _MAX_WINDOW_DAYS = 30
 _PAGE_SIZE = 10
 _FIRST_PAGED_RESULT = 2
+_REDIRECT_BOUNDARY = RedirectBoundary(
+    origin=HttpUrl(f"{BASE_URL}/"),
+    exact_paths=(
+        "/Disclaimer/Accept",
+        "/Search/Advanced",
+        "/Search/Results",
+    ),
+    path_prefixes=("/Planning/Display/", "/Search/Results/"),
+)
 _BOOLEAN_FIELDS = (
     "Outstanding",
     "SearchPlanning",
@@ -583,6 +598,12 @@ def _advance_checkpoint(
     expected_page = progress.next_page if progress.active_query == query.key else 1
     if page.page != expected_page:
         _raise_checkpoint("page-cursor-mismatch")
+    if progress.active_pages:
+        announced_pages = progress.active_pages[-1].numbered_pages
+        if page.numbered_pages != announced_pages:
+            _raise_checkpoint("pager-inventory-changed")
+        if page.terminal != (page.page == announced_pages[-1]):
+            _raise_checkpoint("pager-terminal-mismatch")
     active_references = {
         reference.reference
         for proof in progress.active_pages
@@ -889,8 +910,8 @@ def _snapshot(
         completeness=Completeness(
             application=CompleteSection(item_count=1),
             documents=collection_state(len(payload.documents)),
-            comments=ExcludedSection(
-                policy="public responses retained as document metadata only"
+            comments=UnavailableSection(
+                reason="Devon responses are published only as document attachments"
             ),
         ),
         evidence=evidence,
@@ -901,6 +922,7 @@ async def _fetch_protected(
     session: PortalSession,
     request: PortalRequest,
 ) -> tuple[EvidenceCapture, ...]:
+    request = request.model_copy(update={"redirect_boundary": _REDIRECT_BOUNDARY})
     _validate_protected_request(request)
     first = await session.fetch(request)
     disclaimer = _parse_disclaimer(first.body)
@@ -915,6 +937,7 @@ async def _fetch_protected(
             intent=request.intent,
             method=RequestMethod.POST,
             form=fields,
+            redirect_boundary=_REDIRECT_BOUNDARY,
         )
     )
     if _parse_disclaimer(accepted.body) is not None:
@@ -1009,8 +1032,14 @@ def _parse_labelled_fields(body: bytes) -> dict[str, str]:
 
 def _parse_documents(body: bytes) -> tuple[DevonDocumentV1, ...]:
     soup = BeautifulSoup(body, "html.parser")
+    containers = soup.select("div#documents[hidden]")
+    if len(containers) != 1:
+        _raise_parse("document section")
+    links = containers[0].select('a[href*="/Document/Download"]')
+    if not links:
+        _raise_parse("document links")
     documents = []
-    for link in soup.select('a[href*="/Document/Download"]'):
+    for link in links:
         href = urljoin(f"{BASE_URL}/", str(link.get("href", "")))
         query = parse_qs(urlsplit(href).query)
         title = (

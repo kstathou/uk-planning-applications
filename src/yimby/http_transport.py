@@ -21,6 +21,8 @@ from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
 from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalRequest,
+    RedirectBoundary,
+    RedirectBoundaryError,
     SourceUnavailableError,
 )
 
@@ -65,6 +67,7 @@ _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _SUCCESS_MIN = 200
 _SUCCESS_MAX = 300
 _MAX_ATTEMPTS = 5
+_MAX_REDIRECTS = 20
 _MAX_RETRY_DELAY = 60.0
 _DEFAULT_HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
@@ -141,7 +144,12 @@ class HttpxPortalSession:
         if _is_attachment_path(split.path):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
-        body, media_type = await self._read_with_retries(
+        if (
+            request.redirect_boundary is not None
+            and not request.redirect_boundary.allows(raw_url)
+        ):
+            raise _redirect_error(raw_url)
+        body, media_type, final_url = await self._read_with_retries(
             request,
             raw_url,
             split.hostname or "",
@@ -149,7 +157,7 @@ class HttpxPortalSession:
         self._requested_urls.append(_safe_url(raw_url))
         self._transferred_bytes += len(body)
         return EvidenceCapture(
-            url=HttpUrl(_safe_url(raw_url)),
+            url=HttpUrl(_safe_url(final_url)),
             media_type=media_type,
             body=body,
             digest=EvidenceDigest(sha256(body).hexdigest()),
@@ -160,7 +168,7 @@ class HttpxPortalSession:
         portal_request: PortalRequest,
         url: str,
         host: str,
-    ) -> tuple[bytes, str]:
+    ) -> tuple[bytes, str, str]:
         """Hold the shared host slot through body reads and retry cooldowns."""
         last_status: int | None = None
         safe_url = _safe_url(url)
@@ -176,14 +184,14 @@ class HttpxPortalSession:
                 async with self._limiter.turn(host):
                     response: httpx.Response | None = None
                     try:
-                        response = await self._client.send(
+                        response = await self._send_with_redirects(
                             self._client.build_request(
                                 portal_request.method,
                                 url,
                                 content=encoded_form,
                                 headers=headers,
                             ),
-                            stream=True,
+                            portal_request.redirect_boundary,
                         )
                         last_status = response.status_code
                         if (
@@ -213,7 +221,11 @@ class HttpxPortalSession:
                         media_type = response.headers.get(
                             "content-type", "application/octet-stream"
                         )
-                        return body, media_type.partition(";")[0].strip().lower()
+                        return (
+                            body,
+                            media_type.partition(";")[0].strip().lower(),
+                            str(response.url),
+                        )
                     finally:
                         if response is not None:
                             await response.aclose()
@@ -223,6 +235,38 @@ class HttpxPortalSession:
                 await self._sleep(_backoff(attempt))
                 continue
         raise _status_error(safe_url, last_status)  # pragma: no cover
+
+    async def _send_with_redirects(
+        self,
+        request: httpx.Request,
+        boundary: RedirectBoundary | None,
+    ) -> httpx.Response:
+        """Follow redirects only after validating each destination."""
+        current = request
+        for redirect_count in range(_MAX_REDIRECTS + 1):
+            response = await self._client.send(
+                current,
+                stream=True,
+                follow_redirects=False,
+            )
+            next_request = response.next_request
+            if next_request is None:
+                return response
+            next_url = str(next_request.url)
+            next_parts = urlsplit(next_url)
+            if _is_attachment_path(next_parts.path):
+                self._attachment_body_requests += 1
+                await response.aclose()
+                raise _attachment_error(next_parts.hostname)
+            if boundary is not None and not boundary.allows(next_url):
+                await response.aclose()
+                raise _redirect_error(next_url)
+            if redirect_count == _MAX_REDIRECTS:
+                await response.aclose()
+                raise _redirect_limit_error(_safe_url(str(request.url)))
+            await response.aclose()
+            current = next_request
+        raise AssertionError  # pragma: no cover
 
     @property
     def requested_urls(self) -> tuple[str, ...]:
@@ -303,6 +347,14 @@ def _attachment_error(host: str | None) -> AttachmentBodyBlockedError:
     return AttachmentBodyBlockedError(
         f"attachment body blocked for {host or 'unknown host'}"
     )
+
+
+def _redirect_error(url: str) -> RedirectBoundaryError:
+    return RedirectBoundaryError(f"redirect blocked outside boundary: {_safe_url(url)}")
+
+
+def _redirect_limit_error(url: str) -> SourceUnavailableError:
+    return SourceUnavailableError(f"source unavailable: {url} exceeded redirect limit")
 
 
 def _attempts_error(safe_url: str, attempts: int) -> SourceUnavailableError:
