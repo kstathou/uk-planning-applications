@@ -674,7 +674,6 @@ def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> Non
         ("underfull", "nonterminal result rows"),
         ("pager-mismatch", "page markers"),
         ("empty-viewstate", "result form viewstate"),
-        ("terminal-next", "next page"),
     ],
 )
 def test_dorset_live_discovery_fails_closed(fault: str, message: str) -> None:
@@ -689,6 +688,18 @@ def test_dorset_live_discovery_fails_closed(fault: str, message: str) -> None:
         await session.aclose()
 
     asyncio.run(discover_all())
+
+
+def test_dorset_live_accepts_vestigial_terminal_next_controls() -> None:
+    """Terminal markers override Dorset's still-enabled next-button chrome."""
+    page = dorset_adapter._parse_result_page(
+        _result_page("received-valid", 2, "terminal-next")
+    )
+
+    assert page.page == page.total_pages == 2
+    assert page.next_allowed is False
+    with pytest.raises(ValueError, match="terminal page"):
+        dorset_adapter._next_page_request(page)
 
 
 def test_dorset_live_detail_rejects_incomplete_document_grid() -> None:
