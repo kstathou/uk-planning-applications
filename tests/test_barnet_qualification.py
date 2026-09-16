@@ -581,6 +581,14 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
     with closing(sqlite3.connect(database)) as connection:
         connection.execute("DROP TABLE qualification_lineage")
         connection.commit()
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="lineage-schema-required",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 9")
+        connection.commit()
 
     retained_path = data_dir / "evidence" / evidence_path
     retained_body = retained_path.read_bytes()
@@ -596,6 +604,20 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
         match="digest-mismatch",
     ):
         derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    retained_path.write_bytes(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\xff\xff")
+    assert (
+        export_module.main(
+            [
+                "--data-dir",
+                str(data_dir),
+                "--confirm-official-http-429",
+            ]
+        )
+        == 1
+    )
+    exported = capsys.readouterr()
+    assert exported.out == ""
+    assert json.loads(exported.err) == {"error": "blocker-evidence-invalid"}
     retained_path.write_bytes(retained_body)
     assert (
         export_module.main(

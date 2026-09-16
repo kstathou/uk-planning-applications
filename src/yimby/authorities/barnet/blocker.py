@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import gzip
 import sqlite3
+import zlib
 from contextlib import closing
 from datetime import date, datetime
 from hashlib import sha256
@@ -25,6 +26,10 @@ _AUTHORITY_ID = "barnet"
 _RECEIPT_NAME = "barnet-qualification-v1.json"
 _QUALIFICATION_NAME = "barnet-live-v1"
 _RETAINED_FAILURE_CODES = ("SourceUnavailableError", "RateLimitedError")
+_LINEAGE_MIGRATIONS = (
+    ((6, "006_qualification_lineage.sql"),),
+    ((9, "009_qualification_lineage.sql"),),
+)
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
 _SHA256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -236,17 +241,33 @@ def derive_barnet_blocker(
             WHERE type = 'table' AND name = 'qualification_lineage'
             """
         ).fetchone()
-        lineage_count = (
-            0
-            if lineage_table is None
-            else connection.execute(
+        lineage_migrations = tuple(
+            (row["version"], row["name"])
+            for row in connection.execute(
+                """
+                SELECT version, name FROM schema_migrations
+                WHERE version IN (6, 9) ORDER BY version
+                """
+            )
+        )
+        if lineage_table is None:
+            _require(
+                condition=not lineage_migrations,
+                code="qualification-lineage-schema-required",
+            )
+            lineage_count = 0
+        else:
+            _require(
+                condition=lineage_migrations in _LINEAGE_MIGRATIONS,
+                code="qualification-lineage-migration-invalid",
+            )
+            lineage_count = connection.execute(
                 """
                 SELECT COUNT(*) FROM qualification_lineage
                 WHERE authority_id = ? AND qualification = ?
                 """,
                 (_AUTHORITY_ID, _QUALIFICATION_NAME),
             ).fetchone()[0]
-        )
         _require(
             condition=lineage_count == 0,
             code="unqualified-barnet-target-required",
@@ -308,7 +329,7 @@ def _verify_evidence(root: Path, rows: tuple[sqlite3.Row, ...]) -> None:
         )
         try:
             body = gzip.decompress(candidate.read_bytes())
-        except (OSError, EOFError) as error:
+        except (OSError, EOFError, zlib.error) as error:
             code = "retained-evidence-invalid"
             raise BarnetBlockerEvidenceError(code) from error
         _require(

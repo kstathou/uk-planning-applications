@@ -772,10 +772,9 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     assert "Persistent=false" in timer
 
 
-def test_legacy_barnet_lineage_migration_releases_reserved_version(
+def test_legacy_barnet_lineage_migration_releases_reserved_version(  # noqa: D103, PLR0915
     tmp_path: Path,
 ) -> None:
-    """A database that applied Barnet as 006 is repaired before scanning files."""
     legacy_root = tmp_path / "legacy-only"
     store = _store(legacy_root)
     store.close()
@@ -839,8 +838,28 @@ def test_legacy_barnet_lineage_migration_releases_reserved_version(
             "VALUES (6, '006_qualification_lineage.sql', 'legacy')"
         )
         connection.commit()
-    with pytest.raises(sqlite3.IntegrityError, match="conflicts"):
+    with pytest.raises(sqlite3.IntegrityError, match="not owned"):
         _store(conflict_root)
+
+    wrong_owner_root = tmp_path / "wrong-owner"
+    store = _store(wrong_owner_root)
+    store.close()
+    with closing(sqlite3.connect(wrong_owner_root / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET name = '009_other.sql' WHERE version = 9"
+        )
+        connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="not owned"):
+        _store(wrong_owner_root)
+
+    missing_schema_root = tmp_path / "missing-schema"
+    store = _store(missing_schema_root)
+    store.close()
+    with closing(sqlite3.connect(missing_schema_root / "yimby.sqlite3")) as connection:
+        connection.execute("DROP TABLE qualification_lineage")
+        connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="schema is invalid"):
+        _store(missing_schema_root)
 
 
 class _CancellingSession:

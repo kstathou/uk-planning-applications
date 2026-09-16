@@ -63,6 +63,13 @@ _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
 _LEGACY_LINEAGE_MIGRATION = (6, "006_qualification_lineage.sql")
 _CURRENT_LINEAGE_MIGRATION = (9, "009_qualification_lineage.sql")
+_QUALIFICATION_LINEAGE_COLUMNS = (
+    ("authority_id", "TEXT", 1, 1),
+    ("qualification", "TEXT", 1, 2),
+    ("phase", "TEXT", 1, 0),
+    ("scope_json", "TEXT", 1, 0),
+    ("created_at", "TEXT", 1, 0),
+)
 
 
 class _ApplicationSection(FrozenModel):
@@ -1242,23 +1249,24 @@ class SqliteStore:
                 (version, resource.name, datetime.now(UTC).isoformat()),
             )
             self._connection.commit()
+        self._validate_qualification_lineage_migration()
 
     def _reconcile_legacy_lineage_migration(self) -> None:
         legacy_version, legacy_name = _LEGACY_LINEAGE_MIGRATION
         current_version, current_name = _CURRENT_LINEAGE_MIGRATION
+        current = self._connection.execute(
+            "SELECT name FROM schema_migrations WHERE version = ?",
+            (current_version,),
+        ).fetchone()
+        if current is not None and current["name"] != current_name:
+            message = "migration 009 is not owned by Barnet qualification lineage"
+            raise sqlite3.IntegrityError(message)
         legacy = self._connection.execute(
             "SELECT name, applied_at FROM schema_migrations WHERE version = ?",
             (legacy_version,),
         ).fetchone()
         if legacy is None or legacy["name"] != legacy_name:
             return
-        current = self._connection.execute(
-            "SELECT name FROM schema_migrations WHERE version = ?",
-            (current_version,),
-        ).fetchone()
-        if current is not None and current["name"] != current_name:
-            message = "migration 009 conflicts with legacy Barnet lineage"
-            raise sqlite3.IntegrityError(message)
         with self._connection:
             if current is None:
                 self._connection.execute(
@@ -1279,6 +1287,26 @@ class SqliteStore:
                     "DELETE FROM schema_migrations WHERE version = ? AND name = ?",
                     (legacy_version, legacy_name),
                 )
+
+    def _validate_qualification_lineage_migration(self) -> None:
+        current_version, current_name = _CURRENT_LINEAGE_MIGRATION
+        current = self._connection.execute(
+            "SELECT name FROM schema_migrations WHERE version = ?",
+            (current_version,),
+        ).fetchone()
+        columns = tuple(
+            (row["name"], row["type"], row["notnull"], row["pk"])
+            for row in self._connection.execute(
+                "PRAGMA table_info(qualification_lineage)"
+            )
+        )
+        if (
+            current is None
+            or current["name"] != current_name
+            or columns != _QUALIFICATION_LINEAGE_COLUMNS
+        ):
+            message = "migration 009 Barnet qualification lineage schema is invalid"
+            raise sqlite3.IntegrityError(message)
 
     def _application_id(self, normalised: NormalisedObservation) -> ApplicationId:
         return ApplicationId(
