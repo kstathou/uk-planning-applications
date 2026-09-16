@@ -335,9 +335,13 @@ def _result_page_with_showing_markers(
     *,
     current_page: str = "1",
     numbered_page: int = 2,
+    visible_page: str | None = None,
 ) -> bytes:
+    visible = "" if visible_page is None else f"<strong>{visible_page}</strong>"
     markers = "".join(
-        f'<span class="showing">{count_text}</span>' for count_text in count_texts
+        '<p class="pager">'
+        f'<span class="showing">{count_text}</span>{visible}</p>'
+        for count_text in count_texts
     )
     page = _uncounted_result_page(
         rows,
@@ -1404,12 +1408,37 @@ def test_west_suffolk_count_accepts_stale_hidden_marker_on_terminal_page() -> No
         ("Showing 41-45 of 45", "Showing 41-45 of 45"),
         current_page="1",
         numbered_page=4,
+        visible_page="5",
     )
 
     parsed = west_suffolk_adapter._parse_search_page(page)
 
     assert parsed.reported == 45
     assert len(parsed.references) == 5
+
+
+@pytest.mark.parametrize(
+    "visible_pages",
+    [("1", "2"), ("later", "later"), ("0", "0")],
+    ids=["conflicting", "non-numeric", "zero"],
+)
+def test_west_suffolk_count_rejects_invalid_visible_page_markers(
+    visible_pages: tuple[str, str],
+) -> None:
+    """Visible current-page markers must be positive and agree."""
+    rows = (("DC/26/0001/FUL", "KEY1"),)
+    markers = "".join(
+        '<p class="pager"><span class="showing">Showing 1-1 of 1</span>'
+        f"<strong>{page}</strong></p>"
+        for page in visible_pages
+    )
+    body = markers.encode() + _uncounted_result_page(rows)
+
+    with pytest.raises(
+        west_suffolk_adapter.WestSuffolkParseError,
+        match="reported result count",
+    ):
+        west_suffolk_adapter._parse_search_page(body)
 
 
 async def _collect_live_case(
