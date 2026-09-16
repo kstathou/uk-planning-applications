@@ -404,6 +404,28 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
             ),
             "advanced case status",
         ),
+        (
+            _advanced_form().replace(
+                b'<input name="searchCriteria.reference" value="">',
+                (
+                    b"<fieldset disabled>"
+                    b'<input name="searchCriteria.reference" value="">'
+                    b"</fieldset>"
+                ),
+            ),
+            "advanced form fields",
+        ),
+        (
+            _advanced_form().replace(
+                b'<option value="Current">Current</option>',
+                (
+                    b'<optgroup label="disabled" disabled>'
+                    b'<option value="Current">Current</option>'
+                    b"</optgroup>"
+                ),
+            ),
+            "advanced case status options",
+        ),
     ],
     ids=(
         "missing",
@@ -419,6 +441,8 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
         "disabled-filter",
         "disabled-option",
         "disabled-select",
+        "disabled-fieldset",
+        "disabled-optgroup",
     ),
 )
 def test_leeds_rejects_advanced_form_boundary_drift(
@@ -1093,6 +1117,37 @@ def test_leeds_accepts_the_observed_stale_zero_document_tab() -> None:
 
     assert len(documents) == 1
     assert isinstance(state, CompleteSection)
+
+
+def test_leeds_rejects_an_external_document_pager() -> None:
+    """The stale-zero exception requires a page-wide non-paginated table."""
+    body = (
+        _documents().replace(
+            b'<a class="active" id="tab_documents"><span>Documents (1)</span></a>',
+            b'<li class="nodocuments"><span>Documents (0)</span></li>',
+        )
+        + b'<a href="pagedSearchResults.do?action=page">Next</a>'
+    )
+
+    with pytest.raises(LeedsParseError, match="documents pagination"):
+        leeds_adapter._parse_documents(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'<a class="active" id="tab_documents"><span>Documents (0)</span></a>',
+        _documents(header_only=True).replace(
+            b'<li class="nodocuments"><span>Documents (0)</span></li>',
+            b'<a class="active" id="tab_documents"><span>Documents (0)</span></a>',
+        ),
+    ],
+    ids=("missing-table", "header-only-table"),
+)
+def test_leeds_rejects_active_tab_zero_as_empty(body: bytes) -> None:
+    """Only the observed no-documents marker can prove an empty index."""
+    with pytest.raises(LeedsParseError, match="documents"):
+        leeds_adapter._parse_documents(body)
 
 
 @pytest.mark.parametrize(

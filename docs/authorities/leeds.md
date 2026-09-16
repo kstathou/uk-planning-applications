@@ -34,7 +34,8 @@ if the form, taxonomy, or pagination identity drifts. Its exact named-control
 inventory and cardinality allow only the two captured repeated opaque fields,
 so an unknown filter or duplicate discriminator cannot silently narrow the
 search. Disabled named controls or options and unvalued options also fail
-closed. A repeated first page cannot advance a resumed checkpoint.
+closed, including disabled state inherited from a fieldset or optgroup. A
+repeated first page cannot advance a resumed checkpoint.
 
 The clean live run completed all ten weekly partitions with totals
 `116, 162, 154, 140, 102, 101, 156, 140, 0, 93`. It then reached page 10 and
@@ -42,7 +43,7 @@ row 90 of the first advanced validated-date partition. At that checkpoint,
 1,148 unique references exactly matched 1,148 retained applications, with zero
 failed current sections and zero pending retries.
 
-The first page-10 attempt returned an unparseable portal response. Four bounded
+The first page-10 attempt returned an unparseable portal response. Five bounded
 resume commands then each exhausted three no-progress sessions with
 `SourceUnavailableError`. The checkpoint remains resumable at
 `advanced|validated|2026-08-18|2026-09-16`, page 10, row 90. Because only 10 of
@@ -72,9 +73,10 @@ the exact `li.nodocuments` zero marker. Five retained official pages revealed a
 Leeds defect where that stale zero marker coexisted with one non-paginated,
 structurally valid table containing 3, 3, 5, 6, or 8 rows. Only that exact shape
 uses the fully enumerated table as complete; other count contradictions,
-unknown headers, pagination, and malformed rows fail closed. The exact Leeds
-permission-denied page maps to unavailable documents rather than empty
-documents.
+unknown headers, page-wide pagination, and malformed rows fail closed. An
+active document-tab zero never proves emptiness; only the exact no-documents
+marker does. The exact Leeds permission-denied page maps to unavailable
+documents rather than empty documents.
 
 The portal intermittently returns an HTTP-200 remote-exception shell for
 summary or documents. The adapter retries that exact response three times. A

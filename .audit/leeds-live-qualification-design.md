@@ -70,7 +70,8 @@ DOM order. It replaces only fields owned by the active query and preserves
 `caseAddressType=Application`, the nonblank `_csrf`,
 `searchType=Application`, blank defaults, and both opaque fields. Unknown or
 duplicate controls, any disabled named control or option, unvalued options, and
-taxonomy drift fail closed.
+taxonomy drift fail closed. Disabled state inherited from a fieldset or
+optgroup is treated identically to a control's own disabled attribute.
 
 ## Checkpoint
 
@@ -120,7 +121,8 @@ retained official pages exposed a narrow Leeds defect: that same stale zero
 marker coexisted with one non-paginated, structurally valid table containing 3,
 3, 5, 6, or 8 rows. Only that exact shape uses the fully enumerated table as
 the source of completeness; any active-tab mismatch, pagination, unknown
-marker, header, row, date, or link still fails closed. The exact
+marker, header, row, date, or link still fails closed. Pagination detection is
+page-wide so a sibling pager cannot bypass the stale-zero exception. The exact
 permission-denied response is unavailable. A document transport failure
 propagates to the collector's bounded whole-record retry rather than becoming a
 successful snapshot with a failed section. Public comment text is

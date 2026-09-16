@@ -681,7 +681,7 @@ def _parse_advanced_form(body: bytes) -> Tag:
         (("", "All"), *_CASE_TYPES),
         "case type",
     )
-    if form.select("[name][disabled]"):
+    if any(_is_control_disabled(control) for control in form.select("[name]")):
         _raise_parse("advanced form fields")
     fields = _form_fields(form)
     if Counter(field.name for field in fields) != Counter(_ADVANCED_FORM_FIELD_NAMES):
@@ -706,11 +706,11 @@ def _require_options(
     if len(controls) != 1:
         _raise_parse(f"advanced {label}")
     control = controls[0]
-    if control.has_attr("disabled"):
+    if _is_control_disabled(control):
         _raise_parse(f"advanced {label}")
     options = control.select("option")
     if any(
-        not option.has_attr("value") or option.has_attr("disabled")
+        not option.has_attr("value") or _is_control_disabled(option)
         for option in options
     ):
         _raise_parse(f"advanced {label} options")
@@ -739,7 +739,7 @@ def _form_fields(form: Tag) -> tuple[FormField, ...]:
         name = control.get("name")
         if not isinstance(name, str):
             continue
-        if control.has_attr("disabled"):
+        if _is_control_disabled(control):
             continue
         if control.name == "input":
             input_type = str(control.get("type", "text")).casefold()
@@ -755,6 +755,19 @@ def _form_fields(form: Tag) -> tuple[FormField, ...]:
             value = control.get_text(strip=True)
         fields.append(FormField(name=name, value=value))
     return tuple(fields)
+
+
+def _is_control_disabled(control: Tag) -> bool:
+    if control.has_attr("disabled"):
+        return True
+    inherited = {"fieldset"}
+    if control.name == "option":
+        inherited.add("optgroup")
+    return any(
+        parent.name in inherited and parent.has_attr("disabled")
+        for parent in control.parents
+        if isinstance(parent, Tag)
+    )
 
 
 def _override_fields(form: Tag, values: dict[str, str]) -> tuple[FormField, ...]:
@@ -988,7 +1001,7 @@ def _parse_documents(
     expected, stale_zero_marker = _section_count(soup, "documents")
     tables = soup.select('table[summary="Documents" i]')
     if not tables:
-        if expected == 0:
+        if expected == 0 and stale_zero_marker:
             return (), EmptySection()
         _raise_parse("documents table")
     if len(tables) != 1:
@@ -1018,9 +1031,11 @@ def _parse_documents(
     compact = headers == compact_headers
     if headers != expected_headers and not compact:
         _raise_parse("documents table header")
-    if table.select_one('a[href*="pagedSearchResults.do"]') is not None:
+    if soup.select_one('a[href*="pagedSearchResults.do"]') is not None:
         _raise_parse("documents pagination")
     documents = [_parse_document_row(row, compact=compact) for row in rows[1:]]
+    if not documents and not stale_zero_marker:
+        _raise_parse("documents empty marker")
     if not (stale_zero_marker and expected == 0 and documents):
         _assert_count("documents", expected, len(documents))
     return tuple(documents), collection_state(len(documents))
