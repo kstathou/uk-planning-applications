@@ -362,6 +362,10 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
     )
     with pytest.raises(arun.ArunParseError, match="duplicate result reference"):
         arun._parse_search_results(duplicate)
+    single = arun._parse_search_results(
+        b'<a href="planningDetails?reference=A">A</a><p>1 result</p>'
+    )
+    assert single.reported == 1
 
 
 def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
@@ -597,7 +601,10 @@ def test_arun_form_and_show_all_structure_fail_closed() -> None:
     with pytest.raises(arun.ArunResultCapError):
         arun._parse_search_results(b'<p data-result-count="200">200 records</p>')
     with pytest.raises(arun.ArunParseError, match="show all form"):
-        arun._parse_search_results(_partial_results(fields) + _partial_results(fields))
+        arun._parse_search_results(
+            _partial_results(fields)
+            + _partial_results(fields).replace(b"BR/1/26/PL", b"BR/2/26/PL")
+        )
     with pytest.raises(arun.ArunParseError, match="show all form method"):
         arun._parse_search_results(
             _partial_results(fields).replace(b'method="post"', b'method="get"')

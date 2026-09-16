@@ -279,7 +279,7 @@ class ArunApplicationV1(FrozenModel):
     ocella_reference: str
     proposal_text: str
     decision_status: str
-    parish_name: str
+    parish_name: str | None
     documents: tuple[ArunDocumentV1, ...]
     site_address: str | None = None
     application_type: str | None = None
@@ -565,7 +565,7 @@ class ArunAdapter:
             ocella_reference=published,
             proposal_text=_required_field(fields, "proposal", "description"),
             decision_status=_required_field(fields, "status"),
-            parish_name=_required_field(fields, "parish"),
+            parish_name=_optional_field(fields, "parish"),
             documents=documents,
             site_address=_optional_field(fields, "location", "address"),
             application_type=_optional_field(fields, "application type", "type"),
@@ -749,6 +749,8 @@ def _show_all_request(
 ) -> PortalRequest:
     if form is None:
         raise ArunQueryReplayError
+    if str(form.action).rstrip("/") != _SEARCH_URL:
+        raise ArunQueryReplayError
     expected = _query_values(query)
     actual: dict[str, str] = {}
     for field in form.fields:
@@ -788,15 +790,16 @@ def _parse_result_references(soup: BeautifulSoup) -> tuple[SourceReference, ...]
         if len(values) != 1 or not values[0]:
             _raise_parse("result reference")
         reference = values[0]
-        if reference not in seen:
-            seen.add(reference)
-            found.append(
-                SourceReference(
-                    source_id=SOURCE,
-                    reference=reference,
-                    locator=urljoin(f"{BASE_URL}/", href),
-                )
+        if reference in seen:
+            _raise_parse("duplicate result reference")
+        seen.add(reference)
+        found.append(
+            SourceReference(
+                source_id=SOURCE,
+                reference=reference,
+                locator=urljoin(f"{BASE_URL}/", href),
             )
+        )
     return tuple(found)
 
 

@@ -906,11 +906,11 @@ def test_arun_terminal_and_parser_boundaries() -> None:
         arun._parse_search_results(
             b'<a href="planningDetails?from=planningSearch">View</a><p>1 result</p>'
         )
-    duplicate = arun._parse_search_results(
-        b'<a href="planningDetails?reference=A">A</a>'
-        b'<a href="planningDetails?reference=A">A again</a><p>1 result</p>'
-    )
-    assert len(duplicate.references) == 1
+    with pytest.raises(arun.ArunParseError, match="duplicate result reference"):
+        arun._parse_search_results(
+            b'<a href="planningDetails?reference=A">A</a>'
+            b'<a href="planningDetails?reference=A">A again</a><p>1 result</p>'
+        )
     assert arun._parse_search_results(b"<p>No results</p>").reported == 0
     with pytest.raises(arun.ArunParseError, match="reported result count"):
         arun._parse_search_results(b"<p>Unknown</p>")
