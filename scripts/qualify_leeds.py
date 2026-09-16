@@ -563,7 +563,7 @@ def _write_receipt(path: Path, receipt: LeedsQualificationReceiptV1) -> None:
 
 
 def _default_session() -> HttpxPortalSession:
-    return HttpxPortalSession()
+    return HttpxPortalSession(max_attempts=5)
 
 
 def _default_clock() -> datetime:
