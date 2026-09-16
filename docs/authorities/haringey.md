@@ -110,3 +110,30 @@ The local blocker artifact is
 the official URLs, visible messages, required checks that did not run, and the
 pending refresh cycles. The artifact is evidence of a blocked attempt. It is
 not a live-qualification receipt.
+
+The source recovered later that morning. A live page-object smoke then opened
+the implemented rolling-seven-day route, reported 61 records across seven
+pages, retained the first ten rendered references, and made zero attachment-body
+requests. This proves the existing bounded smoke boundary is healthy; it does
+not prove a complete bootstrap.
+
+The recovered user-defined weekly control states that it includes records for
+seven days from the chosen date. A search from 18 August 2026 reported 61
+records across seven pages: the first page contained records valid on 25 August
+and the final, 61st row was valid on 18 August. The observed interval is thus
+inclusive of both the selected date and selected date plus seven days. This is
+sufficient evidence for overlapping, clipped queries over the requested
+30-day window.
+
+Older-open completeness remains blocked. The register home page exposes only
+the validated-last-seven-days and major-application quick links plus the
+user-defined weekly list. Advanced planning search exposes reference, address,
+postcode, proposal, application type, ward, valid-date bounds, decision-date
+bounds, and Planning Portal number, but no application-status criterion. A
+broad search reported more results than could be shown and exposed only 250
+rows across 25 pages. Without an official all-open route, a status inventory,
+or a proved historical lower bound for date partitioning, filtering those rows
+cannot prove that every older open application was enumerated. Qualification
+therefore remains fail-closed: no adapter expansion, persisted bootstrap, or
+qualification receipt was produced, and both genuinely later weekly cycles
+remain pending.

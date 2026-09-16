@@ -62,3 +62,12 @@ previously recorded detail route reported that the site was temporarily
 unavailable. This blocks a current 30-day and older-open completeness
 walkthrough. Haringey remains `BROWSER_ONLY`; its live-bootstrap and both later
 weekly-cycle cells remain open.
+
+The portal recovered later that morning. The implemented seven-day smoke then
+reported 61 records across seven pages with zero attachment-body requests, and
+the official user-defined weekly list proved an inclusive selected-date through
+selected-date-plus-seven-days interval. The recovered UI still provides no
+all-open route or application-status search field, while a broad advanced
+search truncates at 250 visible results. Because older-open completeness cannot
+be established, the recovery does not change Haringey's `BROWSER_ONLY` status,
+does not satisfy live bootstrap, and does not start either later weekly cycle.
