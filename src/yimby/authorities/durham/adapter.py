@@ -504,7 +504,7 @@ def _parse_search_page(body: bytes) -> _SearchPage:
             )
         )
     try:
-        reported = _reported_count(soup)
+        reported = _reported_count(soup, row_count=len(references))
     except DurhamParseError:
         if not _is_uncounted_terminal_first_page(soup, row_count=len(references)):
             raise
@@ -512,7 +512,7 @@ def _parse_search_page(body: bytes) -> _SearchPage:
     return _SearchPage(references=tuple(references), reported=reported)
 
 
-def _reported_count(soup: BeautifulSoup) -> int:
+def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
     element = soup.select_one("[data-result-count]")
     if isinstance(element, Tag):
         return int(str(element.get("data-result-count")))
@@ -530,12 +530,29 @@ def _reported_count(soup: BeautifulSoup) -> int:
         if match is None:
             _raise_parse("reported result count")
         first, last, total = (int(match.group(index)) for index in range(1, 4))
-        if not 1 <= first <= last <= total:
+        if not 1 <= first <= last <= total or last - first + 1 != row_count:
             _raise_parse("reported result count")
         showing_ranges.append((first, last, total))
     if showing_ranges:
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
+            _raise_parse("reported result count")
+        current_pages = tuple(
+            int(str(control.get("value")))
+            for control in soup.select('input[name="searchCriteria.page"][value]')
+        )
+        numbered_pages = tuple(
+            int(value)
+            for link in soup.select('a[href*="pagedSearchResults.do"]')
+            for value in parse_qs(urlsplit(str(link.get("href", ""))).query).get(
+                "searchCriteria.page", ()
+            )
+        )
+        if (
+            displayed_range[1] == displayed_range[2]
+            and len(current_pages) == 1
+            and any(page > current_pages[0] for page in numbered_pages)
+        ):
             _raise_parse("reported result count")
         return displayed_range[2]
     match = re.search(

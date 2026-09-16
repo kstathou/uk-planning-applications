@@ -1151,10 +1151,20 @@ def test_authority_form_search_and_date_parser_boundaries(case: _Case) -> None:
     )
     assert fallback.reported == 1
     reported_count = getattr(case.module, "_reported_count")
-    assert reported_count(BeautifulSoup("<p>No results found</p>", "html.parser")) == 0
-    assert reported_count(BeautifulSoup("<p>Total 2 results</p>", "html.parser")) == 2
+    assert (
+        reported_count(
+            BeautifulSoup("<p>No results found</p>", "html.parser"), row_count=0
+        )
+        == 0
+    )
+    assert (
+        reported_count(
+            BeautifulSoup("<p>Total 2 results</p>", "html.parser"), row_count=2
+        )
+        == 2
+    )
     with pytest.raises(parse_error, match="reported result count"):
-        reported_count(BeautifulSoup("<p>Unknown</p>", "html.parser"))
+        reported_count(BeautifulSoup("<p>Unknown</p>", "html.parser"), row_count=0)
 
     labelled_value = getattr(case.module, "_labelled_value")
     prefix = BeautifulSoup("<p>Reference: A</p>", "html.parser").p
