@@ -1142,6 +1142,20 @@ def test_leeds_fetches_summary_and_six_cell_document_metadata() -> None:
     assert normalised.normaliser_version == "leeds-v2"
 
 
+def test_leeds_accepts_observed_non_pdf_document_path() -> None:
+    """The retained direct-file variant without a pdf segment stays covered."""
+    non_pdf_href = (
+        f"/online-applications/files/{DOCUMENT_DIRECTORY}/tree-photograph.jpg"
+    )
+    body = _documents().replace(DOCUMENT_HREF.encode(), non_pdf_href.encode())
+
+    documents, state = leeds_adapter._parse_documents(body)
+
+    assert len(documents) == 1
+    assert str(documents[0].url).endswith("/tree-photograph.jpg")
+    assert isinstance(state, CompleteSection)
+
+
 def test_leeds_accepts_the_live_document_selection_cell() -> None:
     """Accessibility text in the structural cell is not document metadata."""
     snapshot = asyncio.run(_fetch(_LeedsDetailMock(structural_document_cell=True)))
