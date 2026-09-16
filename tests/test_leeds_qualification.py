@@ -21,6 +21,7 @@ from yimby.authorities.leeds.adapter import (
     LeedsAdapter,
     LeedsApplicationV1,
     LeedsCheckpointV1,
+    LeedsDiscoveryScope,
     LeedsParseError,
 )
 from yimby.domain import (
@@ -299,6 +300,73 @@ def test_leeds_terminal_checkpoint_rerun_has_zero_network_io() -> None:
     assert second[0].complete
     assert second[0].references == ()
     assert mock.requests == []
+
+
+def _late_terminal_page() -> bytes:
+    rows = "".join(
+        f"""
+        <li class="searchresult">
+          <a href="applicationDetails.do?keyVal=LATE-{index}&activeTab=summary">
+            <span>Reference</span><span>26/0500{index}/FU</span>
+          </a>
+        </li>
+        """
+        for index in range(1, 7)
+    )
+    return f"""
+    <div class="showing">Showing 111-116 of 116</div>
+    <input name="searchCriteria.page" value="1">
+    <select name="searchCriteria.resultsPerPage">
+      <option selected value="10">10</option>
+    </select>
+    <div class="pager">
+      <a href="pagedSearchResults.do?action=page&amp;searchCriteria.page=11">
+        Previous
+      </a>
+      <strong>12</strong>
+    </div>
+    {rows}
+    <div class="showing">Showing 111-116 of 116</div>
+    """.encode()
+
+
+class _LeedsVisiblePageMock(_LeedsSearchMock):
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pagedSearchResults.do"):
+            fields = tuple(parse_qsl(request.content.decode(), keep_blank_values=True))
+            self.requests.append((request.method, request.url.path, fields))
+            return httpx.Response(200, content=_late_terminal_page())
+        return super().__call__(request)
+
+
+def test_leeds_uses_visible_page_when_hidden_page_marker_is_stale() -> None:
+    """A canonical pager reconciles Leeds's stale hidden page-one input."""
+    checkpoint = LeedsCheckpointV1(
+        result_page="live",
+        live_scope=LeedsDiscoveryScope(
+            start=WINDOW.start,
+            end=WINDOW.end,
+            include_open=True,
+        ),
+        active_query="17/08/2026|DC_Validated",
+        next_page=12,
+        query_row_count=110,
+    )
+
+    async def resume_page() -> DiscoveryBatch[LeedsCheckpointV1]:
+        session = _session(_LeedsVisiblePageMock())
+        batches = LeedsAdapter().discover(session, WINDOW, checkpoint)
+        try:
+            return await anext(batches)
+        finally:
+            await batches.aclose()
+            await session.aclose()
+
+    batch = asyncio.run(resume_page())
+
+    assert batch.next_checkpoint.completed_queries == ("17/08/2026|DC_Validated",)
+    assert batch.next_checkpoint.query_totals == (116,)
+    assert batch.next_checkpoint.active_query is None
 
 
 def _summary(
