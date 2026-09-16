@@ -45,7 +45,7 @@ _RESULT_PATHS = {
     "/Northgate/PlanningExplorer17/Generic/StdResults.aspx",
 }
 _RESULT_PAGE_SIZE = 10
-_DISCOVERY_EVIDENCE_MEDIA_TYPE = "application/vnd.yimby.camden-discovery+json"
+DISCOVERY_EVIDENCE_MEDIA_TYPE = "application/vnd.yimby.camden-discovery+json"
 _EMPTY_RESULTS = "No Records Found. Please resubmit search with different criteria."
 CAMDEN_SOURCE = SourceId("camden-jsf-search")
 _OVERRIDDEN_CONTROLS = {
@@ -645,7 +645,7 @@ def _capture_result_page(
     safe_url = urlunsplit((source.scheme, source.netloc, source.path, "", ""))
     evidence = EvidenceCapture(
         url=HttpUrl(safe_url),
-        media_type=_DISCOVERY_EVIDENCE_MEDIA_TYPE,
+        media_type=DISCOVERY_EVIDENCE_MEDIA_TYPE,
         body=payload,
         digest=EvidenceDigest(sha256(payload).hexdigest()),
     )

@@ -2,7 +2,7 @@
 
 ## Decision
 
-Use the full-prefix, typed checkpoint design from Architect Arena candidate 1 as the base. Put that state machine in a Camden-local discovery module and graft candidate 2's authority-linked evidence proof, application-table identity proof, backward-compatible native fields, exact legacy fixture migration, atomic receipt, scope-safe resume, and zero-I/O rerun checks.
+Use the full-prefix, typed checkpoint design from Architect Arena candidate 1 as the base. Put that state machine in a Camden-local discovery module and graft candidate 2's authority-linked evidence proof, application-table identity proof, backward-compatible native fields, exact legacy fixture migration, atomic receipt, scope-safe resume, and genuine immediate-refresh checks.
 
 ## Supported live query inventory
 
@@ -44,7 +44,7 @@ The observed detail shape is a `.dataview` list item containing one label `span`
 
 Preserve `camden-jsf-search` as Camden's durable application source identity to avoid duplicating existing fixture and exact-reference records. The locator remains the numeric Northgate `PARAM0` and must stay stable for a public reference.
 
-The qualification receipt proves the exact query inventory and per-query reported and enumerated memberships, terminal checkpoint coherence, locator-aware checkpoint and discovery-queue agreement, application-table identity agreement, rebuild-input agreement, successful current detail and document sections, no retries, no unmapped records, SQLite integrity, authority-linked evidence registration and gzip content digests, zero attachment requests, and an immediate terminal rerun with zero requests and bytes. Hashes make the compared sets inspectable but do not replace direct set equality.
+The qualification receipt proves the exact query inventory and per-query reported and enumerated memberships, canonical discovery-evidence coverage for every completed query page, terminal checkpoint coherence, locator-aware checkpoint and discovery-queue agreement, application-table identity agreement, rebuild-input agreement, successful current application, document, comment, and exposed child sections, no retries, no unmapped records, SQLite integrity, authority-linked evidence registration and gzip content digests, zero attachment requests, and a forced immediate refresh of every collected application. Semantic/version state must remain idempotent; source HTML digests may change when non-semantic markup or session values change. Hashes make the compared sets inspectable but do not replace direct set equality.
 
 Later weekly cycles remain typed pending records dated seven and fourteen days after bootstrap. The command does not claim those cycles succeeded.
 
@@ -57,4 +57,4 @@ Later weekly cycles remain typed pending records dated seven and fourteen days a
 
 ## Explicit limits
 
-The receipt proves complete execution of the five recorded source queries and fail-closed reconciliation of their pages. It does not claim all five queries are one immutable portal snapshot. The immediate rerun proves terminal restart behavior, not weekly refresh behavior. Historical coverage and active-status exhaustiveness are documented as observed source semantics, not generalized beyond Camden's official register.
+The receipt proves complete execution of the five recorded source queries and fail-closed reconciliation of their pages. It does not claim all five queries are one immutable portal snapshot. The immediate refresh proves same-day semantic idempotence from fresh detail and document responses, not the two later weekly cycles. Historical coverage and active-status exhaustiveness are documented as observed source semantics, not generalized beyond Camden's official register.

@@ -663,6 +663,7 @@ def test_discovery_evidence_is_registered_linked_and_verified(tmp_path: Path) ->
     )
 
     assert store.discovery_evidence_count(authority_id) == 1
+    assert store.discovery_evidence_captures(authority_id) == (capture,)
     integrity = store.evidence_integrity(authority_id)
     assert integrity.captures_checked == 1
     assert integrity.uncompressed_bytes == len(body)

@@ -24,6 +24,8 @@ from yimby.authorities.camden.adapter import (
     CamdenApplicationV1,
 )
 from yimby.domain import (
+    DiscoveryBatch,
+    DiscoveryWindow,
     EmptySection,
     EvidenceCapture,
     EvidenceDigest,
@@ -34,6 +36,7 @@ from yimby.domain import (
 from yimby.transport import PortalRequest, PortalSession, RequestMethod
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from types import ModuleType
 
 
@@ -63,6 +66,17 @@ class _VerifiedCommentsCamdenAdapter(CamdenAdapter):
                 )
             }
         )
+
+
+class _MissingDiscoveryEvidenceCamdenAdapter(_VerifiedCommentsCamdenAdapter):
+    async def discover(
+        self,
+        session: PortalSession,
+        window: DiscoveryWindow,
+        checkpoint: discovery.CamdenCheckpointV1 | None,
+    ) -> AsyncIterator[DiscoveryBatch[discovery.CamdenCheckpointV1]]:
+        async for batch in super().discover(session, window, checkpoint):
+            yield batch.model_copy(update={"evidence": ()})
 
 
 def _verified_qualification_module() -> ModuleType:
@@ -360,4 +374,31 @@ def test_camden_qualification_refuses_unavailable_comments(
     assert error["error"] == "qualification-failed"
     assert "required-sections-complete" in error["failed_checks"]
     assert "exposed-child-sections-verified" in error["failed_checks"]
+    assert not (data_dir / "camden-qualification-v2.json").exists()
+
+
+def test_camden_qualification_requires_every_discovery_page_capture(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    module.__dict__["CAMDEN_PACKAGE"] = AuthorityPackage(
+        _MissingDiscoveryEvidenceCamdenAdapter(),
+        CamdenApplicationV1,
+        discovery.CamdenCheckpointV1,
+    )
+    data_dir = tmp_path / "missing-discovery-evidence"
+
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=lambda: _Session(_Portal()),
+            section_verifier=lambda _store: True,
+        )
+        == 1
+    )
+
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "discovery-evidence-coverage" in error["failed_checks"]
     assert not (data_dir / "camden-qualification-v2.json").exists()

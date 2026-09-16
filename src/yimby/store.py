@@ -1283,6 +1283,32 @@ class SqliteStore:
         )
         return int(row["count"])
 
+    def discovery_evidence_captures(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[EvidenceCapture, ...]:
+        """Rehydrate distinct discovery captures linked to one authority."""
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT evidence.digest, evidence.path, evidence.source_url,
+                evidence.media_type
+            FROM discovery_evidence
+            JOIN evidence ON evidence.digest = discovery_evidence.digest
+            WHERE discovery_evidence.authority_id = ?
+            ORDER BY evidence.digest
+            """,
+            (authority_id,),
+        )
+        return tuple(
+            self._evidence.read_capture(
+                EvidenceDigest(row["digest"]),
+                row["path"],
+                row["source_url"],
+                row["media_type"],
+            )
+            for row in rows
+        )
+
     def metrics_totals(self) -> RunMetrics:
         """Aggregate completed collection costs for dashboard display."""
         row = next(

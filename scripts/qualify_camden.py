@@ -22,6 +22,7 @@ from yimby.authorities.camden import CAMDEN_PACKAGE
 from yimby.authorities.camden.browser_session import CamdenBrowserPortalSession
 from yimby.authorities.camden.discovery import (
     CAMDEN_SOURCE,
+    DISCOVERY_EVIDENCE_MEDIA_TYPE,
     CamdenCheckpointV1,
     CamdenDiscoveryQueryV1,
     CamdenDiscoveryScopeV1,
@@ -58,6 +59,7 @@ _RESUME_REQUIRED = "resume-required"
 _RESUME_SCOPE_MISMATCH = "resume-scope-mismatch"
 _WINDOW_SPAN_DAYS = 29
 _QUERY_COUNT = 5
+_SHA256_HEX_LENGTH = len(sha256(b"").hexdigest())
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -96,7 +98,7 @@ class QualificationCost(FrozenModel):
 
 
 class QualificationCosts(FrozenModel):
-    """Initial bootstrap and immediate terminal rerun costs."""
+    """Initial bootstrap and forced immediate-refresh costs."""
 
     initial: QualificationCost
     rerun: QualificationCost
@@ -180,6 +182,10 @@ class _QualificationPass(FrozenModel):
 class QualificationConfigError(ValueError):
     """One required safety option or scope value is invalid."""
 
+    def __init__(self, code: str) -> None:
+        """Retain the stable error code emitted by the command."""
+        super().__init__(code)
+
 
 @runtime_checkable
 class _MeasuredCamdenSession(Protocol):
@@ -191,10 +197,6 @@ class _MeasuredCamdenSession(Protocol):
 
     @property
     def retained_html_bytes(self) -> int: ...
-
-    def __init__(self, code: str) -> None:
-        """Retain the stable error code emitted by the command."""
-        super().__init__(code)
 
 
 class QualificationFailedError(RuntimeError):
@@ -315,6 +317,63 @@ def _query_results(
     )
 
 
+def _discovery_evidence_covers_checkpoint(
+    store: SqliteStore,
+    checkpoint: CamdenLiveCheckpointV1,
+) -> bool:
+    captures = tuple(
+        capture
+        for capture in store.discovery_evidence_captures(_AUTHORITY_ID)
+        if capture.media_type == DISCOVERY_EVIDENCE_MEDIA_TYPE
+    )
+    payloads: list[dict[str, object]] = []
+    for capture in captures:
+        try:
+            payload = json.loads(capture.body)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            payloads.append(payload)
+
+    expected_pages: list[dict[str, object]] = []
+    for result in checkpoint.completed_queries:
+        offsets = range(0, max(1, result.reported_count), 10)
+        for offset in offsets:
+            references = result.ordered_references[offset : offset + 10]
+            next_offset = (
+                offset + len(references)
+                if offset + len(references) < result.reported_count
+                else None
+            )
+            expected_pages.append(
+                {
+                    "next_offset": next_offset,
+                    "query": result.query.model_dump(mode="json"),
+                    "references": [item.model_dump(mode="json") for item in references],
+                    "reported_count": result.reported_count,
+                    "requested_offset": offset,
+                    "schema_version": 1,
+                }
+            )
+
+    def matches(payload: dict[str, object], expected: dict[str, object]) -> bool:
+        source_digest = payload.get("source_body_sha256")
+        without_digest = {
+            key: value for key, value in payload.items() if key != "source_body_sha256"
+        }
+        return (
+            isinstance(source_digest, str)
+            and len(source_digest) == _SHA256_HEX_LENGTH
+            and set(source_digest) <= set("0123456789abcdef")
+            and without_digest == expected
+        )
+
+    return bool(expected_pages) and all(
+        any(matches(payload, expected) for payload in payloads)
+        for expected in expected_pages
+    )
+
+
 def _reference_agreement(
     store: SqliteStore,
     checkpoint: CamdenLiveCheckpointV1 | None,
@@ -402,6 +461,13 @@ def _base_checks(
             ok=(
                 state.checkpoint is not None
                 and len(state.checkpoint.completed_queries) == _QUERY_COUNT
+            ),
+        ),
+        QualificationCheck(
+            name="discovery-evidence-coverage",
+            ok=(
+                state.checkpoint is not None
+                and _discovery_evidence_covers_checkpoint(store, state.checkpoint)
             ),
         ),
         QualificationCheck(
@@ -547,14 +613,9 @@ async def _qualify(
             ok=(
                 first_snapshot == final_snapshot
                 and first_agreement == final_agreement
-                and first_evidence == final_evidence
                 and final_checkpoint is not None
                 and first_query_results == _query_results(final_checkpoint)
             ),
-        ),
-        QualificationCheck(
-            name="discovery-evidence-retained",
-            ok=store.discovery_evidence_count(_AUTHORITY_ID) > 0,
         ),
         QualificationCheck(
             name="immediate-refresh",
