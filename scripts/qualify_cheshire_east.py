@@ -104,12 +104,25 @@ class RecentContractV1(FrozenModel):
 
     explicit_zero: bool
     visible_references: tuple[str, ...]
+    reported_total: int | None
+    pagination_links: tuple[str, ...]
+    terminal_marker: bool
 
     @model_validator(mode="after")
     def zero_agrees_with_references(self) -> Self:
         """Require exactly one of an explicit zero or visible result rows."""
         if self.explicit_zero == bool(self.visible_references):
             _raise_invariant("recent-result-mismatch")
+        if self.explicit_zero and (
+            self.reported_total != 0
+            or self.pagination_links
+            or not self.terminal_marker
+        ):
+            _raise_invariant("recent-zero-boundary-mismatch")
+        if self.reported_total is not None and self.reported_total < len(
+            self.visible_references
+        ):
+            _raise_invariant("recent-total-mismatch")
         return self
 
 
@@ -202,6 +215,36 @@ def _weekly_terminality_unproved(weekly: WeeklyContractV1) -> bool:
     )
 
 
+def _recent_terminality_unproved(recent: RecentContractV1) -> bool:
+    published_count_agrees = (
+        recent.reported_total is None
+        or recent.reported_total == len(recent.visible_references)
+    )
+    return not (
+        not recent.pagination_links
+        and published_count_agrees
+        and (recent.terminal_marker or recent.reported_total is not None)
+    )
+
+
+def _source_blocker_facts(
+    scope: QualificationScopeV1,
+    source_contract: SourceContractV1,
+) -> tuple[tuple[str, ...], bool, bool, bool]:
+    recent_contradicted = _recent_window_contradicted(scope, source_contract)
+    recent_unproved = _recent_terminality_unproved(source_contract.recent)
+    weekly_unproved = _weekly_terminality_unproved(source_contract.weekly)
+    codes = []
+    if recent_contradicted:
+        codes.append("recent-window-fidelity-contradicted")
+    if recent_unproved:
+        codes.append("recent-window-terminality-unproven")
+    if weekly_unproved:
+        codes.append("weekly-list-terminality-unproven")
+    codes.append("older-open-inventory-unproven")
+    return tuple(codes), recent_contradicted, recent_unproved, weekly_unproved
+
+
 class QualificationBlockerV1(FrozenModel):
     """One completeness fact preventing live qualification."""
 
@@ -209,6 +252,7 @@ class QualificationBlockerV1(FrozenModel):
         "official-search-form-unavailable",
         "official-source-contract-drift",
         "recent-window-fidelity-contradicted",
+        "recent-window-terminality-unproven",
         "weekly-list-terminality-unproven",
         "older-open-inventory-unproven",
     ]
@@ -323,18 +367,15 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
                 or self.source_contract.detail.public_reference != _DETAIL_REFERENCE
             ):
                 _raise_invariant("source-contract-identity-mismatch")
-            recent_contradicted = _recent_window_contradicted(
+            (
+                expected_codes,
+                recent_contradicted,
+                recent_unproved,
+                weekly_unproved,
+            ) = _source_blocker_facts(
                 self.scope,
                 self.source_contract,
             )
-            weekly_unproved = _weekly_terminality_unproved(self.source_contract.weekly)
-            expected_code_list = []
-            if recent_contradicted:
-                expected_code_list.append("recent-window-fidelity-contradicted")
-            if weekly_unproved:
-                expected_code_list.append("weekly-list-terminality-unproven")
-            expected_code_list.append("older-open-inventory-unproven")
-            expected_codes = tuple(expected_code_list)
             semantic_requests = tuple(
                 request
                 for request in self.attempted_requests
@@ -351,7 +392,7 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
                     "official-search-form": "passed",
                     "source-contract": "passed",
                     "recent-window-fidelity": (
-                        "failed" if recent_contradicted else "passed"
+                        "failed" if recent_contradicted or recent_unproved else "passed"
                     ),
                     "weekly-list-terminality": (
                         "failed" if weekly_unproved else "passed"
@@ -420,6 +461,8 @@ def _config(argv: Sequence[str]) -> _Config:
         raise QualificationConfigError(_DATA_DIR_NOT_DIRECTORY)
     if data_dir.exists() and any(data_dir.iterdir()) and not arguments.resume:
         raise QualificationConfigError(_RESUME_REQUIRED)
+    if arguments.resume and not (data_dir / _RECEIPT_NAME).is_file():
+        raise QualificationConfigError(_RECEIPT_REQUIRED)
     return _Config(data_dir=data_dir, scope=scope, resume=arguments.resume)
 
 
@@ -506,37 +549,11 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
                 ),
             ),
         )
-    queries = (
-        _recorded_query(recent_key, recent_request),
-        _recorded_query(weekly_key, weekly_request),
-        _recorded_query(detail_key, detail_portal_request),
-    )
-    source_contract = SourceContractV1(
-        queries=queries,
-        recent=RecentContractV1(
-            explicit_zero=recent_boundary.explicit_zero,
-            visible_references=tuple(
-                result.public_reference for result in recent_boundary.results
-            ),
-        ),
-        weekly=WeeklyContractV1(
-            week=_HISTORICAL_WEEK,
-            row_count=len(weekly_boundary.rows),
-            reported_total=weekly_boundary.reported_total,
-            pagination_links=weekly_boundary.pagination_links,
-            terminal_marker=weekly_boundary.terminal_marker,
-        ),
-        detail=DetailContractV1(
-            public_reference=detail.public_reference,
-            locator=_DETAIL_LOCATOR,
-            application_status=detail.application_status,
-            valid_date=detail.valid_date,
-            document_count=len(detail.documents),
-            documents=tuple(
-                DocumentContractV1.model_validate(document.model_dump())
-                for document in detail.documents
-            ),
-        ),
+    source_contract = _source_contract_from_boundaries(
+        tuple(attempted_requests),
+        recent_boundary,
+        weekly_boundary,
+        detail,
     )
     return _probe_result(
         session,
@@ -563,6 +580,48 @@ def _probe_result(
             request_count=len(session.requested_urls),
             transferred_bytes=session.transferred_bytes,
             attachment_body_requests=session.attachment_body_requests,
+        ),
+    )
+
+
+def _source_contract_from_boundaries(
+    requests: tuple[RecordedQueryV1, ...],
+    recent: cheshire.CheshireEastSearchBoundaryV1,
+    weekly: cheshire.CheshireEastWeeklyBoundaryV1,
+    detail: cheshire.CheshireEastDetailContractV1,
+) -> SourceContractV1:
+    return SourceContractV1(
+        queries=(
+            requests[_RECENT_REQUEST_INDEX],
+            requests[_WEEKLY_REQUEST_INDEX],
+            requests[_DETAIL_REQUEST_INDEX],
+        ),
+        recent=RecentContractV1(
+            explicit_zero=recent.explicit_zero,
+            visible_references=tuple(
+                result.public_reference for result in recent.results
+            ),
+            reported_total=recent.reported_total,
+            pagination_links=recent.pagination_links,
+            terminal_marker=recent.terminal_marker,
+        ),
+        weekly=WeeklyContractV1(
+            week=_HISTORICAL_WEEK,
+            row_count=len(weekly.rows),
+            reported_total=weekly.reported_total,
+            pagination_links=weekly.pagination_links,
+            terminal_marker=weekly.terminal_marker,
+        ),
+        detail=DetailContractV1(
+            public_reference=detail.public_reference,
+            locator=_DETAIL_LOCATOR,
+            application_status=detail.application_status,
+            valid_date=detail.valid_date,
+            document_count=len(detail.documents),
+            documents=tuple(
+                DocumentContractV1.model_validate(document.model_dump())
+                for document in detail.documents
+            ),
         ),
     )
 
@@ -675,34 +734,130 @@ def _validate_evidence_bindings(
             _raise_invariant("request-evidence-mismatch")
 
 
+class _RetainedEvidenceReplay:
+    def __init__(
+        self,
+        receipt: CheshireEastQualificationBlockerReceiptV2,
+        bodies: tuple[bytes, ...],
+    ) -> None:
+        self.receipt = receipt
+        self.bodies = bodies
+
+    def parse_stage[Stage](
+        self,
+        index: int,
+        parser: Callable[[bytes], Stage],
+        errors: tuple[type[Exception], ...],
+        blocker_code: str,
+    ) -> Stage | None:
+        try:
+            return parser(self.bodies[index])
+        except errors as error:
+            if (
+                self.receipt.source_contract is None
+                and len(self.receipt.blockers) == 1
+                and self.receipt.blockers[0].code == blocker_code
+                and len(self.receipt.attempted_requests) == index + 1
+            ):
+                return None
+            raise QualificationEvidenceError from error
+
+    def require_following_request(self, parsed_index: int) -> None:
+        if len(self.receipt.attempted_requests) == parsed_index + 1:
+            raise QualificationEvidenceError
+
+
 def _verify_request_evidence_contract(
     receipt: CheshireEastQualificationBlockerReceiptV2,
     bodies: tuple[bytes, ...],
 ) -> None:
+    replay = _RetainedEvidenceReplay(receipt, bodies)
     requests = receipt.attempted_requests
-    if len(requests) > _RECENT_REQUEST_INDEX:
-        search_form = cheshire.parse_search_form(bodies[_SEARCH_FORM_REQUEST_INDEX])
-        expected_recent = _recorded_query(
-            requests[_RECENT_REQUEST_INDEX].key,
-            cheshire.valid_date_request(
-                search_form,
-                DiscoveryWindow(
-                    start=receipt.scope.start,
-                    end=receipt.scope.end,
-                    include_open=True,
-                ),
+    search_form = replay.parse_stage(
+        _SEARCH_FORM_REQUEST_INDEX,
+        cheshire.parse_search_form,
+        (
+            cheshire.CheshireEastFormMethodUnavailableError,
+            cheshire.CheshireEastParseError,
+        ),
+        "official-search-form-unavailable",
+    )
+    if search_form is None:
+        return
+    replay.require_following_request(_SEARCH_FORM_REQUEST_INDEX)
+
+    expected_recent = _recorded_query(
+        requests[_RECENT_REQUEST_INDEX].key,
+        cheshire.valid_date_request(
+            search_form,
+            DiscoveryWindow(
+                start=receipt.scope.start,
+                end=receipt.scope.end,
+                include_open=True,
             ),
-        )
-        if requests[_RECENT_REQUEST_INDEX] != expected_recent:
-            raise QualificationEvidenceError
-    if len(requests) > _WEEKLY_REQUEST_INDEX:
-        weekly_form = cheshire.parse_weekly_form(bodies[_WEEKLY_FORM_REQUEST_INDEX])
-        expected_weekly = _recorded_query(
-            requests[_WEEKLY_REQUEST_INDEX].key,
-            cheshire.weekly_received_request(weekly_form, _HISTORICAL_WEEK),
-        )
-        if requests[_WEEKLY_REQUEST_INDEX] != expected_weekly:
-            raise QualificationEvidenceError
+        ),
+    )
+    if requests[_RECENT_REQUEST_INDEX] != expected_recent:
+        raise QualificationEvidenceError
+    recent = replay.parse_stage(
+        _RECENT_REQUEST_INDEX,
+        cheshire.parse_search_boundary,
+        (cheshire.CheshireEastParseError,),
+        "official-source-contract-drift",
+    )
+    if recent is None:
+        return
+    replay.require_following_request(_RECENT_REQUEST_INDEX)
+
+    weekly_form = replay.parse_stage(
+        _WEEKLY_FORM_REQUEST_INDEX,
+        cheshire.parse_weekly_form,
+        (cheshire.CheshireEastParseError,),
+        "official-source-contract-drift",
+    )
+    if weekly_form is None:
+        return
+    replay.require_following_request(_WEEKLY_FORM_REQUEST_INDEX)
+
+    expected_weekly = _recorded_query(
+        requests[_WEEKLY_REQUEST_INDEX].key,
+        cheshire.weekly_received_request(weekly_form, _HISTORICAL_WEEK),
+    )
+    if requests[_WEEKLY_REQUEST_INDEX] != expected_weekly:
+        raise QualificationEvidenceError
+    weekly = replay.parse_stage(
+        _WEEKLY_REQUEST_INDEX,
+        cheshire.parse_weekly_boundary,
+        (cheshire.CheshireEastParseError,),
+        "official-source-contract-drift",
+    )
+    if weekly is None:
+        return
+    replay.require_following_request(_WEEKLY_REQUEST_INDEX)
+
+    detail = replay.parse_stage(
+        _DETAIL_REQUEST_INDEX,
+        lambda body: cheshire.parse_detail_contract(
+            body,
+            expected_reference=_DETAIL_REFERENCE,
+            expected_locator=_DETAIL_LOCATOR,
+        ),
+        (
+            cheshire.CheshireEastParseError,
+            cheshire.CheshireEastReferenceMismatchError,
+        ),
+        "official-source-contract-drift",
+    )
+    if detail is None:
+        return
+    expected_contract = _source_contract_from_boundaries(
+        requests,
+        recent,
+        weekly,
+        detail,
+    )
+    if receipt.source_contract != expected_contract:
+        raise QualificationEvidenceError
 
 
 def _retain_evidence(
@@ -781,6 +936,7 @@ def _receipt(
         scope,
         probe.source_contract,
     )
+    recent_unproved = _recent_terminality_unproved(probe.source_contract.recent)
     weekly_unproved = _weekly_terminality_unproved(probe.source_contract.weekly)
     blockers = []
     if recent_contradicted:
@@ -790,6 +946,16 @@ def _receipt(
                 explanation=(
                     "a direct detail valid inside the requested window was absent "
                     "from the valid-date result"
+                ),
+            )
+        )
+    if recent_unproved:
+        blockers.append(
+            QualificationBlockerV1(
+                code="recent-window-terminality-unproven",
+                explanation=(
+                    "the valid-date result does not publish a complete result count "
+                    "or terminal boundary"
                 ),
             )
         )
@@ -826,7 +992,9 @@ def _receipt(
             QualificationCheckV1(name="exact-query-inventory", status="passed"),
             QualificationCheckV1(
                 name="recent-window-fidelity",
-                status="failed" if recent_contradicted else "passed",
+                status=(
+                    "failed" if recent_contradicted or recent_unproved else "passed"
+                ),
             ),
             QualificationCheckV1(
                 name="weekly-list-terminality",
@@ -919,7 +1087,7 @@ def main(
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
             receipt_path = config.data_dir / _RECEIPT_NAME
-            if config.resume and receipt_path.is_file():
+            if config.resume:
                 receipt = _verify_receipt(config.data_dir, config.scope)
             else:
                 probe = asyncio.run(_run_probe(config.scope, session_factory))

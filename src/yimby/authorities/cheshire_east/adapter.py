@@ -90,6 +90,9 @@ class CheshireEastSearchBoundaryV1(FrozenModel):
 
     results: tuple[CheshireEastSearchResultV1, ...]
     explicit_zero: bool
+    reported_total: int | None
+    pagination_links: tuple[str, ...]
+    terminal_marker: bool
 
 
 class CheshireEastWeeklyBoundaryV1(FrozenModel):
@@ -380,6 +383,9 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         return CheshireEastSearchBoundaryV1(
             results=_parse_result_table(body),
             explicit_zero=False,
+            reported_total=None,
+            pagination_links=(),
+            terminal_marker=False,
         )
     zero_markers = tuple(
         element
@@ -388,7 +394,13 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
     )
     if len(zero_markers) != 1:
         _raise_parse("search result boundary")
-    return CheshireEastSearchBoundaryV1(results=(), explicit_zero=True)
+    return CheshireEastSearchBoundaryV1(
+        results=(),
+        explicit_zero=True,
+        reported_total=0,
+        pagination_links=(),
+        terminal_marker=True,
+    )
 
 
 def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
