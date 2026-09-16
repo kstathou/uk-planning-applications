@@ -80,9 +80,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("peak-district"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "rolling weekly discovery and visible summary are implemented; "
-        "client-loaded sections and older-open are unresolved",
-        "captured Peak District weekly DataTable and legacy summary contracts",
+        "a complete 30-day and older-open bootstrap is verified; two genuinely "
+        "later weekly cycles remain pending",
+        "16 September 2026 AssureLive qualification receipt for 377 applications",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("arun"): _status(

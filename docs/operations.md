@@ -109,10 +109,37 @@ uv run python scripts/smoke_devon.py --confirm-live
 uv run python scripts/smoke_peak_district.py --confirm-live
 ```
 
-Arun, Devon, and Peak District restrict discovery to their recorded rolling or
-received-date paths. Camden resolves one explicit reference and deliberately
-rejects an unsupported bounded date search. These smokes also refuse before
-creating a live session unless `--confirm-live` is present.
+Arun and Devon restrict discovery to their recorded received-date paths.
+Peak District's smoke remains a small rolling-week diagnostic, while its
+complete bootstrap uses the qualification command below. Camden resolves one
+explicit reference and deliberately rejects an unsupported bounded date
+search. These commands refuse before creating a live session unless
+`--confirm-live` is present.
+
+Peak District has a dedicated persisted qualification command:
+
+```sh
+uv run python scripts/qualify_peak_district.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-peak-district-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+The interval must contain exactly 30 inclusive days and `--include-open` is
+mandatory. The command submits bounded Received, Validated, and Decided queries
+plus any-time REGISTERED and APPEAL LODGED queries. It writes a versioned JSON
+receipt only after checkpoint and query inventory, reference and application
+agreement, retry state, failed sections, database integrity, evidence paths and
+digests, unmapped records, attachment policy, and an immediate zero-network
+rerun all pass. Use `--resume` only with the same directory and exact scope
+after an interruption or fail-closed correction.
+
+The accepted 16 September 2026 receipt records 377 references and applications,
+zero failed sections, zero pending retries, and zero attachment-body requests.
+Peak District remains below `LIVE_READY` until successful weekly cycles occur
+on or after 23 September and 30 September 2026.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:

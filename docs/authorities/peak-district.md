@@ -1,57 +1,92 @@
 # Peak District portal walkthrough
 
-Walkthrough date: 15 September 2026.
+Walkthrough and live qualification date: 16 September 2026.
 
 ## Sources
 
+- Current AssureLive portal: `https://planning.peakdistrict.gov.uk/AssureLive/`
 - Legacy information portal: `https://portal.peakdistrict.gov.uk/`
-- AssureLive replacement: `https://planning.peakdistrict.gov.uk/AssureLive/`
 
-The legacy portal remains the comment route. It links each current record to the replacement for the latest record and documents. The authority warns that some legacy document lists for 2025 are incomplete.
+AssureLive is the authoritative current search, detail, and document-metadata
+surface. The adapter retains the established `peak-district-legacy` source
+identity for public references so an upgraded locator does not create duplicate
+durable applications. The manifest records AssureLive separately as the current
+source.
 
-## Discovery
+## Discovery contract
 
-The legacy portal has direct quick searches for applications and appeals validated during the past week or month. The observed weekly application query returned 33 records and displayed 10 rows per page.
+The live adapter submits five ordered AssureLive queries for one exact scope:
 
-The result table used client-side pagination. Each row contained a reference, address, record type, proposal, and date. The application reference is encoded in an opaque result URL and also appears as readable text.
+1. Received between the inclusive start and end dates.
+2. Validated between the same dates.
+3. Decided between the same dates.
+4. Any-time status `REGISTERED`.
+5. Any-time status `APPEAL LODGED`.
 
-## Application record
+The first three queries prove bounded 30-day discovery. The last two reconcile
+older open applications and active appeals. References found by more than one
+query are de-duplicated through the checkpoint's ordered seen-reference set.
 
-Application `NP/DIS/0926/0917` exposed a planning-portal reference, status, type, address, parish, validated date, target decision date, and legal-agreement flag. The page linked directly to the matching AssureLive record.
+The search shell declares the advanced partial at
+`OnlinePlanningAdvanceSearchView?SearchFor=0`. A bounded query sends the
+selected `AdvanceSearch.<Date>Between` radio, its two dates, and omits the
+corresponding any-time radio. An open query sends the selected application
+status and preserves the portal's any-time date controls. Pagination submits
+the selected query again, the result-page controls, and the portal's serialized
+search state.
 
-Two additional sections remained in a loading state during the initial render. The legacy client loads schema-specific data with JavaScript. A successful summary response does not prove that those sections loaded.
+Result pages reconcile the readable `Total record(s)` value with
+`TotalRecords`, `PageCount`, `PageSize`, and the current page. AssureLive shows
+only a window of page links for large result sets, so the adapter requires the
+current and adjacent links to be present and every visible page to be in range.
+It then requests all pages sequentially from the reconciled page count. The
+readable application number must agree with the `applicationNumber` in every
+opaque overview locator.
 
-## Completeness rules
+## Detail and document metadata
 
-The adapter must record the legacy and replacement portals as separate dated sources. It must prefer the replacement for document completeness while retaining the legacy route for comments and historical records.
+The overview parser retains the public reference, type, proposal, status,
+address, parish, registered date, applicant, agent, and planning officer. It
+fails closed if the page reference differs from the discovery reference.
 
-The adapter must distinguish a visible loading state from an empty section. Client-side pagination must enumerate all 33 rows from the observed query, not only the first 10 displayed rows.
+The document endpoint is accepted only when its declared route matches
+`GetOnlineDocuments`. Every document-list page reconciles three reported
+counts, its current page, its page size, its expected row count, and its
+windowed paginator. Each row retains only the published date, title, type, and
+attachment URL. The collector never opens an attachment body.
 
-## Known limits
+The checked records exposed no public comments tab. Their comment section is
+therefore unavailable, not empty. If a comments tab appears before its contract
+is implemented, the adapter marks that section failed rather than inferring
+completeness.
 
-This walkthrough covered one weekly query and one current record. It did not enumerate the JavaScript-loaded sections, replacement-portal documents, comments, decided cases, older open applications, or incremental changes.
+## Live qualification
 
-## Request contract capture
+The accepted local evidence directory is
+`.yimby/qualification-peak-district-2026-09-16`. Its typed
+`peak-district-qualification-v1.json` receipt records:
 
-The legacy weekly route was rechecked on 16 September 2026 at
-`/quicksearch/validated_past_week`. The returned `#searchresults` table was
-enhanced by a client-side DataTable. At that time it reported 30 entries over
-three pages, displayed ten rows at once, and provided the readable reference,
-record type, description, date, and one opaque `/result/...` link per record.
-The collector must parse or enumerate all entries rather than treat the first
-ten DOM rows as the complete result.
+- the inclusive scope from 18 August through 16 September 2026;
+- the exact five-query inventory and a one-attempt transport policy;
+- 377 discovered references and 377 applications;
+- 389 native versions, 377 application versions, and 377 document versions;
+- zero pending retries, failed sections, unmapped records, and attachment-body
+  requests;
+- agreement among checkpoint, discovery queue, and retained applications;
+- database, evidence-path, and SHA-256 evidence integrity;
+- an unchanged immediate rerun with zero requests and zero transferred bytes.
 
-The observed result page exposed the reference, description, planning portal
-reference, status, application type, development address, and parish. Four
-other areas still rendered `Loading...`, and no successful child-data request
-was visible in the document. Those sections remain failed or partial, not
-empty. The replacement AssureLive system remains the required source for
-current documents and other migrated fields.
+During qualification, stored official evidence exposed windowed pagination on
+large search and document sets. Twelve failed current document sections were
+scheduled once for an explicit corrective refresh after the parser fix. Eleven
+had windowed document pagers and one later document page had been unavailable
+on its original single attempt. The accepted run used one attempt per request,
+left the retry queue empty, and replaced all twelve with complete current
+observations.
 
-## Implemented boundary
+## Acceptance boundary
 
-The authority adapter now parses every row already present in the recorded
-weekly DataTable, retains each opaque detail locator, and reads only the visible
-legacy summary. It reports the still-loading document and comment sections as
-failed instead of empty. AssureLive documents, decided cases, older-open cases,
-and client-loaded child data remain unsupported.
+The complete persisted live bootstrap is verified. This does not make the
+authority operationally qualified or `LIVE_READY`. Genuinely later weekly
+cycles remain pending for 23 September and 30 September 2026. Same-day reruns
+do not count toward those cycles.
