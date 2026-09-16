@@ -13,7 +13,7 @@ This reference records the browser census taken on 15–16 September 2026. A suc
 | Old Oak and Park Royal Development Corporation | Citizen Portal plus `planningapi.agileapplications.co.uk` | Agile Applications | Exact bounded Registered and Determined searches, the complete current Registered set, detail, document metadata, and public responses were verified and qualified. See `authorities/opdc.md`. |
 | Dorset | `gi.dorsetcouncil.gov.uk/dorsetexplorer/planning/public` | Dorset Explorer map client | The JavaScript map and planning search-provider configuration loaded, but no bounded application enumeration was exposed. See `authorities/dorset.md`. |
 | Cheshire East | `pa.cheshireeast.gov.uk/planning/index.html?fa=search` | Custom register | A valid-date search and its field inventory were verified. A selected result did not yield readable detail content. See `authorities/cheshire-east.md`. |
-| Blackburn with Darwen | `planning.blackburn.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned the same maintenance page. See `authorities/blackburn-with-darwen.md`. |
+| Blackburn with Darwen | Council-linked `online.blackburn.gov.uk/planning/`; legacy Northgate portal | Blackburn Citizen register | Exact date searches, the 30-row result cap, one detail record, and its eight-row document index were verified. Visible Chromium requires a human check. See `authorities/blackburn-with-darwen.md`. |
 | Birmingham | `eplanning.birmingham.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned HTTP 503. See `authorities/birmingham.md`. |
 | Leeds | `publicaccess.leeds.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery returned explicit zero and 156-record outcomes for adjacent weeks. The selected detail returned a remote exception. See `authorities/leeds.md`. |
 | Cornwall | `planning.cornwall.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery, one current detail, explicit section counts, and its complete 16-row document index were verified without opening attachment bodies. See `authorities/cornwall.md`. |
@@ -26,7 +26,7 @@ The registry must store sources separately from authorities. Camden and Peak Dis
 
 The collector must support server-side sessions. IDOX and Camden's JSF search both use per-session request state.
 
-The collector must support JavaScript capture. Haringey and Dorset did not expose application data in the first HTML response.
+The collector must support JavaScript capture. Haringey and Dorset did not expose application data in the first HTML response. Blackburn's current source rejects direct HTTP and headless Chromium, then applies a human check to visible-browser detail navigation.
 
 The collector must record portal blocks as coverage gaps. A maintenance page, HTTP 503, or blank client bootstrap is not an empty application result.
 
@@ -34,4 +34,12 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 
 ## Verification status
 
-Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, OPDC, Peak District, and West Suffolk have recorded detail paths. OPDC has also completed a persisted live bootstrap with complete bounded and current-open discovery. Cheshire East and Leeds have recorded discovery paths but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn and Birmingham remain blocked at their entry points. Every authority has a dated walkthrough, while unresolved paths remain explicit.
+Arun, Barnet, Blackburn with Darwen, Camden, Cornwall, Devon, Durham, Haringey,
+OPDC, Peak District, and West Suffolk have recorded detail paths. OPDC has also
+completed a persisted live bootstrap with complete bounded and current-open
+discovery. Cheshire East and Leeds have recorded discovery paths but
+inconclusive detail retrieval. Dorset has a verified map-client boundary without
+bounded application discovery. Blackburn's adapter remains browser-only until
+its attended verification state supports a complete persisted run. Birmingham
+remains blocked at its entry point. Every authority has a dated walkthrough,
+while unresolved paths remain explicit.
