@@ -32,7 +32,7 @@ requirement.
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
-| Birmingham | Verified | Source blocked | Blocked | Open | Open |
+| Birmingham | Verified | ArcGIS schema, current 30-day pagination, counts, and semantic counterexamples recorded | Current-window subset is bounded; source continuity, older-open cases, active appeals, detail, and child sections are not proven | Open | Open |
 | Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
@@ -55,3 +55,11 @@ their live-bootstrap cells because the smokes checkpoint discovery but do not
 persist every discovered application through the operational collection store.
 West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
 unverified detail surface.
+
+Birmingham's official ArcGIS layer was current through 15 September and its
+exact 30-day query exhausted 70 unique records across three pages. That does
+not qualify a bootstrap. The recent-volume decline is unexplained, no explicit
+case or current appeal status exists, and documents, comments, conditions,
+consultations, and relationships are not exposed. The authority remains
+blocked and both weekly cycles remain pending relative to a future successful
+bootstrap.

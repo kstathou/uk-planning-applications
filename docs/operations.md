@@ -129,6 +129,24 @@ the rolling seven-day quick link and reports the source-provided totals. It
 does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
+Birmingham has a separate fail-closed ArcGIS qualifier:
+
+```sh
+uv run python scripts/qualify_birmingham.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-birmingham-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+The command requires a new empty data directory. It retains every source
+response, verifies the exact 30-day count against ordered pagination, records
+the source-volume and semantic gaps, performs an offline integrity replay, and
+writes a typed blocked receipt. Exit status 1 is expected while the receipt is
+blocked. The command does not promote Birmingham, enumerate applications into
+the collection store, or satisfy a weekly cycle.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
