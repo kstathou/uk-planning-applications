@@ -1,8 +1,6 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
 # ruff: noqa: T201
 
-"""Capture Cheshire East's live completeness blocker as durable evidence."""
-
 from __future__ import annotations
 
 import argparse

@@ -107,6 +107,7 @@ known-first-party = ["yimby"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/yimby/authorities/cheshire_east/adapter.py" = ["D100", "D107"]
+"src/yimby/cheshire_qualification.py" = ["D100"]
 "src/yimby/registry.py" = ["D100"]
 "scripts/qualify_cheshire_east.py" = ["D100"]
 "tests/conftest.py" = ["D100"]
