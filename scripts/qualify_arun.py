@@ -26,6 +26,7 @@ from yimby.authorities.arun.adapter import (
     ArunCompletedQuery,
     ArunDiscoveryScope,
     ArunLiveCursor,
+    ArunParseError,
     ArunQuery,
     _canonical_query_plan,
     _parse_search_form,
@@ -749,7 +750,10 @@ def main(
             failed_checks=list(error.failed_checks),
         )
     except Exception as error:  # noqa: BLE001
-        return _error("runtime-failure", 1, exception=type(error).__name__)
+        details: dict[str, object] = {"exception": type(error).__name__}
+        if isinstance(error, ArunParseError):
+            details["source_error"] = error.code
+        return _error("runtime-failure", 1, **details)
     print(receipt.model_dump_json())
     return 0
 
