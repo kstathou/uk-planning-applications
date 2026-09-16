@@ -274,6 +274,25 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
         ("proposal", "House"),
     )
 
+    legend_form = cheshire.parse_search_form(
+        _search_form().replace(
+            b'<input name="valid_date_from" value="">',
+            b'<fieldset disabled><legend><input name="valid_date_from" value="">'
+            b"</legend></fieldset>",
+        )
+    )
+    legend_request = cheshire.valid_date_request(
+        legend_form,
+        DiscoveryWindow(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+    )
+    assert ("valid_date_from", "18-08-2026") in tuple(
+        (field.name, field.value) for field in legend_request.form
+    )
+
 
 def test_cheshire_weekly_boundary_records_an_unproved_fifty_row_cap() -> None:
     form = cheshire.parse_weekly_form(_weekly_form())
@@ -384,6 +403,25 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<strong class="text-danger">No Results Found.</strong></div>'
             b"</div></main>"
         ),
+        (
+            b'<head><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></head>'
+        ),
+        (
+            b'<noscript><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></noscript>'
+        ),
+        (
+            b'<select><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></select>'
+        ),
+        _search_results().replace(
+            b'<div class="centered application-list">',
+            b'<div class="centered application-list" hidden>',
+        ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_boundary(body)
@@ -400,6 +438,11 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_form().replace(
             b'name="valid_date_from" value=""',
             b'name="valid_date_from" value="" disabled',
+        ),
+        _search_form().replace(
+            b'<input name="valid_date_from" value="">',
+            b'<fieldset disabled><input name="valid_date_from" value="">'
+            b"</fieldset>",
         ),
         _search_form().replace(b'type="hidden" name="fa"', b'type="submit" name="fa"'),
         _search_form().replace(
@@ -455,7 +498,7 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
     boundary = cheshire.parse_weekly_boundary(counted)
     assert boundary.reported_total == 50
     assert boundary.pagination_links == ("?page=2",)
-    assert boundary.terminal_marker is True
+    assert boundary.terminal_marker is False
     unrelated = (
         _weekly_results()
         + b'<aside data-result-count="50">'
@@ -478,6 +521,11 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_form().replace(b'method="post"', b'method="get"'),
         _weekly_form().replace(b'name="week"', b'name="other"'),
         _weekly_form().replace(b'name="fa" value=""', b'name="fa" value="x"'),
+        _weekly_form().replace(
+            b'<input type="text" id="week" name="week" value="14-09-2026">',
+            b'<fieldset disabled><input type="text" id="week" name="week" '
+            b'value="14-09-2026"></fieldset>',
+        ),
         _weekly_form().replace(
             b'<input type="hidden" name="fa" value="">',
             b'<input type="hidden" name="extra" value="x">'
@@ -546,6 +594,25 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
             _detail().replace(
                 b" disabled>All Documents Loaded", b">All Documents Loaded"
             ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"All Documents Loaded", b"Finished"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b">Show More</button>", b">Continue</button>"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b" disabled>All Documents Loaded",
+                b" disabled hidden>All Documents Loaded",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b'<div id="documents">', b'<div id="documents" hidden>'),
             cheshire.CheshireEastParseError,
         ),
         (
@@ -1345,6 +1412,7 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
             "https://pa.cheshireeast.gov.uk/planning/index.html?fa=evil",
         ),
         (("evidence", 0, "media_type"), "application/pdf"),
+        (("blockers", 0, "explanation"), "qualification succeeded"),
         (("source_contract", "recent", "visible_references"), ["26/X"]),
         (("source_contract", "weekly", "week"), "2030-01-01"),
         (("source_contract", "weekly", "row_count"), 49),
@@ -1369,6 +1437,7 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         "evidence-url-path",
         "evidence-url-query",
         "evidence-media-type",
+        "blocker-explanation",
         "recent-zero-with-reference",
         "historical-week",
         "weekly-row-count",
@@ -1411,6 +1480,82 @@ def test_cheshire_offline_resume_binds_requests_evidence_and_contract(
     for component in tamper_path[:-1]:
         target = target[component]
     target[tamper_path[-1]] = replacement
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "tampered resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"error": "runtime-failure"' in captured.err
+
+
+@pytest.mark.parametrize(
+    ("evidence_index", "old", "new"),
+    [
+        (1, b"139 Abbey Road", b"999 Other Road"),
+        (1, b'data-id="406569"', b'data-id="999999"'),
+        (3, b"id=400001", b"id=499999"),
+        (4, b"374136, 360487", b"374137, 360487"),
+    ],
+    ids=("recent-field", "recent-locator", "weekly-row", "detail-grid"),
+)
+def test_cheshire_offline_resume_binds_all_parsed_source_semantics(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    evidence_index: int,
+    old: bytes,
+    new: bytes,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert (
+        module.main(
+            arguments,
+            session_factory=lambda: _QualificationSession(
+                search_results=_search_results()
+            ),
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
+        == 1
+    )
+    capsys.readouterr()
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    item = payload["evidence"][evidence_index]
+    evidence_path = data_dir / "evidence" / item["relative_path"]
+    body = gzip.decompress(evidence_path.read_bytes())
+    assert old in body
+    changed = body.replace(old, new, 1)
+    digest = sha256(changed).hexdigest()
+    relative_path = f"{digest[:2]}/{digest}.gz"
+    replacement_path = data_dir / "evidence" / relative_path
+    replacement_path.parent.mkdir(parents=True, exist_ok=True)
+    replacement_path.write_bytes(gzip.compress(changed, mtime=0))
+    item.update(
+        digest=digest,
+        relative_path=relative_path,
+        byte_count=len(changed),
+    )
     receipt_path.write_text(json.dumps(payload), encoding="utf-8")
 
     def forbidden_factory() -> _QualificationSession:
