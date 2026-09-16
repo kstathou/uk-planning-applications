@@ -285,6 +285,7 @@ def _terminal_checkpoint(
         or checkpoint.next_page != 1
         or checkpoint.total_pages is not None
         or checkpoint.active_references
+        or checkpoint.active_new_references
     ):
         raise QualificationFailedError(("terminal-checkpoint",))
     return checkpoint

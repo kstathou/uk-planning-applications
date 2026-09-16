@@ -86,6 +86,7 @@ class DorsetCheckpointV1(FrozenModel):
     next_page: int = 1
     total_pages: int | None = None
     active_references: tuple[SourceReference, ...] = ()
+    active_new_references: tuple[SourceReference, ...] = ()
     seen_references: tuple[SourceReference, ...] = ()
     live_complete: bool = False
 
@@ -448,6 +449,15 @@ def _advance_checkpoint(
             _raise_checkpoint("active page")
     elif progress.active_query is not None:
         _raise_checkpoint("active query")
+    active_references = {
+        (reference.reference, reference.locator)
+        for reference in progress.active_references
+    }
+    if any(
+        (reference.reference, reference.locator) in active_references
+        for reference in page.references
+    ):
+        _raise_checkpoint("repeated page reference")
     seen = {reference.reference: reference for reference in progress.seen_references}
     fresh = []
     for reference in page.references:
@@ -469,6 +479,7 @@ def _advance_checkpoint(
                 "next_page": 1,
                 "total_pages": None,
                 "active_references": (),
+                "active_new_references": (),
                 "seen_references": tuple(seen.values()),
                 "live_complete": len(completed_queries) == len(query_keys),
             }
@@ -480,10 +491,12 @@ def _advance_checkpoint(
                 "next_page": page.page + 1,
                 "total_pages": page.total_pages,
                 "active_references": (*progress.active_references, *page.references),
+                "active_new_references": (*progress.active_new_references, *fresh),
                 "seen_references": tuple(seen.values()),
             }
         )
-    return checkpoint, tuple(fresh), terminal
+    query_references = (*progress.active_new_references, *fresh) if terminal else ()
+    return checkpoint, query_references, terminal
 
 
 def _validate_progress(
@@ -506,6 +519,7 @@ def _validate_progress(
             progress.next_page != 1
             or progress.total_pages is not None
             or progress.active_references
+            or progress.active_new_references
         ):
             _raise_checkpoint("inactive state")
         return
