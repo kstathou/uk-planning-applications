@@ -367,7 +367,7 @@ def test_evidence_store_syncs_file_then_directory(
 
     EvidenceStore(tmp_path / "evidence").put(capture)
 
-    assert sync_modes == ["file", "directory"]
+    assert sync_modes == ["directory", "directory", "file", "directory"]
 
 
 def test_cheshire_replays_exact_successful_search_controls() -> None:
@@ -390,8 +390,7 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
         ("decision_type_id", ""),
         ("valid_date_from", "18-08-2026"),
         ("valid_date_to", "16-09-2026"),
-        ("included_checkbox", "yes"),
-        ("proposal", "House"),
+        ("proposal", ""),
     )
 
     legend_form = cheshire.parse_search_form(
@@ -435,6 +434,10 @@ def test_cheshire_successful_select_options_match_browser_disabledness() -> None
             <option selected disabled value="disabled">Disabled</option>
             <optgroup disabled><option selected value="group">Group</option></optgroup>
             <option selected> Text fallback </option>
+          </select>
+          <select name="single">
+            <option selected disabled value="disabled">Disabled</option>
+            <option value="narrow">Narrow</option>
           </select>
           <input type="checkbox" name="default_checkbox" checked>
         </form>
@@ -1415,8 +1418,17 @@ def test_cheshire_resume_uses_only_consumed_completed_journal_evidence(
             encoding="utf-8"
         )
     )
-    assert receipt.query_inventory == ("source-access|search-form",)
-    assert len(receipt.evidence) == 1
+    assert receipt.query_inventory == (
+        "source-access|search-form",
+        "recent|valid|2026-08-18|2026-09-16",
+        "source-access|weekly-form",
+        "older-open|weekly-received|2024-01-01",
+        "detail|406569",
+    )
+    assert receipt.pending_query_inventory == ()
+    assert receipt.decision_query_key == "source-access|search-form"
+    assert len(receipt.evidence) == 5
+    assert receipt.costs.request_count == 5
     assert receipt.blockers[0].code == "official-search-form-unavailable"
 
 
@@ -1533,6 +1545,55 @@ def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
         now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
     )
     assert resumed == 1
+
+
+def test_cheshire_redirected_drift_becomes_a_typed_blocker_receipt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+
+    class RedirectedDriftSession(_QualificationSession):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            capture = await super().fetch(request)
+            body = b"<html>challenge</html>"
+            return capture.model_copy(
+                update={
+                    "url": HttpUrl(
+                        "https://pa.cheshireeast.gov.uk/planning/challenge"
+                    ),
+                    "body": body,
+                    "digest": EvidenceDigest(sha256(body).hexdigest()),
+                }
+            )
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=RedirectedDriftSession,
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt.decision_query_key == "source-access|search-form"
+    assert str(receipt.evidence[0].source_url).endswith("/planning/challenge")
+    assert receipt.blockers[0].code == "official-search-form-unavailable"
 
 
 def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
@@ -2595,14 +2656,14 @@ def test_cheshire_qualification_rejects_unsafe_data_directories(
     assert "resume-required" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("resume_flags", [(), ("--resume",)])
 def test_cheshire_qualification_recovers_initial_journal_publication_crash(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    resume: bool,
+    resume_flags: tuple[str, ...],
 ) -> None:
     module = _qualification_module()
-    data_dir = tmp_path / f"qualification-{resume}"
+    data_dir = tmp_path / f"qualification-{len(resume_flags)}"
     data_dir.mkdir()
     (data_dir / "qualification.lock").write_text("", encoding="utf-8")
     (data_dir / ".cheshire-east-qualification-journal-v1.json.tmp").write_text(
@@ -2618,9 +2679,8 @@ def test_cheshire_qualification_recovers_initial_journal_publication_crash(
         "--end",
         "2026-09-16",
         "--include-open",
+        *resume_flags,
     ]
-    if resume:
-        arguments.append("--resume")
 
     assert module.main(arguments, session_factory=_UnavailableQualificationSession) == 1
     captured = capsys.readouterr()
