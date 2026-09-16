@@ -64,9 +64,11 @@ attachment-body requests.
 
 ## Persisted qualification
 
-The live bootstrap is stored in
-`.yimby/qualification-opdc-2026-09-16/`. Its versioned receipt is
-`opdc-qualification-v1.json`.
+The full local bootstrap is stored in
+`.yimby/qualification-opdc-2026-09-16/`. A sanitized
+[committed receipt](../evidence/opdc-qualification-2026-09-16.json) retains the
+scope, query totals, aggregate counts, costs, run statuses, and checks while
+omitting the 55-row identity inventory from the repository.
 
 The receipt records:
 

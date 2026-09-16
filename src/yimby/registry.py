@@ -95,8 +95,8 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     AuthorityId("opdc"): _status(
         LiveReadiness.LIVE_READY,
         "official Agile API bootstrap and immediate idempotent rerun qualified",
-        ".yimby/qualification-opdc-2026-09-16/"
-        "opdc-qualification-v1.json records 55 complete applications",
+        "docs/evidence/opdc-qualification-2026-09-16.json records "
+        "55 complete applications",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("dorset"): _status(

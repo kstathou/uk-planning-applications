@@ -147,7 +147,10 @@ agreement, complete application evidence, SQLite integrity, zero retry and
 failure counts, evidence digest verification, exact per-application capture URL
 associations, attachment policy, and immediate zero-network rerun all pass.
 Its data directory contains the SQLite store and compressed source evidence;
-document bodies are never requested.
+document bodies are never requested. The
+[sanitized committed receipt](evidence/opdc-qualification-2026-09-16.json)
+keeps the aggregate proof reviewable without the ignored local store or its
+55-row public identity inventory.
 
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
