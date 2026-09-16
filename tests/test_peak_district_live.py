@@ -887,16 +887,20 @@ def test_peak_district_form_and_search_parser_failure_boundaries() -> None:
     valid = _result_page(("NP/DDD/0926/0909",), reported=1)
     failures = (
         (
-            valid.replace(b'id="divOnlinePlanningSearchResults"', b'id="changed"'),
+            valid.replace(b"SearchResultsForPagination", b"Changed"),
             "search results",
         ),
         (valid.replace(b"Total record(s): 1", b"Unknown"), "reported result count"),
         (
             valid.replace(
-                b'name="PagingParameters.PageSize" value="2"',
-                b'name="PagingParameters.PageSize" value="0"',
+                b'name="PageSize" value="2"',
+                b'name="PageSize" value="0"',
             ),
             "result page size",
+        ),
+        (
+            valid.replace(b'name="PageCount" value="1"', b'name="PageCount" value="2"'),
+            "reported 1 results",
         ),
         (_result_page(("NP/DDD/0926/0909",), reported=2), "reported 2 results"),
         (valid.replace(b"PagingClick('0')", b"NoPaging()"), "pagination inventory"),
