@@ -34,7 +34,9 @@ if TYPE_CHECKING:
 
     from playwright.async_api import Page
 
+_REGISTER_BUTTON = "Haringey Public Register"
 _QUICK_LINK_BUTTON = "Planning Applications Validated in last 7 days"
+_EMPTY_COMMENTS_MESSAGE = "There are no comments."
 _RESULT_CARD = ".slds-form.slds-box"
 _RESULT_LINK = 'a[href*="/pr/s/detail/"]'
 _RESULT_COUNT = ".pr-pagination__results"
@@ -72,6 +74,7 @@ class HaringeyPlaywrightSession(PlaywrightPortalSession):
         if page_number < 1:
             raise HaringeyPageObjectPaginationError(page_number)
         await page.goto(f"{BASE_URL}/", wait_until="domcontentloaded")
+        await page.get_by_role("button", name=_REGISTER_BUTTON, exact=True).click()
         await page.get_by_role("button", name=_QUICK_LINK_BUTTON, exact=True).click()
         await page.wait_for_url("**/pr/s/register-view**")
         query = parse_qs(urlsplit(page.url).query)
@@ -138,6 +141,7 @@ class HaringeyPlaywrightSession(PlaywrightPortalSession):
         detail = self.retain_rendered(page.url, detail_body)
 
         await page.get_by_role("tab", name="Comments", exact=True).click()
+        await page.get_by_text(_EMPTY_COMMENTS_MESSAGE, exact=True).wait_for()
         comments_body = (await page.content()).encode()
         comments = self.retain_rendered(page.url, comments_body)
 

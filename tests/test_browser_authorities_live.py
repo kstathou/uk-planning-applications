@@ -757,6 +757,9 @@ def test_haringey_page_object_uses_recorded_search_selectors() -> None:
     assert result.reported_result_count == 11
     assert result.hits[0].record_id == "a0iP00000011"
     page.get_by_role.assert_any_call(
+        "button", name="Haringey Public Register", exact=True
+    )
+    page.get_by_role.assert_any_call(
         "button", name="Planning Applications Validated in last 7 days", exact=True
     )
     page.locator.assert_any_call('a.pr-pagination__link[data-id="2"]')
@@ -822,6 +825,7 @@ def test_haringey_page_object_opens_only_recorded_child_tabs() -> None:
     page.get_by_role.assert_any_call("heading", name="HGY/2026/2582", exact=True)
     page.get_by_role.assert_any_call("tab", name="Comments", exact=True)
     page.get_by_role.assert_any_call("tab", name="Files", exact=True)
+    page.get_by_text.assert_called_once_with("There are no comments.", exact=True)
     assert all(
         "download" not in call.kwargs.get("name", "").casefold()
         for call in page.get_by_role.mock_calls

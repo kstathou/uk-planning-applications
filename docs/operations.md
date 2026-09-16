@@ -109,6 +109,21 @@ received-date paths. Camden resolves one explicit reference and deliberately
 rejects an unsupported bounded date search. These smokes also refuse before
 creating a live session unless `--confirm-live` is present.
 
+Cheshire East and Haringey expose their equally bounded contracts through two
+additional opt-in smokes:
+
+```sh
+uv run python scripts/smoke_cheshire_east.py --confirm-live
+uv run python scripts/smoke_haringey.py --confirm-live
+```
+
+The Cheshire East smoke submits only the current date as the recorded
+valid-date-from input. It returns the visible references and then stops before
+claiming a complete result set. The Haringey smoke opens only the first page of
+the rolling seven-day quick link and reports the source-provided totals. It
+does not open application details or file links. Without `--confirm-live`,
+both commands exit before constructing a live session.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
