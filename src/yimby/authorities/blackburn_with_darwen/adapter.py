@@ -9,12 +9,13 @@ from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from html import unescape
 from typing import TYPE_CHECKING, NoReturn, Protocol, Self, runtime_checkable
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 from bs4 import BeautifulSoup
 from pydantic import HttpUrl, model_validator
 
 from yimby.domain import (
+    ApplicationMetadata,
     AuthorityCapabilities,
     AuthorityId,
     AuthorityKind,
@@ -24,6 +25,7 @@ from yimby.domain import (
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
+    DocumentRecord,
     EvidenceCapture,
     FrozenModel,
     NativeSnapshot,
@@ -34,6 +36,7 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
     UnavailableSection,
+    collection_state,
 )
 from yimby.transport import PortalRequest, RequestIntent
 
@@ -48,6 +51,7 @@ SOURCE = SourceId("blackburn-citizen-portal")
 BASE_URL = "https://online.blackburn.gov.uk/planning"
 _HISTORICAL_START = date(1977, 1, 1)
 _RESULT_CAP = 30
+_DETAIL_COLUMN_COUNT = 2
 _RESULT_HEADERS = (
     "application reference",
     "application type",
@@ -139,14 +143,37 @@ class BlackburnLocatorV1(FrozenModel):
     public_reference: str
 
 
-class BlackburnWithDarwenApplicationV1(FrozenModel):
-    """Blackburn-native fixture record."""
+class BlackburnDocumentV1(FrozenModel):
+    """Citizen portal document metadata without an attachment body."""
 
-    explorer_key: str
+    title: str
+    document_type: str
+    published_date: date
+    source_url: HttpUrl
+
+
+class BlackburnWithDarwenApplicationV2(FrozenModel):
+    """Blackburn-native public application and document metadata."""
+
+    record_id: str
     council_reference: str
     development_proposal: str
     public_status: str
-    planning_area: str
+    application_type: str | None = None
+    applicant: str | None = None
+    agent: str | None = None
+    location: str | None = None
+    grid_reference: str | None = None
+    ward: str | None = None
+    community: str | None = None
+    officer: str | None = None
+    decision_level: str | None = None
+    received_date: date | None = None
+    valid_date: date | None = None
+    expiry_date: date | None = None
+    decision_date: date | None = None
+    decision: str | None = None
+    documents: tuple[BlackburnDocumentV1, ...] = ()
 
 
 @runtime_checkable
@@ -155,6 +182,9 @@ class BlackburnPageSession(Protocol):
 
     async def search(self, query: BlackburnQueryV1) -> EvidenceCapture:
         """Submit one exact date query and retain rendered HTML."""
+
+    async def application(self, locator: BlackburnLocatorV1) -> EvidenceCapture:
+        """Render one application and its inline document metadata."""
 
 
 class BlackburnWithDarwenAdapter:
@@ -298,16 +328,26 @@ class BlackburnWithDarwenAdapter:
         self,
         session: PortalSession,
         reference: SourceReference,
-    ) -> NativeSnapshot[BlackburnWithDarwenApplicationV1]:
-        """Read a fixture record until the live detail unit is implemented."""
+    ) -> NativeSnapshot[BlackburnWithDarwenApplicationV2]:
+        """Read one fixture or live public application without attachments."""
+        if session.mode != TransportMode.FIXTURE:
+            return await self._fetch_live(session, reference)
+        return await self._fetch_fixture(session, reference)
+
+    async def _fetch_fixture(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> NativeSnapshot[BlackburnWithDarwenApplicationV2]:
+        """Preserve the deterministic fixture contract."""
         encoded = quote(reference.reference, safe="")
         url = f"{BASE_URL}/application/{encoded}"
         detail = await session.fetch(
             PortalRequest(url=HttpUrl(url), intent=RequestIntent.DETAIL)
         )
         html = detail.body.decode()
-        payload = BlackburnWithDarwenApplicationV1(
-            explorer_key=_required_fixture(
+        payload = BlackburnWithDarwenApplicationV2(
+            record_id=_required_fixture(
                 html,
                 r'data-blackburn-key="([^"]+)"',
                 "explorer key",
@@ -325,7 +365,7 @@ class BlackburnWithDarwenAdapter:
                 r'data-blackburn-status="([^"]+)"',
                 "status",
             ),
-            planning_area=_required_fixture(
+            ward=_required_fixture(
                 html,
                 r'data-blackburn-area="([^"]+)"',
                 "planning area",
@@ -344,25 +384,97 @@ class BlackburnWithDarwenAdapter:
             evidence=(detail,),
         )
 
+    async def _fetch_live(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> NativeSnapshot[BlackburnWithDarwenApplicationV2]:
+        """Parse the rendered Citizen detail page and document metadata."""
+        if not isinstance(session, BlackburnPageSession):
+            raise BlackburnBrowserSessionRequiredError
+        locator = _parse_locator(reference)
+        detail = await session.application(locator)
+        record_id, fields = _parse_application_details(detail.body)
+        if record_id != locator.record_id:
+            raise BlackburnRecordIdMismatchError(locator.record_id, record_id)
+        published = _required_mapping(fields, "application reference number")
+        if published != reference.reference:
+            raise BlackburnReferenceMismatchError(reference.reference, published)
+        documents = _parse_documents(detail.body)
+        payload = BlackburnWithDarwenApplicationV2(
+            record_id=record_id,
+            council_reference=published,
+            development_proposal=_required_mapping(fields, "proposal"),
+            public_status=_required_mapping(fields, "application status"),
+            application_type=_required_mapping(fields, "application type"),
+            applicant=_optional_mapping(fields, "applicant"),
+            agent=_optional_mapping(fields, "agent"),
+            location=_required_mapping(fields, "location"),
+            grid_reference=_optional_mapping(fields, "grid reference"),
+            ward=_optional_mapping(fields, "ward"),
+            community=_optional_mapping(fields, "parish / community"),
+            officer=_optional_mapping(fields, "officer"),
+            decision_level=_optional_mapping(fields, "decision level"),
+            received_date=_optional_date(fields, "received date"),
+            valid_date=_optional_date(fields, "valid date"),
+            expiry_date=_optional_date(fields, "expiry date"),
+            decision_date=_optional_date(fields, "decision issued date"),
+            decision=_optional_mapping(fields, "decision"),
+            documents=documents,
+        )
+        comments = UnavailableSection(
+            reason="the public Citizen portal exposes no application comments section"
+        )
+        return NativeSnapshot(
+            reference=reference,
+            observed_at=datetime.now(UTC),
+            payload=payload,
+            completeness=Completeness(
+                application=CompleteSection(item_count=1),
+                documents=collection_state(len(documents)),
+                comments=comments,
+            ),
+            evidence=(detail,),
+        )
+
     def normalise(
         self,
-        snapshot: NativeSnapshot[BlackburnWithDarwenApplicationV1],
+        snapshot: NativeSnapshot[BlackburnWithDarwenApplicationV2],
     ) -> NormalisedObservation:
-        """Map Blackburn fixture fields to the common record."""
+        """Map Blackburn application and document metadata to common fields."""
+        payload = snapshot.payload
         evidence = snapshot.evidence[0].digest
         return NormalisedObservation(
             authority_id=self.manifest.id,
             reference=snapshot.reference,
-            proposal=snapshot.payload.development_proposal,
-            status=snapshot.payload.public_status.casefold().replace(" ", "-"),
-            documents=(),
+            proposal=payload.development_proposal,
+            status=payload.public_status.casefold().replace(" ", "-"),
+            documents=tuple(
+                DocumentRecord(title=document.title, url=document.source_url)
+                for document in payload.documents
+            ),
             comments=(),
             completeness=snapshot.completeness,
             provenance=(
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="blackburn-with-darwen-v1",
+            normaliser_version="blackburn-with-darwen-v2",
+            metadata=ApplicationMetadata(
+                application_type=payload.application_type,
+                decision=payload.decision,
+                address=payload.location,
+                received_date=payload.received_date,
+                validated_date=payload.valid_date,
+                decision_date=payload.decision_date,
+                source_url=snapshot.evidence[0].url,
+                published_parties=tuple(
+                    party
+                    for party in (payload.applicant, payload.agent)
+                    if party is not None
+                ),
+                officer_name=payload.officer,
+            ),
         )
 
 
@@ -481,6 +593,118 @@ def _parse_search_row(
     )
 
 
+def _parse_locator(reference: SourceReference) -> BlackburnLocatorV1:
+    if reference.source_id != SOURCE or reference.locator is None:
+        raise BlackburnRoutingError(reference.reference)
+    try:
+        locator = BlackburnLocatorV1.model_validate_json(reference.locator)
+    except ValueError as error:
+        raise BlackburnRoutingError(reference.reference) from error
+    if locator.public_reference != reference.reference:
+        raise BlackburnRoutingError(reference.reference)
+    return locator
+
+
+def _parse_application_details(body: bytes) -> tuple[str, dict[str, str]]:
+    soup = BeautifulSoup(body, "html.parser")
+    containers = soup.select("#application_details[data-application-id]")
+    if len(containers) != 1:
+        return _raise_parse("single application details container")
+    container = containers[0]
+    record_id = str(container.get("data-application-id", "")).strip()
+    if not record_id.isdigit():
+        return _raise_parse("numeric application id")
+    fields: dict[str, str] = {}
+    for row in container.select(".row"):
+        labels = row.select("strong")
+        columns = row.find_all("div", recursive=False)
+        if len(labels) != 1 or len(columns) != _DETAIL_COLUMN_COUNT:
+            return _raise_parse("application detail row")
+        label = _normalise(labels[0].get_text(" ", strip=True)).removesuffix(":")
+        if label in fields:
+            return _raise_parse("unique application detail label")
+        fields[label] = unescape(columns[1].get_text(" ", strip=True)).strip()
+    for required in (
+        "application reference number",
+        "application type",
+        "proposal",
+        "location",
+        "application status",
+    ):
+        _required_mapping(fields, required)
+    return record_id, fields
+
+
+def _parse_documents(body: bytes) -> tuple[BlackburnDocumentV1, ...]:
+    soup = BeautifulSoup(body, "html.parser")
+    tables = soup.select("table#application_documents")
+    if len(tables) != 1:
+        return _raise_parse("single application documents table")
+    table = tables[0]
+    headers = tuple(
+        str(header.get("data-field-name", "")).strip()
+        for header in table.select("thead th")
+    )
+    expected = (
+        "document_type",
+        "description",
+        "thumbnail",
+        "date_document_added",
+        "download",
+    )
+    if headers != expected:
+        return _raise_parse("application document headers")
+    documents = tuple(
+        _parse_document_row(row, expected) for row in table.select("tbody tr")
+    )
+    urls = tuple(str(document.source_url) for document in documents)
+    if len(urls) != len(set(urls)):
+        return _raise_parse("unique application document links")
+    return documents
+
+
+def _parse_document_row(
+    row: Tag,
+    headers: tuple[str, ...],
+) -> BlackburnDocumentV1:
+    cells = row.find_all("td", recursive=False)
+    if len(cells) != len(headers):
+        return _raise_parse("application document columns")
+    if tuple(str(cell.get("data-field-name", "")) for cell in cells) != headers:
+        return _raise_parse("application document field names")
+    values = {
+        header: unescape(cell.get_text(" ", strip=True))
+        for header, cell in zip(headers, cells, strict=True)
+    }
+    links = cells[-1].select("a[href]")
+    if len(links) != 1:
+        return _raise_parse("application document link")
+    href = str(links[0].get("href", "")).strip()
+    if "fa=downloadDocument" not in href or "id=" not in href:
+        return _raise_parse("application document metadata URL")
+    raw_date = str(cells[-2].get("data-date-value", "")).strip()
+    try:
+        published_date = date.fromisoformat(raw_date)
+    except ValueError:
+        return _raise_parse("application document date")
+    return BlackburnDocumentV1(
+        title=_required_mapping(values, "description"),
+        document_type=_required_mapping(values, "document_type"),
+        published_date=published_date,
+        source_url=HttpUrl(urljoin(f"{BASE_URL}/", href)),
+    )
+
+
+def _optional_date(values: dict[str, str], name: str) -> date | None:
+    value = _optional_mapping(values, name)
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(value, "%d-%m-%Y").replace(tzinfo=UTC).date()
+    except ValueError as error:
+        raise BlackburnWithDarwenParseError(name) from error
+
+
 def _optional_mapping(values: dict[str, str], name: str) -> str | None:
     value = values.get(name, "").strip()
     return value or None
@@ -535,6 +759,34 @@ class BlackburnDuplicateReferenceError(ValueError):
     def __init__(self, reference: str) -> None:
         """Name the duplicate public reference."""
         super().__init__(f"Blackburn search repeated reference {reference}")
+
+
+class BlackburnRoutingError(ValueError):
+    """A source reference lacks a valid Citizen portal locator."""
+
+    def __init__(self, reference: str) -> None:
+        """Name the public reference whose route cannot be trusted."""
+        super().__init__(f"Blackburn route is unavailable for {reference}")
+
+
+class BlackburnReferenceMismatchError(ValueError):
+    """The detail page published a different public reference."""
+
+    def __init__(self, expected: str, observed: str) -> None:
+        """Report both public values without source body content."""
+        super().__init__(
+            f"Blackburn reference mismatch: expected {expected}, observed {observed}"
+        )
+
+
+class BlackburnRecordIdMismatchError(ValueError):
+    """The detail page published a different internal record id."""
+
+    def __init__(self, expected: str, observed: str) -> None:
+        """Report both numeric identifiers."""
+        super().__init__(
+            f"Blackburn record id mismatch: expected {expected}, observed {observed}"
+        )
 
 
 class BlackburnBrowserSessionRequiredError(RuntimeError):
