@@ -887,6 +887,10 @@ def test_peak_district_form_and_search_parser_failure_boundaries() -> None:
     ]
 
     valid = _result_page(("NP/DDD/0926/0909",), reported=1)
+    decided = valid.replace(b"| Registered :", b"| Decided:")
+    assert peak._parse_search_page(decided, expected_page=0).references[
+        0
+    ].reference == "NP/DDD/0926/0909"
     failures = (
         (
             valid.replace(b"SearchResultsForPagination", b"Changed"),
