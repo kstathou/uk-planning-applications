@@ -194,8 +194,8 @@ the earlier observation, confirming that these are volatile live counts.
 
 At 11:26:57 Europe/London, the separately configured legacy-decided WFS
 advertised 13,974 features. A throttled 4-by-4 whole-borough shape
-reconciliation returned 13,974 unique PKIDs paired with 13,974 unique HGY
-references and no ambiguous PKID. The ordered tile bodies totalled 13,023,218
+reconciliation returned 13,974 unique PKID/HGY pairs, covering 13,974 unique
+PKIDs with no ambiguous PKID. The ordered tile bodies totalled 13,023,218
 bytes; framing each body with `row:column:byte-count` produced SHA-256 digest
 `b4d7d2461397c9c1d119747cda731a4bc4fe0a9cba56a890c82f94ab41d9882a`.
 The intersection between those 13,974 decided PKIDs and all 826
