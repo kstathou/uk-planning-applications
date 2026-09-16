@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pydantic import HttpUrl
+from pydantic import Field, HttpUrl
 
 from yimby.domain import (
     ApplicationMetadata,
@@ -22,8 +22,10 @@ from yimby.domain import (
     Completeness,
     CompleteSection,
     DiscoveryBatch,
+    DiscoveryEvidenceCapture,
     DiscoveryWindow,
     DocumentRecord,
+    EvidenceDigest,
     FailedSection,
     FrozenModel,
     NativeDocument,
@@ -113,6 +115,17 @@ class PeakDistrictQueryV1(FrozenModel):
         return f"{self.kind}|{self.field}|{self.value}"
 
 
+class PeakDistrictDiscoveryPageV1(FrozenModel):
+    """One retained search page owned by its exact query and checkpoint."""
+
+    query_key: str = Field(min_length=1)
+    page_index: int = Field(ge=0)
+    digest: EvidenceDigest
+    references: tuple[str, ...]
+    reported: int = Field(ge=0)
+    page_size: int = Field(ge=1)
+
+
 class PeakDistrictCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable AssureLive discovery progress."""
 
@@ -125,6 +138,7 @@ class PeakDistrictCheckpointV1(FrozenModel):
     next_page_index: int = 0
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
+    discovery_pages: tuple[PeakDistrictDiscoveryPageV1, ...] = ()
     live_complete: bool = False
 
 
@@ -140,6 +154,11 @@ class _ActivePage(FrozenModel):
     query_key: str
     page_index: int
     row_count: int
+
+
+class _DiscoveryPageEvidence(FrozenModel):
+    digest: EvidenceDigest
+    key: str = Field(min_length=1)
 
 
 class PeakDistrictDocumentV1(NativeDocument):
@@ -278,22 +297,29 @@ class PeakDistrictAdapter:
         if progress.live_complete:
             yield DiscoveryBatch(references=(), next_checkpoint=progress, complete=True)
             return
-        form_capture = await session.fetch(
-            PortalRequest(url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH)
+        form_request = PortalRequest(
+            url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH
         )
-        advanced_capture = await session.fetch(
-            PortalRequest(url=HttpUrl(_ADVANCED_FORM_URL), intent=RequestIntent.SEARCH)
+        advanced_request = PortalRequest(
+            url=HttpUrl(_ADVANCED_FORM_URL), intent=RequestIntent.SEARCH
         )
+        form_capture = await session.fetch(form_request)
+        advanced_capture = await session.fetch(advanced_request)
         form = _parse_search_form(form_capture.body, advanced_capture.body)
+        form_evidence = (
+            _discovery_evidence(form_capture, form_request),
+            _discovery_evidence(advanced_capture, advanced_request),
+        )
         for query in queries:
             if query.key in progress.completed_queries:
                 continue
+            evidence_key = peak_district_evidence_key(requested_scope, query)
             page_index = 0
             row_count = 0
             query_request = _query_request(form, query)
             page_form: tuple[FormField, ...] | None = None
             while True:
-                capture = await session.fetch(
+                request = (
                     query_request
                     if page_index == 0
                     else _pagination_request(
@@ -302,6 +328,7 @@ class PeakDistrictAdapter:
                         page_index,
                     )
                 )
+                capture = await session.fetch(request)
                 search_page = _parse_search_page(
                     capture.body,
                     expected_page=page_index,
@@ -315,11 +342,22 @@ class PeakDistrictAdapter:
                     ),
                     search_page=search_page,
                     all_query_keys=query_keys,
+                    evidence=_DiscoveryPageEvidence(
+                        digest=capture.digest,
+                        key=evidence_key,
+                    ),
                 )
                 yield DiscoveryBatch(
                     references=fresh,
                     next_checkpoint=next_checkpoint,
                     complete=next_checkpoint.live_complete,
+                    evidence=(
+                        (*form_evidence, _discovery_evidence(capture, request))
+                        if page_index == 0
+                        else (_discovery_evidence(capture, request),)
+                    ),
+                    evidence_key=evidence_key,
+                    evidence_page=page_index + 1,
                 )
                 progress = next_checkpoint
                 if last_page:
@@ -451,7 +489,12 @@ class PeakDistrictAdapter:
             proposal=payload.proposal_summary,
             status=payload.case_status.casefold().replace(" ", "-"),
             documents=tuple(
-                DocumentRecord(title=document.title, url=document.url)
+                DocumentRecord(
+                    title=document.title,
+                    url=document.url,
+                    category=document.document_type,
+                    published_date=document.published_date,
+                )
                 for document in payload.documents
             ),
             comments=(),
@@ -460,7 +503,7 @@ class PeakDistrictAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="peak-district-v4",
+            normaliser_version="peak-district-v5",
             metadata=ApplicationMetadata(
                 application_type=payload.record_type,
                 address=payload.development_address,
@@ -508,6 +551,14 @@ def peak_district_query_inventory(
             for status in _OPEN_STATUSES
         ),
     )
+
+
+def peak_district_evidence_key(
+    scope: PeakDistrictDiscoveryScope,
+    query: PeakDistrictQueryV1,
+) -> str:
+    """Bind repeated open-query evidence to one dated collection scope."""
+    return f"{scope.start}..{scope.end}|{query.key}"
 
 
 def _parse_search_form(
@@ -782,6 +833,7 @@ def _advance_checkpoint(
     active_page: _ActivePage,
     search_page: _SearchPage,
     all_query_keys: tuple[str, ...],
+    evidence: _DiscoveryPageEvidence,
 ) -> tuple[PeakDistrictCheckpointV1, tuple[SourceReference, ...], bool]:
     next_row_count = active_page.row_count + len(search_page.references)
     if next_row_count > search_page.reported or (
@@ -795,6 +847,24 @@ def _advance_checkpoint(
             seen.add(reference.reference)
             fresh.append(reference)
     last_page = next_row_count == search_page.reported
+    prior_pages = progress.discovery_pages
+    if active_page.page_index == 0:
+        prior_pages = tuple(
+            page for page in prior_pages if page.query_key != evidence.key
+        )
+    discovery_pages = (
+        *prior_pages,
+        PeakDistrictDiscoveryPageV1(
+            query_key=evidence.key,
+            page_index=active_page.page_index,
+            digest=evidence.digest,
+            references=tuple(
+                reference.reference for reference in search_page.references
+            ),
+            reported=search_page.reported,
+            page_size=search_page.page_size,
+        ),
+    )
     if last_page:
         completed_queries = (*progress.completed_queries, active_page.query_key)
         checkpoint = progress.model_copy(
@@ -804,6 +874,7 @@ def _advance_checkpoint(
                 "next_page_index": 0,
                 "query_row_count": 0,
                 "seen_references": tuple(seen),
+                "discovery_pages": discovery_pages,
                 "live_complete": len(completed_queries) == len(all_query_keys),
             }
         )
@@ -814,9 +885,22 @@ def _advance_checkpoint(
                 "next_page_index": active_page.page_index + 1,
                 "query_row_count": next_row_count,
                 "seen_references": tuple(seen),
+                "discovery_pages": discovery_pages,
             }
         )
     return checkpoint, tuple(fresh), last_page
+
+
+def _discovery_evidence(
+    capture: EvidenceCapture,
+    request: PortalRequest,
+) -> DiscoveryEvidenceCapture:
+    return DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=request.url,
+        request_method=request.method.value,
+        request_form=tuple((field.name, field.value) for field in request.form),
+    )
 
 
 def _assert_checkpoint(

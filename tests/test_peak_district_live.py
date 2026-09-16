@@ -312,8 +312,14 @@ class _PeakDetailMock:
 
 
 class _QualificationResponder:
-    def __init__(self, *, documents_fail: bool = False) -> None:
-        self.discovery = _PeakAssureMock()
+    def __init__(
+        self,
+        *,
+        documents_fail: bool = False,
+        start: str = "18/08/2026",
+        end: str = "16/09/2026",
+    ) -> None:
+        self.discovery = _PeakAssureMock(start=start, end=end)
         self.documents_fail = documents_fail
 
     def __call__(self, request: PortalRequest) -> bytes:
@@ -359,9 +365,13 @@ class _PeakAssureMock:
         *,
         include_appeal: bool = True,
         count_mismatch: bool = False,
+        start: str = "18/08/2026",
+        end: str = "16/09/2026",
     ) -> None:
         self.include_appeal = include_appeal
         self.count_mismatch = count_mismatch
+        self.start = start
+        self.end = end
         self.active_query: tuple[str, str] | None = None
 
     def __call__(self, request: PortalRequest) -> bytes:
@@ -398,8 +408,8 @@ class _PeakAssureMock:
         for date_field in ("Received", "Validated", "Decided"):
             if fields.get(f"AdvanceSearch.{date_field}Between") == "True":
                 assert f"AdvanceSearch.{date_field}AnyTime" not in fields
-                assert fields[f"AdvanceSearch.{date_field}FromDate"] == "18/08/2026"
-                assert fields[f"AdvanceSearch.{date_field}ToDate"] == "16/09/2026"
+                assert fields[f"AdvanceSearch.{date_field}FromDate"] == self.start
+                assert fields[f"AdvanceSearch.{date_field}ToDate"] == self.end
                 return "date", date_field
         raise AssertionError(fields)
 
@@ -546,7 +556,7 @@ def test_peak_district_discovers_bounded_and_older_open_with_exact_pagination() 
         for capture in paginated[0].evidence
     ] == [(peak._PAGINATION_URL, "POST")]
     assert paginated[0].evidence_key == (
-        "bounded-date|Received|18/08/2026..16/09/2026"
+        "2026-08-18..2026-09-16|bounded-date|Received|18/08/2026..16/09/2026"
     )
 
 
@@ -899,6 +909,10 @@ def test_peak_district_checkpoint_and_request_failure_boundaries() -> None:
                 form=(),
             ),
             all_query_keys=keys,
+            evidence=peak._DiscoveryPageEvidence(
+                digest=EvidenceDigest("0" * 64),
+                key=f"{scope.start}..{scope.end}|{keys[0]}",
+            ),
         )
 
 
@@ -1509,6 +1523,92 @@ def test_peak_district_qualification_recovers_after_publication_failure(
     assert recovered["costs"]["initial"]["request_count"] == 18
 
 
+def test_peak_district_weekly_qualification_recovers_temporary_proof(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "weekly-publication-failure"
+    sessions: list[_Session] = []
+    expected_dates = ["18/08/2026", "16/09/2026"]
+
+    def session_factory() -> _Session:
+        session = _Session(
+            _QualificationResponder(
+                start=expected_dates[0],
+                end=expected_dates[1],
+            )
+        )
+        sessions.append(session)
+        return session
+
+    bootstrap_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(bootstrap_args, session_factory=session_factory) == 0
+    capsys.readouterr()
+
+    original_replace = Path.replace
+
+    def fail_cycle_proof(source: Path, target: Path) -> Path:
+        if source.name == ".peak-district-weekly-cycle-1-proof-v1.json.tmp":
+            raise OSError
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_cycle_proof)
+    expected_dates[:] = ["25/08/2026", "23/09/2026"]
+    cycle_args = [
+        "--confirm-live",
+        "--resume",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-25",
+        "--end",
+        "2026-09-23",
+        "--include-open",
+    ]
+    sessions.clear()
+    assert (
+        module.main(
+            cycle_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 23, 12, tzinfo=UTC),
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    proof_path = data_dir / "peak-district-weekly-cycle-1-proof-v1.json"
+    temporary = data_dir / ".peak-district-weekly-cycle-1-proof-v1.json.tmp"
+    assert not proof_path.exists()
+    assert temporary.exists()
+
+    monkeypatch.setattr(Path, "replace", original_replace)
+    sessions.clear()
+    assert (
+        module.main(
+            cycle_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 23, 13, tzinfo=UTC),
+        )
+        == 0
+    )
+    recovered = json.loads(capsys.readouterr().out)
+    assert sessions == []
+    assert recovered["cycle"] == 1
+    assert recovered["costs"]["initial"]["request_count"] == 18
+    assert proof_path.is_file()
+    assert not temporary.exists()
+
+
 def test_peak_district_qualification_rejects_terminal_store_without_proof(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1672,7 +1772,127 @@ def test_peak_district_qualification_rejects_stale_persisted_readiness(
     assert sessions == []
 
 
-def test_peak_district_qualification_refuses_changed_scope_before_network(
+def _corrupt_peak_discovery_registration(
+    connection: sqlite3.Connection,
+    corruption: str,
+) -> None:
+    target_url = {
+        "search-form": peak._SEARCH_URL,
+        "advanced-form": peak._ADVANCED_FORM_URL,
+        "pagination": peak._PAGINATION_URL,
+    }.get(corruption, peak._RESULTS_URL)
+    target_page = {"pagination": 2}.get(corruption, 1)
+    statement, value = {
+        "request-url": (
+            "UPDATE discovery_evidence SET request_url = ? WHERE rowid = ?",
+            "https://example.com/search",
+        ),
+        "request-method": (
+            "UPDATE discovery_evidence SET request_method = ? WHERE rowid = ?",
+            "GET",
+        ),
+        "request-form": (
+            "UPDATE discovery_evidence SET request_form_json = ? WHERE rowid = ?",
+            "[]",
+        ),
+        "response-url": (
+            "UPDATE discovery_evidence SET response_url = ? WHERE rowid = ?",
+            "https://example.com/results",
+        ),
+        "query-key": (
+            "UPDATE discovery_evidence SET query_key = ? WHERE rowid = ?",
+            "changed",
+        ),
+        "page": (
+            "UPDATE discovery_evidence SET page = ? WHERE rowid = ?",
+            99,
+        ),
+        "deleted": (
+            "DELETE FROM discovery_evidence WHERE ? IS NULL AND rowid = ?",
+            None,
+        ),
+        "search-form": (
+            "UPDATE discovery_evidence SET request_method = ? WHERE rowid = ?",
+            "POST",
+        ),
+        "advanced-form": (
+            "UPDATE discovery_evidence SET response_url = ? WHERE rowid = ?",
+            "https://example.com/advanced",
+        ),
+        "pagination": (
+            "UPDATE discovery_evidence SET request_form_json = ? WHERE rowid = ?",
+            "[]",
+        ),
+    }[corruption]
+    target = connection.execute(
+        "SELECT rowid FROM discovery_evidence "
+        "WHERE query_key LIKE '%|bounded-date|Received|%' "
+        "AND page = ? AND request_url = ? LIMIT 1",
+        (target_page, target_url),
+    ).fetchone()
+    assert target is not None
+    connection.execute(statement, (value, target[0]))
+    connection.commit()
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "request-url",
+        "request-method",
+        "request-form",
+        "response-url",
+        "query-key",
+        "page",
+        "deleted",
+        "search-form",
+        "advanced-form",
+        "pagination",
+    ],
+)
+def test_peak_district_qualification_rejects_discovery_registration_tampering(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    corruption: str,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / corruption
+    sessions: list[_Session] = []
+
+    def session_factory() -> _Session:
+        session = _Session(_QualificationResponder())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "peak-district-qualification-v1.json"
+    original_receipt = receipt_path.read_bytes()
+    sessions.clear()
+
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        _corrupt_peak_discovery_registration(connection, corruption)
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
+    assert sessions == []
+    assert receipt_path.read_bytes() == original_receipt
+
+
+def test_peak_district_qualification_refuses_changed_scope_before_eligibility(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1704,7 +1924,152 @@ def test_peak_district_qualification_refuses_changed_scope_before_network(
     changed.append("--resume")
 
     assert module.main(changed, session_factory=session_factory) == 2
-    assert json.loads(capsys.readouterr().err)["error"] == "scope-mismatch"
+    assert json.loads(capsys.readouterr().err)["error"] == "cycle-not-eligible"
+    assert sessions == []
+
+
+def test_peak_district_qualifies_two_shifted_weekly_scopes_with_proof_chain(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "weekly-cycles"
+    sessions: list[_Session] = []
+    expected_dates = ["18/08/2026", "16/09/2026"]
+
+    def session_factory() -> _Session:
+        session = _Session(
+            _QualificationResponder(
+                start=expected_dates[0],
+                end=expected_dates[1],
+            )
+        )
+        sessions.append(session)
+        return session
+
+    bootstrap_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert (
+        module.main(
+            bootstrap_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+        )
+        == 0
+    )
+    capsys.readouterr()
+    bootstrap_proof = data_dir / "peak-district-qualification-proof-v1.json"
+    bootstrap_public = data_dir / "peak-district-qualification-v1.json"
+    original_proof = bootstrap_proof.read_bytes()
+    original_public = bootstrap_public.read_bytes()
+
+    sessions.clear()
+    expected_dates[:] = ["25/08/2026", "23/09/2026"]
+    cycle_one_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-25",
+        "--end",
+        "2026-09-23",
+        "--include-open",
+        "--resume",
+    ]
+    assert (
+        module.main(
+            cycle_one_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 23, 12, tzinfo=UTC),
+        )
+        == 0
+    )
+    cycle_one = json.loads(capsys.readouterr().out)
+    assert cycle_one["cycle"] == 1
+    assert cycle_one["scope"] == {
+        "start": "2026-08-25",
+        "end": "2026-09-23",
+        "include_open": True,
+    }
+    assert cycle_one["prior_proof"] == {
+        "filename": bootstrap_proof.name,
+        "sha256": f"sha256:{sha256(original_proof).hexdigest()}",
+    }
+    assert len(sessions) == 2
+    assert len(sessions[0].requested_urls) == 18
+    assert sessions[1].requested_urls == ()
+    assert bootstrap_proof.read_bytes() == original_proof
+    assert bootstrap_public.read_bytes() == original_public
+
+    cycle_one_proof = data_dir / "peak-district-weekly-cycle-1-proof-v1.json"
+    assert json.loads(cycle_one_proof.read_text(encoding="utf-8")) == cycle_one
+
+    sessions.clear()
+    assert (
+        module.main(
+            cycle_one_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 23, 13, tzinfo=UTC),
+        )
+        == 0
+    )
+    assert sessions == []
+    assert json.loads(capsys.readouterr().out) == cycle_one
+
+    expected_dates[:] = ["01/09/2026", "30/09/2026"]
+    cycle_two_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-01",
+        "--end",
+        "2026-09-30",
+        "--include-open",
+        "--resume",
+    ]
+    assert (
+        module.main(
+            cycle_two_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 30, 12, tzinfo=UTC),
+        )
+        == 0
+    )
+    cycle_two = json.loads(capsys.readouterr().out)
+    assert cycle_two["cycle"] == 2
+    assert cycle_two["prior_proof"] == {
+        "filename": cycle_one_proof.name,
+        "sha256": f"sha256:{sha256(cycle_one_proof.read_bytes()).hexdigest()}",
+    }
+    assert len(sessions) == 2
+    assert len(sessions[0].requested_urls) == 18
+    assert sessions[1].requested_urls == ()
+    assert bootstrap_proof.read_bytes() == original_proof
+    assert bootstrap_public.read_bytes() == original_public
+
+    sessions.clear()
+    bootstrap_proof.write_bytes(b"{}\n")
+    assert (
+        module.main(
+            cycle_two_args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 30, 13, tzinfo=UTC),
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
     assert sessions == []
 
 
