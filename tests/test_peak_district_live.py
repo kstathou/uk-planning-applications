@@ -79,14 +79,14 @@ class _Session:
 def _search_form() -> bytes:
     return b"""
     <form id="frmOnlinePlanningSearch">
-      <input type="radio" name="SearchFor" value="PlanningApplications" checked>
+      <input type="radio" name="SearchFor" value="PlanningApplications">
       <input type="radio" name="SearchFor" value="PlanningAppeals">
       <input type="hidden" id="IsAdvanceSearch" name="IsAdvanceSearch" value="false">
       <input type="hidden" id="IsPaginationClicked" name="IsPaginationClicked" value="false">
       <input type="hidden" id="urlOnlinePlanningSearchResult"
              value="/AssureLive/ES/Presentation/Planning/OnlinePlanning/OnlinePlanningSearchResults">
       <input type="hidden" id="urlOnlinePlanningAdvanceSearchView"
-             value="/AssureLive/ES/Presentation/Planning/OnlinePlanning/AdvanceSearch">
+             value="/AssureLive/ES/Presentation/Planning/OnlinePlanning/OnlinePlanningAdvanceSearchView">
     </form>
     """
 
@@ -96,7 +96,7 @@ def _advanced_form(*, include_appeal: bool = True) -> bytes:
         '<option value="APPEAL LODGED">APPEAL LODGED</option>' if include_appeal else ""
     )
     return f"""
-    <fieldset id="fldOnlinePlanningSearchAdvanceSearch">
+    <div>
       <select name="AdvanceSearch.SelectedApplicationType"><option value="-1">Any application type</option></select>
       <select name="AdvanceSearch.SelectedDevelopmentType"><option value="-1">Any development type</option></select>
       <select name="AdvanceSearch.SelectedApplicationStatus">
@@ -105,19 +105,19 @@ def _advanced_form(*, include_appeal: bool = True) -> bytes:
         <option value="REGISTERED">REGISTERED</option>
         <option value="WITHDRAWN">WITHDRAWN</option>
       </select>
-      <input type="radio" name="Received" value="False" checked>
-      <input type="radio" name="Received" value="True">
-      <input name="AdvanceSearch.ReceivedFromDate" disabled>
-      <input name="AdvanceSearch.ReceivedToDate" disabled>
-      <input type="radio" name="Validated" value="False" checked>
-      <input type="radio" name="Validated" value="True">
-      <input name="AdvanceSearch.ValidatedFromDate" disabled>
-      <input name="AdvanceSearch.ValidatedToDate" disabled>
-      <input type="radio" name="Decided" value="False" checked>
-      <input type="radio" name="Decided" value="True">
-      <input name="AdvanceSearch.DecidedFromDate" disabled>
-      <input name="AdvanceSearch.DecidedToDate" disabled>
-    </fieldset>
+      <input type="radio" name="AdvanceSearch.ReceivedAnyTime" value="False" checked>
+      <input type="radio" name="AdvanceSearch.ReceivedBetween" value="True">
+      <input name="AdvanceSearch.ReceivedFromDate">
+      <input name="AdvanceSearch.ReceivedToDate">
+      <input type="radio" name="AdvanceSearch.ValidatedAnyTime" value="False" checked>
+      <input type="radio" name="AdvanceSearch.ValidatedBetween" value="True">
+      <input name="AdvanceSearch.ValidatedFromDate">
+      <input name="AdvanceSearch.ValidatedToDate">
+      <input type="radio" name="AdvanceSearch.DecidedAnyTime" value="False" checked>
+      <input type="radio" name="AdvanceSearch.DecidedBetween" value="True">
+      <input name="AdvanceSearch.DecidedFromDate">
+      <input name="AdvanceSearch.DecidedToDate">
+    </div>
     """.encode()
 
 
@@ -372,12 +372,13 @@ class _PeakAssureMock:
     def _query(self, fields: dict[str, str]) -> tuple[str, str]:
         status = fields["AdvanceSearch.SelectedApplicationStatus"]
         if status != "-1":
-            assert fields["Received"] == "False"
-            assert fields["Validated"] == "False"
-            assert fields["Decided"] == "False"
+            assert fields["AdvanceSearch.ReceivedAnyTime"] == "False"
+            assert fields["AdvanceSearch.ValidatedAnyTime"] == "False"
+            assert fields["AdvanceSearch.DecidedAnyTime"] == "False"
             return "status", status
         for date_field in ("Received", "Validated", "Decided"):
-            if fields[date_field] == "True":
+            if fields.get(f"AdvanceSearch.{date_field}Between") == "True":
+                assert f"AdvanceSearch.{date_field}AnyTime" not in fields
                 assert fields[f"AdvanceSearch.{date_field}FromDate"] == "18/08/2026"
                 assert fields[f"AdvanceSearch.{date_field}ToDate"] == "16/09/2026"
                 return "date", date_field
