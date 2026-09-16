@@ -304,6 +304,7 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
     ) == (rich_reference,)
     store.set_suppression(application_id, suppressed=True, reason="reviewed")
     assert store.application_views() == ()
+    assert store.authority_application_ids(AuthorityId("barnet")) == (application_id,)
     store.set_suppression(application_id, suppressed=False, reason="corrected")
     assert store.application_views() == (store.application_view(application_id),)
     with pytest.raises(KeyError):
@@ -427,6 +428,7 @@ def test_removal_and_reversion_preserve_observed_transition_order(
         ("restored-form", (*original.normalised.documents, added)),
     )
     application_id: ApplicationId | None = None
+    semantic_states: list[tuple[tuple[str, str, str], ...]] = []
     for native_state, documents in states:
         run_id = store.begin_run(AuthorityId("barnet"))
         application_id = store.commit_observation(
@@ -440,6 +442,7 @@ def test_removal_and_reversion_preserve_observed_transition_order(
                 }
             ),
         )
+        semantic_states.append(store.authority_semantic_state(AuthorityId("barnet")))
 
     assert application_id is not None
     assert (
@@ -447,6 +450,9 @@ def test_removal_and_reversion_preserve_observed_transition_order(
         == REMOVAL_AND_REVERSION_CHANGES
     )
     assert store.observed_change_count() == REMOVAL_AND_REVERSION_CHANGES
+    assert semantic_states[0] != semantic_states[1]
+    assert semantic_states[1] != semantic_states[2]
+    assert semantic_states[0] == semantic_states[2]
     assert [item.title for item in store.get_application(application_id).documents] == [
         "Application form",
         "Decision notice",

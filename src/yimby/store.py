@@ -631,6 +631,59 @@ class SqliteStore:
         )
         return tuple(view for view in views if not view.suppressed)
 
+    def authority_application_ids(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[ApplicationId, ...]:
+        """Return every authority application, including suppressed records."""
+        return tuple(
+            ApplicationId(row["id"])
+            for row in self._connection.execute(
+                """
+                SELECT id FROM applications
+                WHERE authority_id = ? ORDER BY id
+                """,
+                (authority_id,),
+            )
+        )
+
+    def authority_semantic_state(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[tuple[str, str, str], ...]:
+        """Return current section hashes and completeness for idempotence proof."""
+        rows = self._connection.execute(
+            """
+            SELECT application.id AS application_id,
+                section_current.section AS state_kind,
+                semantic_versions.semantic_hash AS state_value
+            FROM applications AS application
+            JOIN section_current
+                ON section_current.application_id = application.id
+            JOIN semantic_versions
+                ON semantic_versions.id = section_current.version_id
+            WHERE application.authority_id = ?
+            UNION ALL
+            SELECT application.id AS application_id,
+                'completeness' AS state_kind,
+                observation.completeness_json AS state_value
+            FROM applications AS application
+            JOIN observations AS observation
+                ON observation.application_id = application.id
+            WHERE application.authority_id = ?
+                AND observation.id = (
+                    SELECT MAX(latest.id) FROM observations AS latest
+                    WHERE latest.application_id = application.id
+                )
+            ORDER BY application_id, state_kind
+            """,
+            (authority_id, authority_id),
+        )
+        return tuple(
+            (row["application_id"], row["state_kind"], row["state_value"])
+            for row in rows
+        )
+
     def search_applications(self, query: str) -> tuple[ApplicationView, ...]:
         """Search current local applications without exposing native payloads."""
         needle = query.casefold()

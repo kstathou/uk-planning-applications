@@ -147,39 +147,76 @@ class CamdenVisibleChromeBoundary:
         """Navigate or submit an ordered hidden-field form and capture HTML."""
         raw_url = str(request.url)
         page = await self._page_for(raw_url)
-        if request.method == RequestMethod.POST:
-            response = await self._submit_form(page, request)
-        else:
-            response = await page.goto(raw_url, wait_until="domcontentloaded")
-        if response is None:
-            raise _source_error(raw_url, "missing browser response")
-        headers = await response.all_headers()
-        status = response.status
-        if (
-            status == _CHALLENGE_STATUS
-            and headers.get("cf-mitigated", "").casefold() == "challenge"
-            and urlsplit(raw_url).hostname == _CHALLENGE_HOST
-        ):
-            try:
-                await page.wait_for_function(
-                    f"document.title !== {_CHALLENGE_TITLE!r}",
-                    timeout=_CHALLENGE_TIMEOUT_MS,
+        navigation_responses: list[Response] = []
+
+        def record_navigation(response: Response) -> None:
+            if (
+                response.request.is_navigation_request()
+                and response.frame == page.main_frame
+            ):
+                navigation_responses.append(response)
+
+        page.on("response", record_navigation)
+        try:
+            if request.method == RequestMethod.POST:
+                response = await self._submit_form(page, request)
+            else:
+                response = await page.goto(raw_url, wait_until="domcontentloaded")
+            if response is None:
+                raise _source_error(raw_url, "missing browser response")
+            headers = await response.all_headers()
+            status = response.status
+            if (
+                status == _CHALLENGE_STATUS
+                and headers.get("cf-mitigated", "").casefold() == "challenge"
+                and urlsplit(raw_url).hostname == _CHALLENGE_HOST
+            ):
+                try:
+                    await page.wait_for_function(
+                        f"document.title !== {_CHALLENGE_TITLE!r}",
+                        timeout=_CHALLENGE_TIMEOUT_MS,
+                    )
+                except PlaywrightTimeoutError as error:
+                    raise CamdenChallengeTimeoutError from error
+                await page.wait_for_load_state("domcontentloaded")
+                cleared = next(
+                    (
+                        candidate
+                        for candidate in reversed(navigation_responses)
+                        if candidate is not response
+                    ),
+                    None,
                 )
-            except PlaywrightTimeoutError as error:
-                raise CamdenChallengeTimeoutError from error
-            await page.wait_for_load_state("domcontentloaded")
-            status = 200
-        body = (await page.content()).encode()
-        return CamdenBrowserPayload(
-            status=status,
-            final_url=HttpUrl(page.url),
-            body=body,
-            media_type=headers.get("content-type", "text/html")
-            .partition(";")[0]
-            .strip()
-            .lower(),
-            content_disposition=headers.get("content-disposition", ""),
-        )
+                if cleared is None:
+                    raise _source_error(
+                        raw_url,
+                        "managed challenge clearance response missing",
+                    )
+                response = cleared
+                headers = await response.all_headers()
+                status = response.status
+                if (
+                    status < _SUCCESS_MIN
+                    or status >= _SUCCESS_MAX
+                    or headers.get("cf-mitigated", "").casefold() == "challenge"
+                ):
+                    raise _source_error(
+                        raw_url,
+                        f"managed challenge clearance returned HTTP {status}",
+                    )
+            body = (await page.content()).encode()
+            return CamdenBrowserPayload(
+                status=status,
+                final_url=HttpUrl(page.url),
+                body=body,
+                media_type=headers.get("content-type", "text/html")
+                .partition(";")[0]
+                .strip()
+                .lower(),
+                content_disposition=headers.get("content-disposition", ""),
+            )
+        finally:
+            page.remove_listener("response", record_navigation)
 
     async def _page_for(self, url: str) -> Page:
         host = urlsplit(url).hostname or ""

@@ -574,12 +574,9 @@ async def _qualify(
     _require(initial_checks)
     first_checkpoint = _require_checkpoint(first_checkpoint)
     first_query_results = _query_results(first_checkpoint)
+    first_semantic_state = store.authority_semantic_state(_AUTHORITY_ID)
 
-    expected_refreshes = tuple(
-        view.application.id
-        for view in store.application_views()
-        if view.application.authority_id == _AUTHORITY_ID
-    )
+    expected_refreshes = store.authority_application_ids(_AUTHORITY_ID)
     refresh_due = datetime.min.replace(tzinfo=UTC)
     for application_id in expected_refreshes:
         store.set_refresh_schedule(
@@ -594,6 +591,7 @@ async def _qualify(
     final_checkpoint = _terminal_checkpoint(store, config.scope)
     final_agreement = _reference_agreement(store, final_checkpoint)
     final_evidence = store.evidence_integrity(_AUTHORITY_ID)
+    final_semantic_state = store.authority_semantic_state(_AUTHORITY_ID)
     run_statuses = store.run_statuses()[prior_status_count:]
     final_state = _QualificationState(
         snapshot=final_snapshot,
@@ -612,6 +610,7 @@ async def _qualify(
             name="idempotent-rerun",
             ok=(
                 first_snapshot == final_snapshot
+                and first_semantic_state == final_semantic_state
                 and first_agreement == final_agreement
                 and final_checkpoint is not None
                 and first_query_results == _query_results(final_checkpoint)

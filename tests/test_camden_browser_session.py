@@ -259,10 +259,25 @@ def test_camden_visible_chrome_launches_routes_submits_and_closes(  # noqa: PLR0
         }
     )
     page = MagicMock()
+    success.request.is_navigation_request.return_value = True
+    success.frame = page.main_frame
     page.url = "https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer/GeneralSearch.aspx"
     page.goto = AsyncMock(return_value=challenge)
     page.content = AsyncMock(return_value='<form id="M3Form"></form>')
-    page.wait_for_function = AsyncMock()
+    response_listeners: list[Callable[[Response], None]] = []
+    page.on.side_effect = lambda _event, listener: response_listeners.append(listener)
+
+    def clear_challenge(*_args: object, **_kwargs: object) -> None:
+        subresource = MagicMock()
+        subresource.request.is_navigation_request.return_value = False
+        wrong_frame = MagicMock()
+        wrong_frame.request.is_navigation_request.return_value = True
+        wrong_frame.frame = MagicMock()
+        response_listeners[-1](cast("Response", subresource))
+        response_listeners[-1](cast("Response", wrong_frame))
+        response_listeners[-1](cast("Response", success))
+
+    page.wait_for_function = AsyncMock(side_effect=clear_challenge)
     page.wait_for_load_state = AsyncMock()
     page.evaluate = AsyncMock()
     page.expect_navigation.return_value = _Navigation(cast("Response", success))
@@ -365,6 +380,15 @@ def test_camden_visible_chrome_handles_plain_and_missing_responses() -> None:
     with pytest.raises(SourceUnavailableError, match="missing browser response"):
         asyncio.run(boundary.request(_request()))
 
+    challenge = MagicMock()
+    challenge.status = 403
+    challenge.all_headers = AsyncMock(return_value={"cf-mitigated": "challenge"})
+    page.goto.return_value = challenge
+    page.wait_for_function = AsyncMock()
+    page.wait_for_load_state = AsyncMock()
+    with pytest.raises(SourceUnavailableError, match="clearance response missing"):
+        asyncio.run(boundary.request(_request()))
+
 
 def test_camden_visible_chrome_names_managed_challenge_timeout() -> None:
     response = MagicMock()
@@ -381,4 +405,44 @@ def test_camden_visible_chrome_names_managed_challenge_timeout() -> None:
     )
 
     with pytest.raises(CamdenChallengeTimeoutError, match="within 60 seconds"):
+        asyncio.run(boundary.request(_request()))
+
+
+@pytest.mark.parametrize(
+    ("status", "headers"),
+    [
+        (199, {}),
+        (500, {}),
+        (200, {"cf-mitigated": "challenge"}),
+    ],
+)
+def test_camden_visible_chrome_rejects_invalid_clearance_response(
+    status: int,
+    headers: dict[str, str],
+) -> None:
+    challenge = MagicMock()
+    challenge.status = 403
+    challenge.all_headers = AsyncMock(return_value={"cf-mitigated": "challenge"})
+    cleared = MagicMock()
+    cleared.status = status
+    cleared.all_headers = AsyncMock(return_value=headers)
+    page = MagicMock()
+    page.url = "https://planningrecords.camden.gov.uk/result"
+    cleared.request.is_navigation_request.return_value = True
+    cleared.frame = page.main_frame
+    listeners: list[Callable[[Response], None]] = []
+    page.on.side_effect = lambda _event, listener: listeners.append(listener)
+    page.goto = AsyncMock(return_value=challenge)
+    page.wait_for_function = AsyncMock(
+        side_effect=lambda *_args, **_kwargs: listeners[-1](cast("Response", cleared))
+    )
+    page.wait_for_load_state = AsyncMock()
+    boundary = CamdenVisibleChromeBoundary(
+        cast("Playwright", MagicMock()),
+        cast("Browser", MagicMock()),
+        cast("BrowserContext", MagicMock()),
+        cast("Page", page),
+    )
+
+    with pytest.raises(SourceUnavailableError, match="clearance returned HTTP"):
         asyncio.run(boundary.request(_request()))
