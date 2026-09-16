@@ -1867,6 +1867,7 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(  
 def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
     tmp_path: "Path",
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _qualification_module()
     data_dir = tmp_path / "two-scopes"
@@ -1892,7 +1893,7 @@ def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
         query["expanded_evidence_digest"] or query["initial_evidence_digest"]
         for query in first_receipt["query_inventory"]
         if any(
-            reference["reference"] == "BR/1/26/PL"
+            reference["reference"] == "BR/2/26/PL"
             for reference in query["source_references"]
         )
     )
@@ -1943,31 +1944,42 @@ def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
 
     receipt_path = data_dir / "arun-qualification-v3.json"
     original = receipt_path.read_text(encoding="utf-8")
+    alternate_locator = f"{arun.BASE_URL}/planningDetails?reference=BR/2/26/PL"
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         evidence_path = connection.execute(
             "SELECT path FROM evidence WHERE digest = ?",
             (old_search_digest,),
         ).fetchone()[0]
-        connection.executescript(
-            """
-            UPDATE applications
-            SET source_id = 'tampered-source',
-                locator = 'https://example.test/tampered'
-            WHERE reference = 'BR/1/26/PL';
-            UPDATE discovery_queue
-            SET source_id = 'tampered-source',
-                locator = 'https://example.test/tampered'
-            WHERE reference = 'BR/1/26/PL';
-            UPDATE native_rebuild_inputs
-            SET source_id = 'tampered-source',
-                locator = 'https://example.test/tampered'
-            WHERE reference = 'BR/1/26/PL';
-            """
-        )
+        for table in ("applications", "discovery_queue", "native_rebuild_inputs"):
+            connection.execute(
+                f"UPDATE {table} SET locator = ? WHERE reference = ?",  # noqa: S608
+                (alternate_locator, "BR/2/26/PL"),
+            )
         connection.commit()
     (data_dir / "evidence" / evidence_path).write_bytes(
-        gzip.compress(b"<html><body>corrupted historical search</body></html>")
+        gzip.compress(
+            _complete_results(("BR/2/26/PL",)).replace(
+                b"&amp;from=planningSearch",
+                b"",
+            )
+        )
     )
+
+    store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    retained = tuple(
+        record
+        for record in store.retained_native_records()
+        if record.authority_id == AuthorityId("arun")
+    )
+    assert not module._source_identity_agrees(store, retained)
+    capture_validator = module._capture_is_valid
+    monkeypatch.setattr(module, "_capture_is_valid", lambda _capture: True)
+    assert module._source_identity_agrees(store, retained)
+    monkeypatch.setattr(module, "_capture_is_valid", capture_validator)
+    store.close()
 
     assert module.main(second_args, session_factory=second_factory) == 1
     error = json.loads(capsys.readouterr().err)
