@@ -8,7 +8,8 @@ from __future__ import annotations
 import asyncio
 from datetime import date
 from hashlib import sha256
-from typing import TYPE_CHECKING
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from pydantic import HttpUrl, ValidationError
@@ -19,6 +20,8 @@ from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from yimby.transport import PortalSession
 
 
 WINDOW = DiscoveryWindow(
@@ -248,9 +251,11 @@ def test_blackburn_query_types_reject_invalid_ranges() -> None:
     "body",
     [
         b'<table id="application_results_table"></table>',
+        b'<table id="application_results_table"></table>' * 2,
         _search_html("<tr><td>wrong columns</td></tr>"),
         _search_html(_result_row(1).replace("view_application", "wrong")),
         _search_html(_result_row(1).replace('data-id="178001"', 'data-id="bad"')),
+        _search_html(_result_row(1).replace("Build home 1", "")),
     ],
 )
 def test_blackburn_search_rows_fail_closed_on_shape_drift(body: bytes) -> None:
@@ -266,3 +271,21 @@ def test_blackburn_search_rejects_duplicates_and_more_than_the_observed_cap() ->
         blackburn._parse_search_rows(
             _search_html(*(_result_row(number) for number in range(1, 32)))
         )
+
+
+def test_blackburn_live_discovery_requires_the_page_session() -> None:
+    session = cast(
+        "PortalSession",
+        SimpleNamespace(mode=TransportMode.LIVE),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(blackburn.BlackburnBrowserSessionRequiredError):
+            async for _batch in blackburn.BlackburnWithDarwenAdapter().discover(
+                session,
+                WINDOW,
+                None,
+            ):
+                pass
+
+    asyncio.run(exercise())

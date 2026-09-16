@@ -6,15 +6,15 @@ from yimby.adapters import AuthorityPackage
 from yimby.authorities.blackburn_with_darwen.adapter import (
     BlackburnWithDarwenAdapter,
     BlackburnWithDarwenApplicationV1,
-    BlackburnWithDarwenCheckpointV1,
+    BlackburnWithDarwenCheckpointV2,
 )
 
 BLACKBURN_WITH_DARWEN_PACKAGE: AuthorityPackage[
-    BlackburnWithDarwenApplicationV1, BlackburnWithDarwenCheckpointV1
+    BlackburnWithDarwenApplicationV1, BlackburnWithDarwenCheckpointV2
 ] = AuthorityPackage(
     BlackburnWithDarwenAdapter(),
     BlackburnWithDarwenApplicationV1,
-    BlackburnWithDarwenCheckpointV1,
+    BlackburnWithDarwenCheckpointV2,
 )
 
 __all__ = ["BLACKBURN_WITH_DARWEN_PACKAGE"]
