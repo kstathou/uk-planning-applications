@@ -36,7 +36,7 @@ The adapter owns four query families:
 
 Private typed query objects produce one canonical ordered key inventory. The adapter validates the live form against that inventory before it submits a search. The qualification command imports the canonical inventory instead of repeating status strings.
 
-Each query becomes complete only when its parsed rows reconcile with the portal's displayed total, displayed row span, and page markers. This rejects a replayed earlier page instead of counting it twice. The adapter yields every page with its next checkpoint so SQLite can commit references and progress together. A resumed page first recreates the server-side search session.
+Each query becomes complete only when its parsed rows reconcile with the portal's displayed total, displayed row span, and page markers. A range-less response cannot carry a paging control. This rejects a replayed earlier page or hidden forward page instead of counting it twice. The checkpoint retains stable reference-locator pairs; qualification validates every known pair against the durable queue while preserving the explicitly marked legacy checkpoint created by the blocked first run. The adapter yields every page with its next checkpoint so SQLite can commit references and progress together. A resumed page first recreates the server-side search session.
 
 `BarnetQualificationReceiptV1` records the exact scope and query inventory, durable counts, first-pass and rerun costs, named checks, and two pending future refresh cycles. The command writes the receipt only after SQLite integrity, evidence hashes, exact durable reference agreement, section completeness, retry state, attachment policy, and an immediate zero-network rerun all pass.
 

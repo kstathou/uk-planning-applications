@@ -86,6 +86,7 @@ class BarnetCheckpointV1(FrozenModel):
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
     seen_locators: tuple[str | None, ...] = ()
+    tracks_locators: bool = False
     live_complete: bool = False
 
 
@@ -200,6 +201,14 @@ def _is_terminal_checkpoint(
         and checkpoint.next_page == 1
         and checkpoint.query_row_count == 0
         and len(checkpoint.seen_references) == len(set(checkpoint.seen_references))
+        and len(checkpoint.seen_locators) <= len(checkpoint.seen_references)
+        and (
+            not checkpoint.tracks_locators
+            or (
+                len(checkpoint.seen_locators) == len(checkpoint.seen_references)
+                and all(locator is not None for locator in checkpoint.seen_locators)
+            )
+        )
     )
 
 
@@ -322,6 +331,7 @@ class BarnetAdapter:
             progress = BarnetCheckpointV1(
                 cursor="live",
                 live_scope=requested_scope,
+                tracks_locators=True,
             )
         if progress.live_complete:
             if not _is_terminal_checkpoint(progress, requested_scope):
@@ -729,9 +739,14 @@ def _reconcile_search_identities(
     progress: BarnetCheckpointV1,
     references: tuple[SourceReference, ...],
 ) -> tuple[tuple[str, ...], tuple[str | None, ...], tuple[SourceReference, ...]]:
-    if len(progress.seen_locators) > len(progress.seen_references) or len(
-        progress.seen_references
-    ) != len(set(progress.seen_references)):
+    if (
+        len(progress.seen_locators) > len(progress.seen_references)
+        or len(progress.seen_references) != len(set(progress.seen_references))
+        or (
+            progress.tracks_locators
+            and len(progress.seen_locators) != len(progress.seen_references)
+        )
+    ):
         identity_error = "seen result identities"
         raise BarnetCheckpointError(identity_error)
     seen = list(progress.seen_references)
@@ -989,6 +1004,8 @@ def _parse_result_list(
             raise
         reported = len(references)
     showing_ranges = _showing_ranges(soup, row_count=len(references))
+    if not showing_ranges and soup.select_one('a[href*="pagedSearchResults.do"]'):
+        _raise_parse("reported result count")
     displayed_range = None if not showing_ranges else showing_ranges[0][:2]
     if showing_ranges and showing_ranges[0][2] != reported:
         _raise_parse("reported result count")

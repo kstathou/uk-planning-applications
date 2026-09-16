@@ -211,7 +211,9 @@ def _terminal_checkpoint(
         return False
     expected_queries = expected_live_query_keys(scope)
     seen = checkpoint.seen_references
+    locators = checkpoint.seen_locators
     queued = state.queued
+    queued_locators = {reference.reference: reference.locator for reference in queued}
     return (
         checkpoint.cursor == "live"
         and checkpoint.live_scope == scope
@@ -227,6 +229,18 @@ def _terminal_checkpoint(
         )
         and len(seen) == len(set(seen))
         and set(seen) == {reference.reference for reference in queued}
+        and len(locators) <= len(seen)
+        and (
+            not checkpoint.tracks_locators
+            or (
+                len(locators) == len(seen)
+                and all(locator is not None for locator in locators)
+            )
+        )
+        and all(
+            locator is None or queued_locators.get(reference) == locator
+            for reference, locator in zip(seen, locators, strict=False)
+        )
     )
 
 

@@ -166,12 +166,16 @@ def _result_page(
         )
         for reference, locator in references
     )
-    pagination = "".join(
-        (
-            '<a href="pagedSearchResults.do?action=page&amp;'
-            f'searchCriteria.page={page}">{page}</a>'
+    pagination = (
+        ""
+        if pages == 1
+        else "".join(
+            (
+                '<a href="pagedSearchResults.do?action=page&amp;'
+                f'searchCriteria.page={page}">{page}</a>'
+            )
+            for page in range(1, pages + 1)
         )
-        for page in range(1, pages + 1)
     )
     displayed_range = (
         ""
@@ -354,7 +358,7 @@ class _BarnetMock:
                 content=_result_page(
                     rows,
                     count=99 if self.count_mismatch else 3,
-                    pages=2,
+                    pages=2 if rows else 1,
                     start=3,
                     current_page=page,
                 ),
