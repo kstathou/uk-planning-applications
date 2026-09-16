@@ -8,7 +8,7 @@ import re
 from datetime import UTC, date, datetime
 from html import unescape
 from typing import TYPE_CHECKING, NoReturn
-from urllib.parse import quote, urljoin
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -42,6 +42,9 @@ if TYPE_CHECKING:
 SOURCE = SourceId("cheshire-east-custom-register")
 BASE_URL = "https://pa.cheshireeast.gov.uk/planning"
 _SEARCH_URL = f"{BASE_URL}/index.html?fa=search"
+_SEARCH_POST_URL = f"{BASE_URL}/index.html"
+_WEEKLY_RECEIVED_URL = f"{BASE_URL}/index.html?fa=getReceivedWeeklyList"
+_DETAIL_URL = f"{BASE_URL}/index.html?fa=getApplication&id={{locator}}"
 
 
 class CheshireEastCheckpointV1(FrozenModel):
@@ -73,6 +76,41 @@ class CheshireEastSearchResultV1(FrozenModel):
     proposal: str
     consultation_close: str | None = None
     detail_locator: str
+
+
+class CheshireEastWeeklyRowV1(FrozenModel):
+    """One official weekly-list row retained as source-contract evidence."""
+
+    public_reference: str
+    detail_locator: str
+
+
+class CheshireEastWeeklyBoundaryV1(FrozenModel):
+    """Observed weekly rows plus only source-published terminal signals."""
+
+    rows: tuple[CheshireEastWeeklyRowV1, ...]
+    reported_total: int | None
+    pagination_links: tuple[str, ...]
+    terminal_marker: bool
+
+
+class CheshireEastDocumentMetadataV1(FrozenModel):
+    """One document index row without attachment content."""
+
+    document_type: str
+    description: str
+    published_date: date
+    url: HttpUrl
+
+
+class CheshireEastDetailContractV1(FrozenModel):
+    """Reference-verified fields exposed by one official detail response."""
+
+    public_reference: str
+    application_status: str
+    valid_date: date
+    grid_reference: tuple[float, float]
+    documents: tuple[CheshireEastDocumentMetadataV1, ...]
 
 
 class CheshireEastAdapter:
@@ -208,7 +246,10 @@ def _parse_search_form(body: bytes) -> Tag:
         raise CheshireEastFormMethodUnavailableError
     if form.get("name") != "form":
         _raise_parse("search form name")
-    _named_control(form, "valid_date_from")
+    if urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _SEARCH_POST_URL:
+        _raise_parse("search form action")
+    for name in ("fa", "submitted", "valid_date_from", "valid_date_to"):
+        _unique_named_control(form, name)
     return form
 
 
@@ -219,23 +260,299 @@ def _named_control(form: Tag, name: str) -> Tag:
     return control
 
 
+def _unique_named_control(form: Tag, name: str) -> Tag:
+    controls = form.find_all(None, {"name": name})
+    if len(controls) != 1 or not isinstance(controls[0], Tag):
+        _raise_parse(name)
+    return controls[0]
+
+
 def _valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
-    start = _named_control(form, "valid_date_from")
-    values = {str(start.get("name")): window.start.strftime("%d/%m/%Y")}
-    fields = []
-    for item in form.select("input[name], select[name], textarea[name]"):
-        name = str(item["name"])
-        input_type = str(item.get("type", "text")).casefold()
-        if input_type in {"button", "image", "reset", "submit"}:
-            continue
-        value = values.get(name, str(item.get("value", "")))
-        fields.append(FormField(name=name, value=value))
+    values = {
+        "valid_date_from": window.start.strftime("%d-%m-%Y"),
+        "valid_date_to": window.end.strftime("%d-%m-%Y"),
+    }
     return PortalRequest(
-        url=HttpUrl(urljoin(f"{BASE_URL}/", str(form.get("action", "index.html")))),
+        url=HttpUrl(_SEARCH_POST_URL),
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
-        form=tuple(fields),
+        form=_successful_form_fields(form, values),
     )
+
+
+def _successful_form_fields(
+    form: Tag, overrides: dict[str, str]
+) -> tuple[FormField, ...]:
+    fields: list[FormField] = []
+    for control in form.select("input[name], select[name], textarea[name]"):
+        if control.has_attr("disabled"):
+            continue
+        name = str(control["name"])
+        if name in overrides:
+            values: tuple[str, ...] = (overrides[name],)
+        elif control.name == "select":
+            options: list[Tag] = list(control.select("option[selected]"))
+            if not options and not control.has_attr("multiple"):
+                options = list(control.select("option")[:1])
+            values = tuple(str(option.get("value", "")) for option in options)
+        elif control.name == "textarea":
+            values = (control.get_text(),)
+        else:
+            input_type = str(control.get("type", "text")).casefold()
+            if input_type in {"button", "file", "image", "reset", "submit"}:
+                continue
+            if input_type in {"checkbox", "radio"} and not control.has_attr("checked"):
+                continue
+            values = (str(control.get("value", "")),)
+        fields.extend(FormField(name=name, value=value) for value in values)
+    return tuple(fields)
+
+
+def _parse_weekly_form(body: bytes) -> Tag:
+    soup = BeautifulSoup(body, "html.parser")
+    forms = tuple(form for form in soup.select("form") if form.select('[name="week"]'))
+    if len(forms) != 1:
+        _raise_parse("weekly received form")
+    form = forms[0]
+    if (
+        str(form.get("method", "get")).casefold() != "post"
+        or urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _WEEKLY_RECEIVED_URL
+    ):
+        _raise_parse("weekly received form")
+    _unique_named_control(form, "week")
+    _unique_named_control(form, "fa")
+    return form
+
+
+def _weekly_received_request(form: Tag, week: date) -> PortalRequest:
+    return PortalRequest(
+        url=HttpUrl(_WEEKLY_RECEIVED_URL),
+        intent=RequestIntent.SEARCH,
+        method=RequestMethod.POST,
+        form=_successful_form_fields(form, {"week": week.strftime("%d-%m-%Y")}),
+    )
+
+
+def _parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
+    soup = BeautifulSoup(body, "html.parser")
+    expected_headers = (
+        "application",
+        "location details",
+        "proposal",
+        "ward",
+        "community",
+        "consultation end date",
+        "publicity end date",
+        "details available",
+        "jump to application",
+    )
+    matches = []
+    for table in soup.select("table"):
+        first_row = table.select_one("tr")
+        if first_row is None:
+            continue
+        headers = tuple(
+            _normalise_label(cell.get_text(" ", strip=True))
+            for cell in first_row.find_all(("th", "td"), recursive=False)
+        )
+        if headers == expected_headers:
+            matches.append(table)
+    if len(matches) != 1:
+        _raise_parse("weekly received table")
+    rows = []
+    for row in matches[0].select("tr")[1:]:
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != len(expected_headers):
+            _raise_parse("weekly received row columns")
+        links = cells[-1].select("a[href]")
+        if len(links) != 1:
+            _raise_parse("weekly received detail link")
+        locator = _detail_locator(str(links[0]["href"]))
+        rows.append(
+            CheshireEastWeeklyRowV1(
+                public_reference=cells[0].get_text(" ", strip=True),
+                detail_locator=locator,
+            )
+        )
+    pagination_links = tuple(
+        str(link["href"])
+        for link in soup.select('.pagination a[href], a[rel="next"], a[rel="prev"]')
+    )
+    total = _reported_total(soup)
+    terminal_marker = any(
+        _normalise_label(element.get_text(" ", strip=True))
+        in {"all applications loaded", "all results loaded"}
+        for element in soup.select("button, [role='status']")
+    )
+    return CheshireEastWeeklyBoundaryV1(
+        rows=tuple(rows),
+        reported_total=total,
+        pagination_links=pagination_links,
+        terminal_marker=terminal_marker,
+    )
+
+
+def _detail_locator(href: str) -> str:
+    split = urlsplit(urljoin(f"{BASE_URL}/", href))
+    values = parse_qs(split.query)
+    if (
+        split.scheme != "https"
+        or split.netloc != "pa.cheshireeast.gov.uk"
+        or split.path != "/planning/index.html"
+        or values.get("fa") != ["getApplication"]
+        or len(values.get("id", [])) != 1
+        or not values["id"][0].isdigit()
+    ):
+        _raise_parse("weekly received detail link")
+    return values["id"][0]
+
+
+def _reported_total(soup: BeautifulSoup) -> int | None:
+    nodes = soup.select("[data-result-count]")
+    if not nodes:
+        return None
+    if len(nodes) != 1 or not str(nodes[0].get("data-result-count", "")).isdigit():
+        _raise_parse("reported result total")
+    return int(str(nodes[0]["data-result-count"]))
+
+
+def _parse_detail_contract(
+    body: bytes,
+    *,
+    expected_reference: str,
+    expected_locator: str,
+) -> CheshireEastDetailContractV1:
+    soup = BeautifulSoup(body, "html.parser")
+    containers = soup.select("#application_details[data-application-id]")
+    if (
+        len(containers) != 1
+        or containers[0].get("data-application-id") != expected_locator
+    ):
+        _raise_parse("application detail locator")
+    fields = _detail_fields(containers[0])
+    published_reference = _required_detail_field(fields, "application reference number")
+    if published_reference != expected_reference:
+        raise CheshireEastReferenceMismatchError(
+            expected_reference, published_reference
+        )
+    grid = _grid_reference(_required_detail_field(fields, "grid reference"))
+    documents = _parse_document_metadata(soup, expected_locator)
+    return CheshireEastDetailContractV1(
+        public_reference=published_reference,
+        application_status=_required_detail_field(fields, "application status"),
+        valid_date=_portal_date(_required_detail_field(fields, "valid date")),
+        grid_reference=grid,
+        documents=documents,
+    )
+
+
+def _detail_fields(container: Tag) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for row in container.select(".row.pad-bottom-5"):
+        label = row.select_one("strong")
+        value = row.select_one(".col-md-7")
+        if label is None or value is None:
+            _raise_parse("application detail row")
+        key = _normalise_label(label.get_text(" ", strip=True))
+        if key in fields:
+            _raise_parse("application detail duplicate field")
+        fields[key] = unescape(value.get_text(" ", strip=True))
+    return fields
+
+
+def _required_detail_field(fields: dict[str, str], name: str) -> str:
+    value = fields.get(name, "")
+    if not value:
+        _raise_parse(name)
+    return value
+
+
+def _portal_date(value: str) -> date:
+    try:
+        return datetime.strptime(value, "%d-%m-%Y").replace(tzinfo=UTC).date()
+    except ValueError:
+        _raise_parse("portal date")
+
+
+def _grid_reference(value: str) -> tuple[float, float]:
+    pattern = r"\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*"
+    match = re.fullmatch(pattern, value)
+    if match is None:
+        _raise_parse("grid reference")
+    return float(match.group(1)), float(match.group(2))
+
+
+def _parse_document_metadata(
+    soup: BeautifulSoup, expected_locator: str
+) -> tuple[CheshireEastDocumentMetadataV1, ...]:
+    table = soup.select_one("table#application_documents")
+    loaded = soup.select_one("#all_documents_loaded_application_documents[disabled]")
+    show_more = soup.select_one("#show_more_documents_application_documents")
+    if (
+        not isinstance(table, Tag)
+        or loaded is None
+        or show_more is None
+        or "display:none"
+        not in str(show_more.get("style", "")).replace(" ", "").casefold()
+    ):
+        _raise_parse("complete document table")
+    expected_headers = (
+        "document type",
+        "description",
+        "thumbnail",
+        "date document added",
+        "download/view",
+    )
+    rows = table.select("tr")
+    if not rows:
+        _raise_parse("document table headers")
+    headers = tuple(
+        _normalise_label(cell.get_text(" ", strip=True))
+        for cell in rows[0].find_all(("th", "td"), recursive=False)
+    )
+    if headers != expected_headers:
+        _raise_parse("document table headers")
+    documents = []
+    for row in rows[1:]:
+        cells = row.find_all("td", recursive=False)
+        fields = tuple(str(cell.get("data-field-name", "")) for cell in cells)
+        if fields != (
+            "document_type",
+            "description",
+            "thumbnail",
+            "date_document_added",
+            "download",
+        ):
+            _raise_parse("document row columns")
+        links = cells[-1].select("a[href]")
+        if len(links) != 1:
+            _raise_parse("document metadata link")
+        url = urljoin(f"{BASE_URL}/", str(links[0]["href"]))
+        _assert_document_url(url, expected_locator)
+        documents.append(
+            CheshireEastDocumentMetadataV1(
+                document_type=cells[0].get_text(" ", strip=True),
+                description=cells[1].get_text(" ", strip=True),
+                published_date=_portal_date(cells[3].get_text(" ", strip=True)),
+                url=HttpUrl(url),
+            )
+        )
+    return tuple(documents)
+
+
+def _assert_document_url(url: str, expected_locator: str) -> None:
+    split = urlsplit(url)
+    values = parse_qs(split.query)
+    if (
+        split.scheme != "https"
+        or split.netloc != "pa.cheshireeast.gov.uk"
+        or split.path != "/planning/"
+        or values.get("fa") != ["downloadDocument"]
+        or len(values.get("id", [])) != 1
+        or not values["id"][0].isdigit()
+        or values.get("public_record_id") != [expected_locator]
+    ):
+        _raise_parse("document metadata link")
 
 
 def _parse_result_table(body: bytes) -> tuple[CheshireEastSearchResultV1, ...]:
@@ -346,6 +663,16 @@ class CheshireEastDetailUnavailableError(RuntimeError):
     def __init__(self, reference: str) -> None:
         """Identify the public reference only."""
         super().__init__(f"Cheshire East detail is unresolved for {reference}")
+
+
+class CheshireEastReferenceMismatchError(ValueError):
+    """The direct detail response belongs to another public reference."""
+
+    def __init__(self, expected: str, published: str) -> None:
+        """Name both non-sensitive public references."""
+        super().__init__(
+            f"Cheshire East detail reference {published} did not match {expected}"
+        )
 
 
 class CheshireEastRoutingError(ValueError):

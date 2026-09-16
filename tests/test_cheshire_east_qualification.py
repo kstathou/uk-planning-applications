@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: D103, PLR2004, SLF001
+# ruff: noqa: D103, E501, PLR2004, SLF001
 
 """Cheshire East's official blocker and reliable source contracts."""
 
