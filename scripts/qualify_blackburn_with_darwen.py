@@ -39,7 +39,7 @@ from yimby.domain import (
 )
 from yimby.evidence import EvidenceStore
 from yimby.orchestration import ProcessLock
-from yimby.registry import AuthorityRegistry
+from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
 from yimby.store import SqliteStore
 from yimby.transport import PortalSession
 
@@ -420,7 +420,10 @@ async def _qualify(
     session_factory: SessionFactory,
     now: Clock,
 ) -> BlackburnQualifiedReceiptV1:
-    registry = AuthorityRegistry((BLACKBURN_WITH_DARWEN_PACKAGE,))
+    registry = AuthorityRegistry(
+        (BLACKBURN_WITH_DARWEN_PACKAGE,),
+        PILOT_LIVE_STATUS,
+    )
     collector = Collector(registry, store)
     window = DiscoveryWindow(
         start=config.scope.start,

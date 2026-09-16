@@ -61,6 +61,13 @@ _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
 
 
+def _declared_capability(
+    declared: CapabilityState,
+    stored: CapabilityState,
+) -> CapabilityState:
+    return stored if declared == CapabilityState.UNKNOWN else declared
+
+
 class _ApplicationSection(FrozenModel):
     proposal: str
     status: str
@@ -90,6 +97,7 @@ class SqliteStore:
         now = datetime.now(UTC).isoformat()
         with self._connection:
             for manifest in manifests:
+                capabilities = self._registration_capabilities(manifest)
                 self._connection.execute(
                     """
                     INSERT INTO authorities(
@@ -101,6 +109,7 @@ class SqliteStore:
                     ON CONFLICT(authority_id) DO UPDATE SET
                         name = excluded.name,
                         kind = excluded.kind,
+                        capabilities_json = excluded.capabilities_json,
                         source_manifest_json = excluded.source_manifest_json,
                         live_readiness = excluded.live_readiness,
                         live_reason = excluded.live_reason,
@@ -114,7 +123,7 @@ class SqliteStore:
                         manifest.kind,
                         "fixture-ready",
                         TransportMode.NOT_RUN,
-                        manifest.capabilities.model_dump_json(),
+                        capabilities.model_dump_json(),
                         manifest.model_dump_json(),
                         now,
                         manifest.live_status.readiness,
@@ -123,6 +132,26 @@ class SqliteStore:
                         manifest.live_status.transport,
                     ),
                 )
+
+    def _registration_capabilities(
+        self,
+        manifest: AuthorityManifest,
+    ) -> AuthorityCapabilities:
+        """Merge explicit declarations without erasing observed capability state."""
+        row = self._connection.execute(
+            "SELECT capabilities_json FROM authorities WHERE authority_id = ?",
+            (manifest.id,),
+        ).fetchone()
+        if row is None:
+            return manifest.capabilities
+        stored = AuthorityCapabilities.model_validate_json(row["capabilities_json"])
+        declared = manifest.capabilities
+        return AuthorityCapabilities(
+            discovery=_declared_capability(declared.discovery, stored.discovery),
+            documents=_declared_capability(declared.documents, stored.documents),
+            comments=_declared_capability(declared.comments, stored.comments),
+            coordinates=_declared_capability(declared.coordinates, stored.coordinates),
+        )
 
     def begin_run(self, authority_id: AuthorityId) -> str:
         """Create a collection run with a durable running state."""
