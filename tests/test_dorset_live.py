@@ -304,6 +304,11 @@ class _DorsetMock:
                 document_count=count,
                 duplicate_documents=self.fault == "duplicate-document-metadata",
             )
+            if self.fault == "blank-document-title":
+                body = body.replace(
+                    b"21/08/2026 - Location Plan",
+                    b"21/08/2026 - ",
+                )
             if self.fault == "document-count":
                 body = body.replace(
                     b'\\"VirtualItemCount\\":1',
@@ -623,6 +628,27 @@ def test_dorset_live_detail_distinguishes_duplicate_document_metadata() -> None:
         "document-0",
         "document-1",
     ]
+    assert session.attachment_body_requests == 0
+
+
+def test_dorset_live_detail_preserves_blank_document_title() -> None:
+    """A source-provided blank title does not erase the document metadata row."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    session = _session(_DorsetMock(fault="blank-document-title"))
+
+    async def collect_detail() -> Any:
+        collected = await package.collect(session, _live_reference())
+        await session.aclose()
+        return collected
+
+    collected = asyncio.run(collect_detail())
+    native = dorset_adapter.DorsetApplicationV1.model_validate_json(
+        collected.native_json
+    ).root
+
+    assert isinstance(native, dorset_adapter.DorsetLiveApplicationV1)
+    assert native.documents[1].title is None
+    assert collected.normalised.documents[1].title == "21/08/2026 (1mb)"
     assert session.attachment_body_requests == 0
 
 
