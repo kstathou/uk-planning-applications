@@ -54,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
 
+    from yimby.domain import EvidenceCapture
     from yimby.evidence import EvidenceStore
 
 _DOCUMENTS = TypeAdapter(tuple[DocumentRecord, ...])
@@ -412,6 +413,23 @@ class SqliteStore:
                 )
             )
         return tuple(retained)
+
+    def retained_evidence_captures(self) -> tuple[EvidenceCapture, ...]:
+        """Return every append-only evidence row rehydrated from local storage."""
+        return tuple(
+            self._evidence.read_capture(
+                EvidenceDigest(row["digest"]),
+                row["path"],
+                row["source_url"],
+                row["media_type"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT digest, path, source_url, media_type
+                FROM evidence ORDER BY digest
+                """
+            )
+        )
 
     def get_application(self, application_id: ApplicationId) -> StoredApplication:
         """Return current successful content plus latest completeness."""

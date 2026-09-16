@@ -273,10 +273,10 @@ def _retained_records(
 
 
 def _evidence_integrity(store: SqliteStore) -> bool:
-    records = _retained_records(store)
-    if not records:
+    try:
+        captures = store.retained_evidence_captures()
+    except (EOFError, KeyError, OSError, ValueError):
         return False
-    captures = tuple(capture for record in records for capture in record.evidence)
     return bool(captures) and all(
         sha256(capture.body).hexdigest() == str(capture.digest) for capture in captures
     )

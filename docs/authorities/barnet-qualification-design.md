@@ -43,7 +43,7 @@ status strings.
 
 Each query becomes complete only when its parsed rows reconcile with the portal's displayed total, displayed row span, and exact page markers. A range-less response cannot carry a paging control, and unclassified pager actions fail closed. The checkpoint retains the query's original total and per-query reference set, rejecting total drift and duplicate identities within one partition while allowing overlap between different partitions. It also retains stable reference-locator pairs; qualification validates every known pair against the durable queue while preserving the explicitly marked legacy checkpoint created by the blocked first run. A resumed page first recreates the server-side search session and reconciles its first page before continuing. The adapter yields every page with its next checkpoint so SQLite can commit references and progress together.
 
-`BarnetQualificationReceiptV1` records the exact scope and query inventory, durable counts, first-pass and rerun costs, named checks, and two pending future refresh cycles. The command writes the receipt only after SQLite integrity, evidence hashes, exact durable reference agreement, section completeness, retry state, attachment policy, and an immediate zero-network rerun all pass.
+`BarnetQualificationReceiptV1` records the exact scope and query inventory, durable counts, first-pass and rerun costs, named checks, and two pending future refresh cycles. The command writes the receipt only after SQLite integrity, every append-only evidence row rehashes successfully, exact durable reference agreement, section completeness, retry state, attachment policy, and an immediate zero-network rerun all pass.
 
 ## Synthesis decision
 
