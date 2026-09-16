@@ -130,6 +130,17 @@ application identities, session material, and source bodies. The reviewed 16
 September snapshot is committed at
 `docs/evidence/barnet-qualification-blocker-2026-09-16.json`.
 
+The separate Open Barnet dataset does not provide a route around this blocker.
+Its documented DataPress dataset endpoint and full catalogue export were
+checked on 16 September: the 13 annual decided-application CSVs end in March
+2021, and the only newer planning-named item is explicitly an internal dummy
+document proof of concept. The strict metadata-only record is
+`docs/evidence/barnet-open-data-assessment-2026-09-16.json`. Treat that source
+as an insufficient historical fallback; it does not cover either the rolling
+30-day population or older applications that remain open. Do not download its
+PDF or CSV bodies as part of live qualification, and do not use it to mark the
+HTTP 429 bootstrap complete.
+
 A missing lineage table is accepted by the exporter only for genuine
 pre-lineage history with neither Barnet's legacy 006 filename nor its current
 009 filename recorded. Once either Barnet lineage migration is recorded, its

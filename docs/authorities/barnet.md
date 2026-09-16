@@ -50,6 +50,34 @@ did not reach every partition because the official source rate-limited detail
 collection. Comment and document pagination also remain unproved on a
 non-empty live section.
 
+## Official Open Data fallback assessment
+
+The council's separate Open Barnet dataset and its documented DataPress API
+were checked on 16 September 2026 as a possible way around the Public Access
+rate limit. The dataset endpoint and the complete public-catalogue export agree
+that `Planning Applications` (`2nq32`) contains 13 annual CSV resources. Every
+resource is titled as decided applications; the newest covers April 2020 to
+March 2021, the dataset was last updated on 1 February 2021, and it exposes no
+live links. The page's broad description of current and historic records does
+not overcome those concrete resource bounds.
+
+The full 397-dataset catalogue contains only one newer planning-application
+phrase match: `Planning Applications Documents_POC (Internal use
+only_dummy data)` (`e1g8k`). It is explicitly a dummy proof of concept with six
+PDF resources, no timeframe, and no live link. It is neither an application
+index nor a status feed. No resource body or attachment body was downloaded
+during this assessment.
+
+Open Barnet is therefore an official historical fallback only. It cannot
+enumerate either the required rolling 30-day population or applications that
+remain open from before that window, so it cannot complete or qualify a
+bootstrap. The Public Access HTTP 429 remains the live-source blocker. The
+strict metadata-only assessment is committed as
+[`barnet-open-data-assessment-2026-09-16.json`](../evidence/barnet-open-data-assessment-2026-09-16.json);
+its response digests bind the findings to the two official API snapshots
+without publishing catalogue contacts, application identities, session
+material, or source bodies.
+
 ## Request contract capture
 
 The weekly-list request was rechecked on 16 September 2026. The form posts to

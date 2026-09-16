@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "authority_id": "barnet",
+  "observed_at": "2026-09-16T15:22:36Z",
+  "sources": {
+    "dataset_page": "https://open.barnet.gov.uk/dataset/planning-applications-2nq32",
+    "dataset_api": "https://open.barnet.gov.uk/api/v3/dataset/2nq32",
+    "catalog_api": "https://open.barnet.gov.uk/api/v3/datasets/export.json",
+    "datapress_api_documentation": "https://datapress.com/docs/api/",
+    "dataset_payload_sha256": "769d1dea5201f98e2cbce1eb3be98c856114ac0539a170fad8e08b0aaf408ad2",
+    "catalog_payload_sha256": "a82e852a9d82906aed5a3e07dd296db1256376dc1fe2abb41c160ca930861bb1"
+  },
+  "planning_dataset": {
+    "dataset_id": "2nq32",
+    "title": "Planning Applications",
+    "updated_at": "2021-02-01T16:28:29Z",
+    "resource_count": 13,
+    "resource_format": "csv",
+    "resource_scope": "decided-applications",
+    "oldest_timeframe_from": "1965-05",
+    "newest_timeframe_to": "2021-03",
+    "newest_resource_id": "xl9",
+    "newest_resource_title": "Planning Applications Decided 2020/2021",
+    "live_link_count": 0
+  },
+  "catalog": {
+    "public_dataset_count": 397,
+    "match_method": "case-insensitive-planning-application-phrase",
+    "matching_dataset_ids": [
+      "2nq32",
+      "e1g8k"
+    ],
+    "newer_nonqualifying_dataset": {
+      "dataset_id": "e1g8k",
+      "title": "Planning Applications Documents_POC (Internal use only_dummy data)",
+      "updated_at": "2025-03-21T12:03:17.818Z",
+      "resource_count": 6,
+      "resource_format": "pdf",
+      "timeframe_present": false,
+      "live_link_count": 0,
+      "classification": "internal-dummy-document-proof-of-concept"
+    }
+  },
+  "coverage": {
+    "current_30_day_population": false,
+    "older_open_population": false,
+    "newer_qualifying_resource_found": false,
+    "decision": "historical-fallback-insufficient",
+    "preserved_live_blocker": "official-http-429"
+  },
+  "sanitization": {
+    "metadata_only": true,
+    "omitted": [
+      "resource-bodies",
+      "attachment-bodies",
+      "application-identities",
+      "session-material",
+      "nonmatching-catalog-records"
+    ]
+  }
+}

@@ -22,7 +22,7 @@ requirement.
 
 | Authority | Fixture package | Recorded source evidence | Real adapter boundary | Live bootstrap | Two weekly cycles |
 |---|---|---|---|---|---|
-| Barnet | Verified | Weekly, detail, child, advanced-form, and capped current-list routes recorded | Exact-scope weekly, older-open, and active-appeal adapter; 30-day qualification stopped during detail collection on HTTP 429 | Blocked | Open |
+| Barnet | Verified | Weekly, detail, child, advanced-form, and capped current-list routes recorded; official Open Data is decided-only through March 2021 | Exact-scope weekly, older-open, and active-appeal adapter; Open Data is historical-only; 30-day qualification stopped during detail collection on HTTP 429 | Blocked | Open |
 | Camden | Verified | Detail and 16-row document index recorded; comments open | Exact-reference JSF, Northgate detail, and document-index adapter; bounded discovery explicitly unavailable | Open | Open |
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
@@ -48,6 +48,13 @@ receipt exists. Its saved state permits a later bounded resume without losing
 committed work. All fifteen authorities still require a live bootstrap and two
 successful weekly cycles. Blocked and partial authorities remain in coverage
 denominators and failure reporting until those checks succeed.
+
+The official Open Barnet catalogue does not remove that blocker. Its 13
+planning resources are annual decided-application extracts ending in March
+2021. The only newer planning-named catalogue item is explicitly internal dummy
+document proof-of-concept data, not an application or status population. Open
+Data is recorded as an insufficient historical fallback and Barnet remains
+blocked pending a respectful resume against the recovered Public Access source.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds
