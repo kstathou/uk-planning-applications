@@ -358,12 +358,9 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
 
 
 def test_cheshire_weekly_contract_failure_boundaries() -> None:
-    counted_table = (
-        _weekly_results()
-        .replace(
-            b"<table>",
-            b'<table data-result-count="50">',
-        )
+    counted_table = _weekly_results().replace(
+        b"<table>",
+        b'<table data-result-count="50">',
     )
     counted = (
         b'<section data-weekly-results="true">'
@@ -654,9 +651,7 @@ def test_cheshire_nonzero_recent_results_remain_unproved(tmp_path: Path) -> None
             "2026-09-16",
             "--include-open",
         ],
-        session_factory=lambda: _QualificationSession(
-            search_results=_search_results()
-        ),
+        session_factory=lambda: _QualificationSession(search_results=_search_results()),
         now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
     )
 

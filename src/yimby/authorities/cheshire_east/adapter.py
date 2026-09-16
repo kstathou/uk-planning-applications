@@ -256,8 +256,12 @@ def parse_search_form(body: bytes) -> Tag:
         _raise_parse("search form name")
     if urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _SEARCH_POST_URL:
         _raise_parse("search form action")
-    for name in ("fa", "submitted", "valid_date_from", "valid_date_to"):
-        _unique_named_control(form, name)
+    controls = {
+        name: _enabled_named_control(form, name)
+        for name in ("fa", "submitted", "valid_date_from", "valid_date_to")
+    }
+    if controls["fa"].get("value") != "search":
+        _raise_parse("search form discriminator")
     return form
 
 
@@ -266,6 +270,13 @@ def _unique_named_control(form: Tag, name: str) -> Tag:
     if len(controls) != 1 or not isinstance(controls[0], Tag):
         _raise_parse(name)
     return controls[0]
+
+
+def _enabled_named_control(form: Tag, name: str) -> Tag:
+    control = _unique_named_control(form, name)
+    if control.has_attr("disabled"):
+        _raise_parse(name)
+    return control
 
 
 def valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
@@ -327,8 +338,10 @@ def parse_weekly_form(body: bytes) -> Tag:
         or urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _WEEKLY_RECEIVED_URL
     ):
         _raise_parse("weekly received form")
-    _unique_named_control(form, "week")
-    _unique_named_control(form, "fa")
+    _enabled_named_control(form, "week")
+    discriminator = _enabled_named_control(form, "fa")
+    if discriminator.get("value") != "":
+        _raise_parse("weekly received discriminator")
     return form
 
 
@@ -420,15 +433,22 @@ def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
                 detail_locator=locator,
             )
         )
+    table = matches[0]
+    parent = table.parent
+    boundary = (
+        parent
+        if isinstance(parent, Tag) and parent.name not in {"[document]", "body", "html"}
+        else table
+    )
     pagination_links = tuple(
         str(link["href"])
-        for link in soup.select('.pagination a[href], a[rel="next"], a[rel="prev"]')
+        for link in boundary.select('.pagination a[href], a[rel="next"], a[rel="prev"]')
     )
-    total = _reported_total(soup)
+    total = _reported_total(boundary)
     terminal_marker = any(
         _normalise_label(element.get_text(" ", strip=True))
         in {"all applications loaded", "all results loaded"}
-        for element in soup.select("button, [role='status']")
+        for element in boundary.select("button, [role='status']")
     )
     return CheshireEastWeeklyBoundaryV1(
         rows=tuple(rows),
@@ -453,8 +473,10 @@ def _detail_locator(href: str) -> str:
     return values["id"][0]
 
 
-def _reported_total(soup: BeautifulSoup) -> int | None:
-    nodes = soup.select("[data-result-count]")
+def _reported_total(boundary: Tag | BeautifulSoup) -> int | None:
+    nodes = boundary.select("[data-result-count]")
+    if boundary.has_attr("data-result-count"):
+        nodes.insert(0, boundary)
     if not nodes:
         return None
     if len(nodes) != 1 or not str(nodes[0].get("data-result-count", "")).isdigit():
