@@ -911,7 +911,8 @@ def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
     tables = tuple(
         table
         for table in soup.select("table")
-        if {"type", "date"}.issubset(
+        if table.select_one('a[href*="viewDocument"]') is not None
+        or {"type", "date"}.issubset(
             {
                 _normalise_label(header.get_text(" ", strip=True))
                 for header in table.select("th")

@@ -118,9 +118,11 @@ def _document_index() -> bytes:
 
 
 def _headerless_document_index() -> bytes:
-    return b"""
+    return (
+        b"""
     <table><tr><td>
-      <form method="post" action="showDocuments?reference=FG/95/26/HH&amp;module=pl&amp;filterBy=TYPE">
+      <form method="post" action="showDocuments?reference=FG/95/26/HH"""
+        b"""&amp;module=pl&amp;filterBy=TYPE">
         <select name="selectedtype"><option value=""></option></select>
       </form>
     </td></tr></table>
@@ -131,6 +133,7 @@ def _headerless_document_index() -> bytes:
       <td>Application Form - Without Personal Data</td></tr>
     </table>
     """
+    )
 
 
 class _Session:
