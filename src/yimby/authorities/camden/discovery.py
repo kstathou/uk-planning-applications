@@ -8,15 +8,26 @@ import re
 from dataclasses import dataclass
 from datetime import date  # noqa: TC003 - Pydantic resolves this annotation at runtime.
 from enum import StrEnum
-from typing import Annotated, Literal, NoReturn, Self
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, Self
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pydantic import ConfigDict, Field, HttpUrl, RootModel, model_validator
 
-from yimby.domain import DiscoveryWindow, FrozenModel
+from yimby.domain import (
+    DiscoveryBatch,
+    DiscoveryWindow,
+    FrozenModel,
+    SourceId,
+    SourceReference,
+)
 from yimby.transport import FormField, PortalRequest, RequestIntent, RequestMethod
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from yimby.transport import PortalSession
 
 GENERAL_SEARCH_URL = (
     "https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer/GeneralSearch.aspx"
@@ -27,6 +38,7 @@ _GENERAL_SEARCH_PATHS = {
 }
 _RESULT_PAGE_SIZE = 10
 _EMPTY_RESULTS = "No Records Found. Please resubmit search with different criteria."
+CAMDEN_SOURCE = SourceId("camden-jsf-search")
 _OVERRIDDEN_CONTROLS = {
     "txtApplicationNumber",
     "txtApplicantName",
@@ -311,6 +323,96 @@ def initial_live_checkpoint(window: DiscoveryWindow) -> CamdenCheckpointV1:
     )
 
 
+async def discover_live(
+    session: PortalSession,
+    window: DiscoveryWindow,
+    checkpoint: CamdenCheckpointV1 | None,
+) -> AsyncIterator[DiscoveryBatch[CamdenCheckpointV1]]:
+    """Enumerate the exact inventory with semantic resumable progress."""
+    progress = _live_progress(checkpoint, window)
+    if _checkpoint_is_terminal(progress):
+        yield DiscoveryBatch(
+            references=(),
+            next_checkpoint=CamdenCheckpointV1(root=progress),
+            complete=True,
+        )
+        return
+    while True:
+        cursor = progress.progress
+        if cursor.kind == "terminal":
+            break
+        query_index = (
+            cursor.next_query_index
+            if isinstance(cursor, CamdenBetweenQueriesV1)
+            else cursor.query_index
+        )
+        query = progress.query_inventory[query_index]
+        first_page = await _submit_query(session, query)
+        if isinstance(cursor, CamdenPagingQueryV1):
+            page = await _replay_prefix(session, first_page, cursor)
+            query_references = cursor.ordered_prefix
+            reported_count = cursor.reported_count
+        else:
+            page = first_page
+            query_references = ()
+            reported_count = first_page.reported_count
+        while True:
+            if page.reported_count != reported_count:
+                _raise_resume_drift("reported total changed during query")
+            query_references = _append_query_page(query_references, page.references)
+            seen, fresh = _merge_seen(progress.seen_references, page.references)
+            if page.next_url is None:
+                completed = CamdenCompletedQueryV1(
+                    query=query,
+                    reported_count=reported_count,
+                    ordered_references=query_references,
+                )
+                completed_queries = (*progress.completed_queries, completed)
+                next_index = query_index + 1
+                next_progress: CamdenLiveProgressV1 = (
+                    CamdenTerminalV1()
+                    if next_index == len(progress.query_inventory)
+                    else CamdenBetweenQueriesV1(next_query_index=next_index)
+                )
+            else:
+                completed_queries = progress.completed_queries
+                next_progress = CamdenPagingQueryV1(
+                    query_index=query_index,
+                    reported_count=reported_count,
+                    next_offset=len(query_references),
+                    ordered_prefix=query_references,
+                )
+            progress = CamdenLiveCheckpointV1(
+                scope=progress.scope,
+                query_inventory=progress.query_inventory,
+                completed_queries=completed_queries,
+                seen_references=seen,
+                progress=next_progress,
+            )
+            yield DiscoveryBatch(
+                references=tuple(
+                    SourceReference(
+                        source_id=CAMDEN_SOURCE,
+                        reference=item.reference,
+                        locator=item.locator,
+                    )
+                    for item in fresh
+                ),
+                next_checkpoint=CamdenCheckpointV1(root=progress),
+                complete=isinstance(next_progress, CamdenTerminalV1),
+            )
+            if page.next_url is None:
+                break
+            requested_offset = len(query_references)
+            capture = await session.fetch(
+                PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
+            )
+            page = _parse_result_page(
+                capture.body,
+                requested_offset=requested_offset,
+            )
+
+
 def _require_unique_references(
     references: tuple[CamdenSeenReferenceV1, ...],
     *,
@@ -365,6 +467,106 @@ def _active_prefix(
         message = "Camden active query is outside the inventory"
         raise ValueError(message)
     return progress.ordered_prefix
+
+
+def _live_progress(
+    checkpoint: CamdenCheckpointV1 | None,
+    window: DiscoveryWindow,
+) -> CamdenLiveCheckpointV1:
+    if checkpoint is None:
+        initial = initial_live_checkpoint(window).root
+        if isinstance(initial, CamdenLiveCheckpointV1):
+            return initial
+        message = "Camden initial checkpoint was not live"
+        raise CamdenCheckpointModeError(message)
+    if not isinstance(checkpoint.root, CamdenLiveCheckpointV1):
+        message = "Camden fixture checkpoint cannot resume live discovery"
+        raise CamdenCheckpointModeError(message)
+    expected_scope = CamdenDiscoveryScopeV1.from_window(window)
+    if checkpoint.root.scope != expected_scope:
+        raise CamdenCheckpointScopeError(checkpoint.root.scope, expected_scope)
+    return checkpoint.root
+
+
+def _checkpoint_is_terminal(checkpoint: CamdenLiveCheckpointV1) -> bool:
+    return checkpoint.progress.kind == "terminal"
+
+
+async def _submit_query(
+    session: PortalSession,
+    query: CamdenDiscoveryQueryV1,
+) -> _CamdenResultPage:
+    form_capture = await session.fetch(
+        PortalRequest(url=HttpUrl(GENERAL_SEARCH_URL), intent=RequestIntent.SEARCH)
+    )
+    form = _parse_general_search_form(form_capture.body)
+    result_capture = await session.fetch(_search_request(form, query))
+    return _parse_result_page(result_capture.body, requested_offset=0)
+
+
+async def _replay_prefix(
+    session: PortalSession,
+    first_page: _CamdenResultPage,
+    cursor: CamdenPagingQueryV1,
+) -> _CamdenResultPage:
+    page = first_page
+    consumed = 0
+    while consumed < len(cursor.ordered_prefix):
+        if page.reported_count != cursor.reported_count:
+            _raise_resume_drift("reported total changed during resume")
+        end = consumed + len(page.references)
+        if end > len(cursor.ordered_prefix):
+            _raise_resume_drift("replayed page crossed committed prefix")
+        if page.references != cursor.ordered_prefix[consumed:end]:
+            _raise_resume_drift("committed query prefix changed")
+        consumed = end
+        if consumed < len(cursor.ordered_prefix):
+            if page.next_url is None:
+                _raise_resume_drift("committed prefix lost its pager")
+            capture = await session.fetch(
+                PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
+            )
+            page = _parse_result_page(capture.body, requested_offset=consumed)
+    if consumed != cursor.next_offset or page.next_url is None:
+        _raise_resume_drift("committed prefix cannot continue")
+    capture = await session.fetch(
+        PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
+    )
+    return _parse_result_page(capture.body, requested_offset=cursor.next_offset)
+
+
+def _append_query_page(
+    prefix: tuple[CamdenSeenReferenceV1, ...],
+    page: tuple[CamdenSeenReferenceV1, ...],
+) -> tuple[CamdenSeenReferenceV1, ...]:
+    combined = (*prefix, *page)
+    try:
+        _require_unique_references(combined, context="query membership")
+    except ValueError as error:
+        message = "query returned a duplicate reference"
+        raise CamdenResumeDriftError(message) from error
+    return combined
+
+
+def _merge_seen(
+    seen: tuple[CamdenSeenReferenceV1, ...],
+    page: tuple[CamdenSeenReferenceV1, ...],
+) -> tuple[
+    tuple[CamdenSeenReferenceV1, ...],
+    tuple[CamdenSeenReferenceV1, ...],
+]:
+    by_reference = {item.reference: item.locator for item in seen}
+    updated = list(seen)
+    fresh: list[CamdenSeenReferenceV1] = []
+    for item in page:
+        locator = by_reference.get(item.reference)
+        if locator is None:
+            by_reference[item.reference] = item.locator
+            updated.append(item)
+            fresh.append(item)
+        elif locator != item.locator:
+            _raise_resume_drift("public reference changed Northgate locator")
+    return tuple(updated), tuple(fresh)
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,6 +846,31 @@ def _normalize_portal_href(href: str, *, base: str) -> str:
 
 class CamdenDiscoveryParseError(ValueError):
     """A Camden GeneralSearch boundary did not match its captured contract."""
+
+
+class CamdenCheckpointModeError(ValueError):
+    """A fixture checkpoint was supplied to live discovery or vice versa."""
+
+
+class CamdenCheckpointScopeError(ValueError):
+    """Durable Camden progress belongs to another discovery scope."""
+
+    def __init__(
+        self,
+        actual: CamdenDiscoveryScopeV1,
+        expected: CamdenDiscoveryScopeV1,
+    ) -> None:
+        """Report the conflicting typed scopes without session data."""
+        super().__init__(f"Camden checkpoint scope {actual} does not match {expected}")
+
+
+class CamdenResumeDriftError(RuntimeError):
+    """A fresh portal session did not reproduce committed query progress."""
+
+
+def _raise_resume_drift(reason: str) -> NoReturn:
+    message = f"Camden resume drift: {reason}"
+    raise CamdenResumeDriftError(message)
 
 
 def _raise_discovery_parse(field: str) -> NoReturn:

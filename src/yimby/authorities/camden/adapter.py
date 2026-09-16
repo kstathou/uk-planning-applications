@@ -14,6 +14,13 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 from pydantic import HttpUrl
 
+from yimby.authorities.camden.discovery import (
+    CAMDEN_SOURCE,
+    CamdenCheckpointModeError,
+    CamdenCheckpointV1,
+    CamdenFixtureCheckpointV1,
+    discover_live,
+)
 from yimby.domain import (
     ApplicationMetadata,
     AuthorityId,
@@ -54,7 +61,7 @@ if TYPE_CHECKING:
     from yimby.domain import EvidenceCapture
     from yimby.transport import PortalSession
 
-SEARCH_SOURCE = SourceId("camden-jsf-search")
+SEARCH_SOURCE = CAMDEN_SOURCE
 SEARCH_BASE = "https://accountforms.camden.gov.uk/planning-search"
 DETAIL_BASE = "https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer"
 DOCUMENT_BASE = "https://camdocs.camden.gov.uk/CMWebDrawer/PlanRec"
@@ -63,12 +70,6 @@ _REDIRECT_BASE = (
 )
 _DATE_FORMATS = ("%d/%m/%Y", "%d %B %Y", "%d %b %Y", "%Y-%m-%d")
 _MINIMUM_LABELLED_CELLS = 2
-
-
-class CamdenCheckpointV1(FrozenModel):
-    """Camden fixture cursor; bounded live enumeration remains unavailable."""
-
-    view_state_page: str
 
 
 class CamdenDocumentV1(FrozenModel):
@@ -130,10 +131,18 @@ class CamdenAdapter:
         window: DiscoveryWindow,
         checkpoint: CamdenCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[CamdenCheckpointV1]]:
-        """Preserve fixtures and reject unproven live date enumeration."""
+        """Preserve fixtures and enumerate the verified live query inventory."""
         if session.mode != TransportMode.FIXTURE:
-            raise CamdenBoundedDiscoveryUnavailableError
-        cursor = "initial" if checkpoint is None else checkpoint.view_state_page
+            async for batch in discover_live(session, window, checkpoint):
+                yield batch
+            return
+        if checkpoint is None:
+            cursor = "initial"
+        elif isinstance(checkpoint.root, CamdenFixtureCheckpointV1):
+            cursor = checkpoint.root.view_state_page
+        else:
+            message = "Camden live checkpoint cannot resume fixture discovery"
+            raise CamdenCheckpointModeError(message)
         url = (
             f"{SEARCH_BASE}/search?from={window.start.isoformat()}"
             f"&to={window.end.isoformat()}&view={quote(cursor)}"
@@ -149,7 +158,9 @@ class CamdenAdapter:
         next_page = _required_fixture(html, r'data-camden-next="([^"]+)"', "next page")
         yield DiscoveryBatch(
             references=references,
-            next_checkpoint=CamdenCheckpointV1(view_state_page=next_page),
+            next_checkpoint=CamdenCheckpointV1(
+                root=CamdenFixtureCheckpointV1(view_state_page=next_page)
+            ),
             complete=next_page == "complete",
         )
 
@@ -550,14 +561,6 @@ class CamdenParseError(ValueError):
         """Name a safe parser field."""
         self.code = f"parse-{re.sub(r'[^a-z0-9]+', '-', field.casefold()).strip('-')}"
         super().__init__(f"missing Camden field {field}")
-
-
-class CamdenBoundedDiscoveryUnavailableError(RuntimeError):
-    """The captured search cannot enumerate a complete date interval."""
-
-    def __init__(self) -> None:
-        """Distinguish unsupported discovery from an empty result."""
-        super().__init__("Camden bounded live discovery is not verified")
 
 
 class CamdenExactSearchLiveOnlyError(ValueError):

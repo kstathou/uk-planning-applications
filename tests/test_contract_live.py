@@ -589,17 +589,6 @@ def test_devon_window_disclaimer_cap_and_identity_boundaries() -> None:
 
 def test_camden_discovery_search_document_and_identity_boundaries() -> None:
     adapter = camden.CamdenAdapter()
-    live = _Session(_CamdenMock())
-    with pytest.raises(camden.CamdenBoundedDiscoveryUnavailableError):
-        asyncio.run(
-            _batches(
-                adapter,
-                live,
-                DiscoveryWindow(start=date(2026, 9, 1), end=date(2026, 9, 16)),
-                None,
-            )
-        )
-    assert live.requests == []
     fixture = _Session(_CamdenMock(), mode=TransportMode.FIXTURE)
     with pytest.raises(camden.CamdenExactSearchLiveOnlyError):
         asyncio.run(adapter.resolve_exact(fixture, "2026/2706/L"))

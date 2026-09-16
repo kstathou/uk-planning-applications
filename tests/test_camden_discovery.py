@@ -4,7 +4,7 @@
 """Camden GeneralSearch discovery and checkpoint behavior."""
 
 import asyncio
-from datetime import UTC, date, datetime
+from datetime import date
 from hashlib import sha256
 from urllib.parse import parse_qsl, urlsplit
 
@@ -14,9 +14,9 @@ from pydantic import ValidationError
 from yimby.authorities.camden import discovery
 from yimby.authorities.camden.adapter import CamdenAdapter
 from yimby.domain import (
+    DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
-    DiscoveryWindow,
     TransportMode,
 )
 from yimby.transport import PortalRequest, RequestMethod
@@ -318,7 +318,11 @@ def _mock_page(
     rows = references[offset : offset + 10]
     first = offset + 1
     last = offset + len(rows)
-    marker = f"Record {first} of {total}" if len(rows) == 1 else f"Records {first} to {last} of {total}"
+    marker = (
+        f"Record {first} of {total}"
+        if len(rows) == 1
+        else f"Records {first} to {last} of {total}"
+    )
     rendered = "".join(
         f"""
         <tr class="Row1"><td title="View Application Details">
@@ -343,7 +347,9 @@ def _mock_page(
 
 class _DiscoveryPortal:
     def __init__(self, *, drift: bool = False) -> None:
-        recent = tuple((f"2026/{index}/P", str(1000 + index - 1)) for index in range(1, 13))
+        recent = tuple(
+            (f"2026/{index}/P", str(1000 + index - 1)) for index in range(1, 13)
+        )
         if drift:
             recent = (("2026/CHANGED/P", "9999"), *recent[1:])
         self.rows = {
@@ -361,7 +367,7 @@ class _DiscoveryPortal:
         if request.method == RequestMethod.GET and url == discovery.GENERAL_SEARCH_URL:
             return _search_form()
         if request.method == RequestMethod.POST:
-            fields = dict((field.name, field.value) for field in request.form)
+            fields = {field.name: field.value for field in request.form}
             key = (
                 f"status:{fields['cboStatusCode']}"
                 if fields["rbGroup"] == "rbNotApplicable"
@@ -431,11 +437,11 @@ def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> N
     assert "XMLLoc" not in checkpoint.model_dump_json()
 
     resumed_session = _DiscoverySession(_DiscoveryPortal())
-    batches = asyncio.run(
-        _all_batches(adapter, resumed_session, window, checkpoint)
-    )
+    batches = asyncio.run(_all_batches(adapter, resumed_session, window, checkpoint))
 
-    emitted = [reference.reference for batch in batches for reference in batch.references]  # type: ignore[attr-defined]
+    emitted = [
+        reference.reference for batch in batches for reference in batch.references
+    ]  # type: ignore[attr-defined]
     assert emitted[:2] == ["2026/11/P", "2026/12/P"]
     assert emitted.count("2026/1/P") == 0
     assert emitted[-1] == "TP/TP/12531/180693"
@@ -452,7 +458,9 @@ def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> N
         0,
     ]
     requested = [str(request.url) for request in resumed_session.requests]
-    assert all("fresh-DATE_RECEIVED-1" in url or "XMLLoc" not in url for url in requested[:3])
+    assert all(
+        "fresh-DATE_RECEIVED-1" in url or "XMLLoc" not in url for url in requested[:3]
+    )
 
     rerun = _DiscoverySession(_DiscoveryPortal())
     rerun_batches = asyncio.run(_all_batches(adapter, rerun, window, terminal))

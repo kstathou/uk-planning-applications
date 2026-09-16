@@ -6,8 +6,8 @@ from yimby.adapters import AuthorityPackage
 from yimby.authorities.camden.adapter import (
     CamdenAdapter,
     CamdenApplicationV1,
-    CamdenCheckpointV1,
 )
+from yimby.authorities.camden.discovery import CamdenCheckpointV1
 
 CAMDEN_PACKAGE: AuthorityPackage[CamdenApplicationV1, CamdenCheckpointV1] = (
     AuthorityPackage(CamdenAdapter(), CamdenApplicationV1, CamdenCheckpointV1)
