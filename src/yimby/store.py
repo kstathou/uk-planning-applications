@@ -1072,6 +1072,30 @@ class SqliteStore:
             unmapped_records=counts["unmapped_records"],
         )
 
+    def authority_completeness(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[Completeness, ...]:
+        """Return each authority application's latest section states."""
+        rows = self._connection.execute(
+            """
+            SELECT observation.completeness_json
+            FROM observations AS observation
+            JOIN applications AS application
+                ON application.id = observation.application_id
+            WHERE application.authority_id = ?
+                AND observation.id = (
+                    SELECT MAX(latest.id) FROM observations AS latest
+                    WHERE latest.application_id = observation.application_id
+                )
+            ORDER BY observation.application_id
+            """,
+            (authority_id,),
+        )
+        return tuple(
+            _COMPLETENESS.validate_json(row["completeness_json"]) for row in rows
+        )
+
     def authority_reference_sets(
         self,
         authority_id: AuthorityId,

@@ -32,6 +32,7 @@ from yimby.authorities.camden.discovery import (
 )
 from yimby.collection import Collector
 from yimby.domain import (
+    ApplicationId,
     AuthorityId,
     DiscoveryWindow,
     EvidenceIntegrityReport,
@@ -60,6 +61,7 @@ _QUERY_COUNT = 5
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
+SectionVerifier = Callable[[SqliteStore], bool]
 
 
 class QualificationScope(FrozenModel):
@@ -169,6 +171,11 @@ class _QualificationState(FrozenModel):
     initial: QualificationCost
 
 
+class _QualificationPass(FrozenModel):
+    cost: QualificationCost
+    applications: tuple[ApplicationId, ...]
+
+
 class QualificationConfigError(ValueError):
     """One required safety option or scope value is invalid."""
 
@@ -228,14 +235,17 @@ async def _collect_once(
     collector: Collector,
     window: DiscoveryWindow,
     session_factory: SessionFactory,
-) -> QualificationCost:
+) -> _QualificationPass:
     session = session_factory()
     try:
         report = await collector.collect(_AUTHORITY_ID, window, session)
-        return QualificationCost(
-            request_count=len(report.requested_urls),
-            transferred_bytes=session.transferred_bytes,
-            attachment_body_requests=report.attachment_body_requests,
+        return _QualificationPass(
+            cost=QualificationCost(
+                request_count=len(report.requested_urls),
+                transferred_bytes=session.transferred_bytes,
+                attachment_body_requests=report.attachment_body_requests,
+            ),
+            applications=report.applications,
         )
     finally:
         await session.aclose()
@@ -355,7 +365,11 @@ def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
 def _base_checks(
     store: SqliteStore,
     state: _QualificationState,
+    *,
+    exposed_child_sections_verified: bool,
 ) -> tuple[QualificationCheck, ...]:
+    completeness = store.authority_completeness(_AUTHORITY_ID)
+    complete_kinds = {"complete", "empty"}
     return (
         QualificationCheck(
             name="terminal-checkpoint",
@@ -383,6 +397,25 @@ def _base_checks(
         QualificationCheck(
             name="failed-sections",
             ok=state.snapshot.failed_sections == 0,
+        ),
+        QualificationCheck(
+            name="required-sections-complete",
+            ok=(
+                len(completeness) == state.snapshot.applications
+                and all(
+                    section.kind in complete_kinds
+                    for item in completeness
+                    for section in (
+                        item.application,
+                        item.documents,
+                        item.comments,
+                    )
+                )
+            ),
+        ),
+        QualificationCheck(
+            name="exposed-child-sections-verified",
+            ok=exposed_child_sections_verified,
         ),
         QualificationCheck(
             name="unmapped-records",
@@ -422,6 +455,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
+    section_verifier: SectionVerifier,
 ) -> CamdenQualificationReceiptV1:
     collector = Collector(AuthorityRegistry((CAMDEN_PACKAGE,)), store)
     window = DiscoveryWindow(
@@ -430,7 +464,8 @@ async def _qualify(
         include_open=True,
     )
     prior_status_count = len(store.run_statuses())
-    initial = await _collect_once(collector, window, session_factory)
+    initial_pass = await _collect_once(collector, window, session_factory)
+    initial = initial_pass.cost
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     first_checkpoint = _terminal_checkpoint(store, config.scope)
     first_agreement = _reference_agreement(store, first_checkpoint)
@@ -442,12 +477,31 @@ async def _qualify(
         evidence=first_evidence,
         initial=initial,
     )
-    initial_checks = _base_checks(store, first_state)
+    exposed_child_sections_verified = section_verifier(store)
+    initial_checks = _base_checks(
+        store,
+        first_state,
+        exposed_child_sections_verified=exposed_child_sections_verified,
+    )
     _require(initial_checks)
     first_checkpoint = _require_checkpoint(first_checkpoint)
     first_query_results = _query_results(first_checkpoint)
 
-    rerun = await _collect_once(collector, window, session_factory)
+    expected_refreshes = tuple(
+        view.application.id
+        for view in store.application_views()
+        if view.application.authority_id == _AUTHORITY_ID
+    )
+    refresh_due = datetime.min.replace(tzinfo=UTC)
+    for application_id in expected_refreshes:
+        store.set_refresh_schedule(
+            application_id,
+            refresh_due,
+            "immediate",
+            "same-day-qualification-refresh",
+        )
+    rerun_pass = await _collect_once(collector, window, session_factory)
+    rerun = rerun_pass.cost
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     final_checkpoint = _terminal_checkpoint(store, config.scope)
     final_agreement = _reference_agreement(store, final_checkpoint)
@@ -461,7 +515,11 @@ async def _qualify(
         initial=initial,
     )
     final_checks = (
-        *_base_checks(store, final_state),
+        *_base_checks(
+            store,
+            final_state,
+            exposed_child_sections_verified=exposed_child_sections_verified,
+        ),
         QualificationCheck(
             name="idempotent-rerun",
             ok=(
@@ -473,10 +531,12 @@ async def _qualify(
             ),
         ),
         QualificationCheck(
-            name="terminal-rerun-requests",
+            name="immediate-refresh",
             ok=(
-                rerun.request_count == 0
-                and rerun.transferred_bytes == 0
+                bool(expected_refreshes)
+                and set(rerun_pass.applications) == set(expected_refreshes)
+                and len(rerun_pass.applications) == len(expected_refreshes)
+                and rerun.request_count > 0
                 and rerun.attachment_body_requests == 0
             ),
         ),
@@ -554,6 +614,10 @@ def _default_clock() -> datetime:
     return datetime.now(UTC)
 
 
+def _unverified_child_sections(_store: SqliteStore) -> bool:
+    return False
+
+
 def _error(code: str, exit_code: int, **details: object) -> int:
     print(json.dumps({"error": code, **details}, sort_keys=True), file=sys.stderr)
     return exit_code
@@ -564,6 +628,7 @@ def main(
     *,
     session_factory: SessionFactory = _default_session,
     now: Clock = _default_clock,
+    section_verifier: SectionVerifier = _unverified_child_sections,
 ) -> int:
     """Run explicit live qualification and emit its atomic proof receipt."""
     try:
@@ -579,7 +644,15 @@ def main(
             try:
                 if config.resume and not _resume_scope_matches(store, config.scope):
                     raise QualificationConfigError(_RESUME_SCOPE_MISMATCH)
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt = asyncio.run(
+                    _qualify(
+                        store,
+                        config,
+                        session_factory,
+                        now,
+                        section_verifier,
+                    )
+                )
                 _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
             finally:
                 store.close()

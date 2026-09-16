@@ -16,10 +16,22 @@ from urllib.parse import parse_qsl, urlsplit
 
 import pytest  # noqa: TC002 - Runtime assertions use pytest.raises.
 
+from yimby.adapters import AuthorityPackage
 from yimby.authorities.camden import discovery
-from yimby.authorities.camden.adapter import DOCUMENT_BASE
-from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
-from yimby.transport import PortalRequest, RequestMethod
+from yimby.authorities.camden.adapter import (
+    DOCUMENT_BASE,
+    CamdenAdapter,
+    CamdenApplicationV1,
+)
+from yimby.domain import (
+    EmptySection,
+    EvidenceCapture,
+    EvidenceDigest,
+    NativeSnapshot,
+    SourceReference,
+    TransportMode,
+)
+from yimby.transport import PortalRequest, PortalSession, RequestMethod
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -34,6 +46,32 @@ def _qualification_module() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+class _VerifiedCommentsCamdenAdapter(CamdenAdapter):
+    async def fetch(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> NativeSnapshot[CamdenApplicationV1]:
+        snapshot = await super().fetch(session, reference)
+        return snapshot.model_copy(
+            update={
+                "completeness": snapshot.completeness.model_copy(
+                    update={"comments": EmptySection()}
+                )
+            }
+        )
+
+
+def _verified_qualification_module() -> ModuleType:
+    module = _qualification_module()
+    module.__dict__["CAMDEN_PACKAGE"] = AuthorityPackage(
+        _VerifiedCommentsCamdenAdapter(),
+        CamdenApplicationV1,
+        discovery.CamdenCheckpointV1,
+    )
     return module
 
 
@@ -201,11 +239,11 @@ def test_camden_qualification_requires_exact_safe_scope(
     assert created == 0
 
 
-def test_camden_qualification_writes_proof_receipt_and_zero_io_rerun(
+def test_camden_qualification_writes_proof_receipt_and_immediate_refresh(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    module = _qualification_module()
+    module = _verified_qualification_module()
     data_dir = tmp_path / "qualification"
     sessions: list[_Session] = []
 
@@ -218,13 +256,14 @@ def test_camden_qualification_writes_proof_receipt_and_zero_io_rerun(
         _args(data_dir),
         session_factory=factory,
         now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+        section_verifier=lambda _store: True,
     )
 
     assert result == 0
     assert len(sessions) == 2
     assert all(session.closed for session in sessions)
     assert len(sessions[0].requested_urls) == 16
-    assert sessions[1].requested_urls == ()
+    assert len(sessions[1].requested_urls) == 6
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["schema_version"] == 1
     assert receipt["authority_id"] == "camden"
@@ -251,8 +290,8 @@ def test_camden_qualification_writes_proof_receipt_and_zero_io_rerun(
     assert receipt["evidence_integrity"]["captures_checked"] == 4
     assert receipt["evidence_integrity"]["issues"] == []
     assert receipt["costs"]["rerun"] == {
-        "request_count": 0,
-        "transferred_bytes": 0,
+        "request_count": 6,
+        "transferred_bytes": sessions[1].transferred_bytes,
         "attachment_body_requests": 0,
     }
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
@@ -286,4 +325,26 @@ def test_camden_qualification_refuses_failed_document_sections(
     assert error["error"] == "qualification-failed"
     assert "failed-sections" in error["failed_checks"]
     assert len(sessions) == 1
+    assert not (data_dir / "camden-qualification-v1.json").exists()
+
+
+def test_camden_qualification_refuses_unavailable_comments(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "comments-unavailable"
+
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=lambda: _Session(_Portal()),
+        )
+        == 1
+    )
+
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "required-sections-complete" in error["failed_checks"]
+    assert "exposed-child-sections-verified" in error["failed_checks"]
     assert not (data_dir / "camden-qualification-v1.json").exists()
