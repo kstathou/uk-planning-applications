@@ -4,10 +4,12 @@ Walkthrough and qualification date: 16 September 2026.
 
 ## Source and scope
 
-- Planning register: `https://planning.devon.gov.uk/`
-- Covered records: minerals, waste, and county council development.
+- Planning and appeal register: `https://planning.devon.gov.uk/`
+- Covered records: minerals, waste, county council development, and associated
+  appeals.
 - Qualification window: 18 August through 16 September 2026, inclusive.
-- Older-open policy: planning applications with `Outstanding=true`.
+- Older-open policy: both planning applications and appeals with
+  `Outstanding=true`.
 
 The official register presents a copyright and data-use disclaimer before a
 protected route when the session has not accepted it. The acceptance form posts
@@ -17,80 +19,87 @@ an application record.
 ## Exact discovery contract
 
 The adapter fetches `/Search/Advanced`, requires one POST form with action
-`/Search/Results`, and preserves the form's successful controls in DOM order.
-The captured controls include the verification token, `AdvancedSearch`, the
-checkbox-plus-hidden pairs for `Outstanding`, `SearchPlanning`,
-`SearchEnforcement`, and `SearchAppeals`, and every text, select, and date field.
-Planning stays selected while enforcement and appeals stay unselected.
+`/Search/Results`, and preserves successful controls in DOM order. It switches
+the source-owned `SearchPlanning` and `SearchAppeals` controls for the relevant
+query while leaving enforcement disabled.
 
 The ordered qualification inventory is exactly:
 
-1. `received:2026-08-18:2026-09-16` — 3 rows.
-2. `determined:2026-08-18:2026-09-16` — 1 row, returned directly as the
-   page-one detail for `PRE/1820/2026`.
+1. `received:2026-08-18:2026-09-16` — 3 rows on one page.
+2. `determined:2026-08-18:2026-09-16` — 1 row on one page, returned directly
+   as the detail for `PRE/1820/2026`.
 3. `outstanding:planning:true` — 55 rows on six pages of
    `10, 10, 10, 10, 10, 5`.
+4. `appeal-received:2026-08-18:2026-09-16` — 0 rows on one terminal page.
+5. `appeal-determined:2026-08-18:2026-09-16` — 0 rows on one terminal page.
+6. `outstanding:appeals:true` — 11 rows on two pages of `10, 1`.
 
-The result pages do not publish a total or displayed row range. Completeness is
+Planning results link to `/Planning/Display/...`; appeal results link to the
+distinct `/Appeals/Display/...` contract. Both origins and exact path families
+are validated before every request and redirect.
+
+Result pages do not publish a total or displayed row range. Completeness is
 therefore proved only from observable pager facts: one current-page marker, the
 complete consecutive numbered-link inventory, exact portal-provided locators,
 ten rows on every page with a forward link, and no forward link on the terminal
-page. The adapter never constructs a pagination URL. A full page without a
-pager, a malformed current marker, shifted replay content, a mixed detail/result
-shape, a singleton detail carrying pager controls, or a singleton after page
-one fails closed.
+page. The adapter never constructs a pagination URL. Malformed, shifted,
+truncated, duplicated, or mixed result shapes fail closed.
 
-The persisted checkpoint stores the exact scope, completed-query prefix,
-completed-query row and page totals, active-page replay proofs, and every unique
-human reference with its detail locator. Resume replays already committed pages
-and compares their ordered references and pager evidence before continuing. A
-coherent terminal checkpoint returns before opening a network route. The
-qualification receipt therefore retains the observed `3/1/55` row totals and
-`1/1/6` page totals after terminal checkpoint compaction.
+The persisted checkpoint owns the exact scope, completed-query prefix, durable
+row and page totals, active-page replay proofs, and every unique reference with
+its source locator. Partial scope changes are rejected. A coherent terminal
+checkpoint may start the next weekly scope, while an exact terminal rerun
+returns before opening a network route.
 
-## Application records and documents
+## Native records and documents
 
-Detail pages expose labelled fields for application number and type, case
-officer, received and valid dates, status, proposal, location, decision fields,
-applicant and agent, and plural district, electoral-division, and parish labels.
-A dash in an optional date is retained as no date.
+Planning details retain application and decision fields, consultation expiry,
+committee and issue dates, applicant and agent addresses, local members, BNG
+coordinates where published, constraints, and planning-consultee rows. Appeal
+details retain the related planning and enforcement references, UPRN, site,
+appeal type and method, appellant and agent fields, all published appeal
+milestones, officers, PINS reference, parish and ward, decision and abeyance
+fields, costs fields, coordinates where published, and appeal-consultee rows.
+The source's malformed but non-empty consultee rows are retained without
+guessing at missing columns.
 
-Associated documents are already present in the returned HTML behind the
-`PlanningdocTable` marker and `document-list` table. Only exact HTTPS links on
-the official origin and `/Document/Download` path are accepted. Those links
-expose module, record number, plan identifier, image identifier, plan flag, and
-filename metadata. The qualification retained 1,368
-current document metadata rows across 25 applications. The other 31 detail
-responses did not expose a document section and are recorded as unavailable,
-not empty, so they cannot overwrite previously known documents. The run made
-zero attachment body requests. Public comments and consultee responses remain
-represented only as published document attachments, so their text is explicitly
-unavailable in the common comments section.
+The live store contains 56 planning records and 11 appeal records. It has 30
+published BNG coordinate pairs (24 planning and 6 appeal), 16 records with
+published constraints, and 21 with published consultations (16 planning and 5
+appeal).
+
+Document metadata is read only from the returned `PlanningdocTable` and
+`document-list` HTML. The parser validates the decorated header, category
+groups, three-cell rows, one exact official download link per row, and Created
+date. It retains module, record number, plan and image identifiers, plan flag,
+filename, category, and published date without opening an attachment. The
+qualification retained 1,470 current rows across 28 records: 1,368 planning
+rows across 25 records and 102 appeal rows across 3 records. The other 39
+records explicitly report documents unavailable. All comments remain
+unavailable because the register exposes responses as document attachments.
 
 ## Live qualification receipt
 
 The durable receipt is
-`.yimby/qualification-devon-2026-09-16/devon-qualification-v2.json` with SHA-256
-`93f25e8c0b905e5a0327def412d1347468a50d8fd7dd61f49249057391f0c196`.
+`.yimby/qualification-devon-2026-09-16/devon-qualification-v3.json` with SHA-256
+`0db784ad49bebd39d6094f095898c5e0c7c966f66bb30b514440cf8a7451270c`.
 It records:
 
-- all three completed query keys with their durable row and page totals;
-- 56 unique discovered references and 56 persisted applications;
-- 56 native and application versions, plus 25 complete document-section
-  versions and 31 explicitly unavailable document sections;
-- zero pending retries, failed current sections, unmapped records, comment
-  versions, and attachment body requests;
-- SQLite integrity and complete per-observation, registry, and
-  content-addressed evidence reconciliation passing, with every filesystem
-  entry inventoried so partial or noncanonical files fail qualification;
-- 68 official requests and 6,648,256 transferred bytes on the first pass;
-- an immediate terminal rerun with 0 requests, 0 bytes, and 0 attachment bodies;
-- two succeeded run statuses for the qualification attempt; and
-- byte-for-byte receipt preservation across a separate resumed command that also
-  performed no network I/O.
+- all six completed query keys with the row and page totals above;
+- 67 unique references, applications, native versions, observations, evidence
+  registrations, and compressed evidence files;
+- 67 application versions, 28 complete document-section versions, 39
+  explicitly unavailable document sections, and zero comment versions;
+- zero pending retries, failed current sections, unmapped records, and
+  attachment body requests;
+- SQLite integrity, exact durable reference/application agreement, complete
+  per-observation evidence reconciliation, and a canonical all-file inventory;
+- 86 official requests and 8,234,248 transferred bytes on the first pass;
+- an immediate terminal rerun with 0 requests, 0 bytes, and 0 attachment
+  bodies; and
+- byte-for-byte receipt preservation under a separate `--resume` command.
 
-All twelve named receipt checks pass. Weekly cycles due 23 and 30 September 2026
-are truthfully recorded as `pending`. The adapter and bootstrap are live
-collection verified for this scope, but operational qualification and
-`LIVE_READY` promotion remain prohibited until those genuinely later cycles
-succeed.
+All twelve named receipt checks pass. Weekly cycles due 23 and 30 September
+2026 remain truthfully `pending`. The adapter and bootstrap are live collection
+verified for this scope, but operational qualification and `LIVE_READY`
+promotion remain prohibited until those genuinely later cycles succeed.

@@ -40,7 +40,9 @@ Each authority owns a versioned Pydantic model for its native payload and checkp
 `NormalisedObservation` holds the common application, document, comment, event,
 relationship, consultation, condition, and location records. The complete
 authority-native JSON is retained separately. Mapped core fields carry the
-evidence digest that supports them.
+evidence digest that supports them. Common document records retain their
+source title and URL plus optional source category and published date; the
+store persists those fields without opening the attachment body.
 
 ## Boundaries
 
@@ -67,6 +69,8 @@ store calls serialize on the same event-loop thread and writer connection.
 The store enforces these invariants:
 
 - Queue insertion and checkpoint advancement share one transaction.
+- A completed authority checkpoint may roll to a new explicit discovery scope;
+  a partial checkpoint remains bound to its original scope and rejects drift.
 - Application identity uses authority and portal identifiers, never an address alone.
 - A semantic hash excludes transport timestamps, tokens, and irrelevant ordering.
 - An unchanged observation updates freshness without adding a version.

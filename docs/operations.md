@@ -110,8 +110,9 @@ uv run python scripts/smoke_peak_district.py --confirm-live
 ```
 
 Arun restricts discovery to its recorded received-date path. Devon uses its
-exact advanced-search form for a maximum 30-day received and determined
-window, with optional complete outstanding planning enumeration. Peak
+exact advanced-search form for maximum 30-day planning received and determined
+and appeal received and determined windows, with optional complete outstanding
+planning and appeal enumeration. Peak
 District's smoke remains a small rolling-week diagnostic, while its complete
 bootstrap uses the qualification command below. Camden's smoke reads one
 explicit reference from its official Socrata API without opening the planning
@@ -179,15 +180,20 @@ uv run python scripts/qualify_devon.py \
 ```
 
 The command requires an exact inclusive 30-day scope and an empty directory
-unless `--resume` is present. It runs the collection twice, verifies terminal
-checkpoint and query coherence, exact durable reference/application agreement,
-durable per-query row and page totals, retry and section state, SQLite
-integrity, per-observation evidence links, complete database/filesystem evidence
+unless `--resume` is present. Its six-query inventory covers dated and
+outstanding planning and appeals, including the distinct appeal result and
+detail routes. It runs the collection twice, verifies terminal checkpoint and
+query coherence, exact durable reference/application agreement, durable
+per-query row and page totals, retry and section state, SQLite integrity,
+per-observation evidence links, complete database/filesystem evidence
 reconciliation including noncanonical residual files, attachment policy,
-idempotence, and two succeeded run states, then fsyncs a versioned receipt. A
-terminal resume validates the current store without network I/O and preserves
-the original nonzero first-pass receipt. The receipt records later cycles as
-pending; it does not enable scheduling or promote registry readiness.
+idempotence, and two succeeded run states, then fsyncs a versioned receipt. If
+durable history already exists, qualification requires the original valid,
+nonzero live receipt before constructing a session; a missing or corrupt
+receipt cannot be re-minted from a terminal store. A terminal resume validates
+the current store without network I/O and preserves the original receipt
+byte-for-byte. The receipt records later cycles as pending; it does not enable
+scheduling or promote registry readiness.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:
