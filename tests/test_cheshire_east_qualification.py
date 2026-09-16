@@ -563,6 +563,13 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_results().replace(b'data-id="406569"', b'data-id="not-numeric"'),
         _search_results().replace(b"<th>Reference</th>", b"<th>Reference Notes</th>"),
         _search_results().replace(
+            b"<th>Reference</th>", b'<th class="hidden">Reference</th>'
+        ),
+        _search_results().replace(
+            b"<td>26/3335/PRIOR-1A</td>",
+            b'<td class="hidden">26/3335/PRIOR-1A</td>',
+        ),
+        _search_results().replace(
             b"</table>",
             b'</table><nav class="pagination" hidden><a href="?page=2">Next</a></nav>',
         ),
@@ -741,6 +748,12 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_results().replace(b"<td>24/0001D</td>", b"<td></td>"),
         _weekly_results().replace(b"24/0002D", b"24/0001D"),
         _weekly_results().replace(b"id=400002", b"id=400001"),
+        _weekly_results().replace(
+            b"<th>Application</th>", b'<th class="hidden">Application</th>'
+        ),
+        _weekly_results().replace(
+            b"<td>24/0001D</td>", b'<td class="hidden">24/0001D</td>'
+        ),
         b'<main class="hidden">' + _weekly_results() + b"</main>",
         b'<main style="visibility:hidden!important">'
         + _weekly_results()
@@ -832,6 +845,22 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
         ),
         (
             _detail().replace(b"<thead><tr>", b"<thead><tr><th>Unexpected</th>"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<th data-field-name="document_type">Document Type</th>',
+                b'<th class="hidden" data-field-name="document_type">'
+                b"Document Type</th>",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<td data-field-name="document_type">Submitted Plans</td>',
+                b'<td class="hidden" data-field-name="document_type">'
+                b"Submitted Plans</td>",
+            ),
             cheshire.CheshireEastParseError,
         ),
         (
