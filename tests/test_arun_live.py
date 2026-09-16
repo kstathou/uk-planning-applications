@@ -4,10 +4,14 @@
 """Arun live discovery and qualification contracts."""
 
 import asyncio
-from datetime import date, timedelta
+import importlib.util
+import json
+import sys
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from itertools import pairwise
 from typing import TYPE_CHECKING, cast
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -24,6 +28,8 @@ from yimby.transport import FormField, PortalRequest, RequestMethod
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
+    from pathlib import Path
+    from types import ModuleType
 
 
 def _search_form() -> bytes:
@@ -120,10 +126,13 @@ class _Session:
         self.responder = responder
         self.requests: list[PortalRequest] = []
         self._mode = mode
+        self._bytes = 0
+        self.closed = False
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
         body = self.responder(request)
+        self._bytes += len(body)
         return EvidenceCapture(
             url=request.url,
             media_type="text/html",
@@ -141,7 +150,7 @@ class _Session:
 
     @property
     def transferred_bytes(self) -> int:
-        return 0
+        return self._bytes
 
     @property
     def browser_time_ms(self) -> int:
@@ -152,7 +161,7 @@ class _Session:
         return self._mode
 
     async def aclose(self) -> None:
-        return None
+        self.closed = True
 
 
 class _DiscoveryResponder:
@@ -172,6 +181,30 @@ class _DiscoveryResponder:
             )
             return _partial_results(fields)
         return b"No applications found for entered search criteria"
+
+
+class _QualificationResponder(_DiscoveryResponder):
+    def __call__(self, request: PortalRequest) -> bytes:
+        url = str(request.url)
+        if "planningDetails" in url:
+            reference = parse_qs(urlsplit(url).query)["reference"][0]
+            return _detail_with_documents(reference)
+        if "showDocuments" in url:
+            return _document_index()
+        return super().__call__(request)
+
+
+def _qualification_module() -> "ModuleType":
+    path = __file__.rsplit("/tests/", maxsplit=1)[0]
+    module_path = f"{path}/scripts/qualify_arun.py"
+    name = "_test_qualify_arun"
+    spec = importlib.util.spec_from_file_location(name, module_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 async def _batches(
@@ -737,3 +770,115 @@ def test_arun_document_index_rejects_incomplete_tables_and_dates() -> None:
         arun._parse_document_index(
             _document_index().replace(b"15/09/2026", b"not-a-date", 1)
         )
+
+
+def test_arun_qualification_requires_explicit_safe_options(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    created = 0
+
+    def session_factory() -> _Session:
+        nonlocal created
+        created += 1
+        return _Session(_QualificationResponder())
+
+    base = [
+        "--data-dir",
+        str(tmp_path / "missing-confirmation"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(base, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "confirmation-required"
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "existing").write_text("preserve", encoding="utf-8")
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(occupied),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
+    assert created == 0
+
+
+def test_arun_qualification_receipt_proves_exact_state_and_zero_io_rerun(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    sessions: list[_Session] = []
+
+    def session_factory() -> _Session:
+        session = _Session(_QualificationResponder())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    result = module.main(
+        args,
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+    )
+
+    assert result == 0
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    assert len(sessions[0].requested_urls) == 66
+    assert sessions[1].requested_urls == ()
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "arun"
+    assert receipt["bootstrap_status"] == "proved"
+    assert receipt["operational_status"] == "pending-weekly-refreshes"
+    assert receipt["registry_readiness"] == "discovery-only"
+    assert len(receipt["query_inventory"]) == 60
+    assert receipt["query_inventory"][0]["query"] == {
+        "kind": "received",
+        "start": "2026-08-18",
+        "end": "2026-09-16",
+    }
+    assert receipt["query_inventory"][-1]["query"]["end"] == "2026-09-16"
+    assert receipt["references"] == {
+        "discovered": ["BR/1/26/PL", "BR/2/26/PL"],
+        "retained_native": ["BR/1/26/PL", "BR/2/26/PL"],
+        "applications": ["BR/1/26/PL", "BR/2/26/PL"],
+    }
+    assert receipt["evidence"]["capture_count"] == 4
+    assert len(receipt["semantic_fingerprint"]) == 64
+    assert receipt["costs"]["rerun"] == {
+        "request_count": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["weekly_cycles"] == [
+        {"target_date": "2026-09-23", "status": "pending"},
+        {"target_date": "2026-09-30", "status": "pending"},
+    ]
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert all(check["ok"] for check in receipt["checks"])
+    receipt_path = data_dir / "arun-qualification-v1.json"
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+    assert not (data_dir / ".arun-qualification-v1.json.tmp").exists()
