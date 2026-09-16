@@ -142,10 +142,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         LiveTransportKind.HTTP,
     ),
     AuthorityId("west-suffolk"): _status(
-        LiveReadiness.DISCOVERY_ONLY,
-        "weekly and recorded detail collection are implemented; "
-        "older-open is unresolved",
-        "captured West Suffolk IDOX weekly, summary, and document contracts",
+        LiveReadiness.LIVE_READY,
+        "live bootstrap and zero-request rerun passed on 16 September 2026",
+        "docs/evidence/west-suffolk-qualification-2026-09-16.json",
         LiveTransportKind.HTTP,
     ),
 }
