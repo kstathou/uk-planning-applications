@@ -472,8 +472,8 @@ def _receipt(
             QualificationBlockerV1(
                 code="weekly-list-terminality-unproven",
                 explanation=(
-                    "the historical weekly page published no total, pagination, "
-                    "or terminal marker"
+                    "the historical weekly page does not publish an internally "
+                    "consistent terminal boundary"
                 ),
             )
         )
