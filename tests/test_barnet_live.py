@@ -154,6 +154,8 @@ def _result_page(
     *,
     count: int,
     pages: int = 1,
+    start: int = 1,
+    current_page: int = 1,
 ) -> bytes:
     rows = "".join(
         (
@@ -171,9 +173,20 @@ def _result_page(
         )
         for page in range(1, pages + 1)
     )
+    displayed_range = (
+        ""
+        if pages == 1 or not references
+        else (
+            '<p class="pager"><span class="showing">'
+            f"Showing {start}-{start + len(references) - 1} of {count}"
+            "</span></p>"
+            f'<input name="searchCriteria.page" value="{current_page}">'
+        )
+    )
     return (
         "<!doctype html><html><body>"
-        f'<div data-result-count="{count}"></div><ul>{rows}</ul>{pagination}'
+        f'<div data-result-count="{count}"></div>{displayed_range}'
+        f"<ul>{rows}</ul>{pagination}"
         "</body></html>"
     ).encode()
 
@@ -327,6 +340,8 @@ class _BarnetMock:
                     ((f"ADV/{index:04d}/26-B", f"ADV-{index}-B"),),
                     count=2,
                     pages=2,
+                    start=2,
+                    current_page=2,
                 ),
             )
         if path.endswith("/pagedSearchResults.do"):
@@ -340,6 +355,8 @@ class _BarnetMock:
                     rows,
                     count=99 if self.count_mismatch else 3,
                     pages=2,
+                    start=3,
+                    current_page=page,
                 ),
             )
         if path.endswith("/search.do") and action == "advanced":
@@ -1048,7 +1065,7 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
     assert accepted.reported == 45
 
     range_less_multi_page = barnet_adapter._parse_search_page(
-        _result_page((("A", "KEY"),), count=2, pages=2)
+        _result_page((("A", "KEY"),), count=2)
     )
     with pytest.raises(BarnetParseError, match="displayed result range"):
         barnet_adapter._advance_checkpoint(
@@ -1079,6 +1096,46 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             ),
             search_page=conflicting_identity,
             all_query_keys=("weekly|2026-09-14|DC_Decided",),
+        )
+
+    legacy_identity = BarnetCheckpointV1(
+        cursor="live",
+        seen_references=("A",),
+    )
+    reconciled, fresh, _complete = barnet_adapter._advance_checkpoint(
+        legacy_identity,
+        active_page=barnet_adapter._ActivePage(
+            query_key="weekly|2026-09-14|DC_Decided",
+            page=1,
+            row_count=0,
+        ),
+        search_page=barnet_adapter._parse_search_page(
+            _result_page((("A", "KEY"),), count=1)
+        ),
+        all_query_keys=("weekly|2026-09-14|DC_Decided",),
+    )
+    assert fresh[0].locator == "KEY"
+    assert reconciled.seen_locators == ("KEY",)
+
+    for corrupt_identity in (
+        BarnetCheckpointV1(cursor="live", seen_locators=("KEY",)),
+        BarnetCheckpointV1(
+            cursor="live",
+            seen_references=("A", "A"),
+        ),
+    ):
+        with pytest.raises(BarnetCheckpointError, match="identities"):
+            barnet_adapter._reconcile_search_identities(corrupt_identity, ())
+
+    with pytest.raises(BarnetParseError, match="search result identity"):
+        barnet_adapter._reconcile_search_identities(
+            BarnetCheckpointV1(cursor="live"),
+            (
+                SourceReference(
+                    source_id=SourceId("barnet-idox-current"),
+                    reference="A",
+                ),
+            ),
         )
 
     replayed_first_page = barnet_adapter._parse_search_page(

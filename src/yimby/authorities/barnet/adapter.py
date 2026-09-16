@@ -76,7 +76,7 @@ class BarnetDiscoveryScope(FrozenModel):
 
 
 class BarnetCheckpointV1(FrozenModel):
-    """Fixture cursor plus resumable live weekly-list progress."""
+    """Fixture cursor plus resumable live discovery progress."""
 
     cursor: str
     live_scope: BarnetDiscoveryScope | None = None
@@ -85,6 +85,7 @@ class BarnetCheckpointV1(FrozenModel):
     next_page: int = 1
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
+    seen_locators: tuple[str | None, ...] = ()
     live_complete: bool = False
 
 
@@ -677,11 +678,6 @@ def _advance_checkpoint(
     all_query_keys: tuple[str, ...],
 ) -> tuple[BarnetCheckpointV1, tuple[SourceReference, ...], bool]:
     next_row_count = active_page.row_count + len(search_page.references)
-    if search_page.displayed_range is not None and search_page.displayed_range != (
-        active_page.row_count + 1,
-        next_row_count,
-    ):
-        _raise_parse("displayed result range")
     if next_row_count > search_page.reported or (
         not search_page.references and next_row_count < search_page.reported
     ):
@@ -690,12 +686,18 @@ def _advance_checkpoint(
             search_page.reported,
             next_row_count,
         )
-    seen = set(progress.seen_references)
-    fresh = []
-    for reference in search_page.references:
-        if reference.reference not in seen:
-            seen.add(reference.reference)
-            fresh.append(reference)
+    if search_page.displayed_range is None:
+        if active_page.row_count or next_row_count < search_page.reported:
+            _raise_parse("displayed result range")
+    elif search_page.displayed_range != (
+        active_page.row_count + 1,
+        next_row_count,
+    ):
+        _raise_parse("displayed result range")
+    seen, locators, fresh = _reconcile_search_identities(
+        progress,
+        search_page.references,
+    )
     last_page = next_row_count == search_page.reported
     if last_page:
         completed_queries = (*progress.completed_queries, active_page.query_key)
@@ -705,7 +707,8 @@ def _advance_checkpoint(
                 "active_query": None,
                 "next_page": 1,
                 "query_row_count": 0,
-                "seen_references": tuple(seen),
+                "seen_references": seen,
+                "seen_locators": locators,
                 "live_complete": len(completed_queries) == len(all_query_keys),
             }
         )
@@ -715,10 +718,44 @@ def _advance_checkpoint(
                 "active_query": active_page.query_key,
                 "next_page": active_page.page + 1,
                 "query_row_count": next_row_count,
-                "seen_references": tuple(seen),
+                "seen_references": seen,
+                "seen_locators": locators,
             }
         )
-    return checkpoint, tuple(fresh), last_page
+    return checkpoint, fresh, last_page
+
+
+def _reconcile_search_identities(
+    progress: BarnetCheckpointV1,
+    references: tuple[SourceReference, ...],
+) -> tuple[tuple[str, ...], tuple[str | None, ...], tuple[SourceReference, ...]]:
+    if len(progress.seen_locators) > len(progress.seen_references) or len(
+        progress.seen_references
+    ) != len(set(progress.seen_references)):
+        identity_error = "seen result identities"
+        raise BarnetCheckpointError(identity_error)
+    seen = list(progress.seen_references)
+    locators = [
+        *progress.seen_locators,
+        *([None] * (len(seen) - len(progress.seen_locators))),
+    ]
+    positions = {reference: index for index, reference in enumerate(seen)}
+    fresh = []
+    for reference in references:
+        if reference.locator is None:
+            _raise_parse("search result identity")
+        position = positions.get(reference.reference)
+        if position is None:
+            positions[reference.reference] = len(seen)
+            seen.append(reference.reference)
+            locators.append(reference.locator)
+            fresh.append(reference)
+        elif locators[position] is None:
+            locators[position] = reference.locator
+            fresh.append(reference)
+        elif locators[position] != reference.locator:
+            _raise_parse("search result identity")
+    return tuple(seen), tuple(locators), tuple(fresh)
 
 
 def _parse_form(body: bytes) -> Tag:
@@ -1037,8 +1074,11 @@ def _reported_count(
         )
         if (
             displayed_range[1] == displayed_range[2]
-            and len(current_pages) == 1
-            and any(page > current_pages[0] for page in numbered_pages)
+            and numbered_pages
+            and (
+                len(current_pages) != 1
+                or any(page > current_pages[0] for page in numbered_pages)
+            )
         ):
             _raise_parse("reported result count")
         return displayed_range[2]

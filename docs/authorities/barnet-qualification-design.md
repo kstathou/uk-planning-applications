@@ -2,7 +2,11 @@
 
 ## Problem
 
-Barnet's weekly discovery is resumable, but its checkpoint is not bound to an exact date range. The current-list route also stops at a source-reported result cap. A live bootstrap needs a terminal checkpoint for a 30-day scope, every older open application, and every active appeal before it can write a qualification receipt.
+Barnet's earlier weekly discovery was resumable, but its checkpoint was not
+bound to an exact date range. The current-list route also stops at a
+source-reported result cap. A live bootstrap therefore needs a terminal
+checkpoint for a 30-day scope, every older open application, and every active
+appeal before it can write a qualification receipt.
 
 ## Usage
 
@@ -21,7 +25,7 @@ If the portal interrupts the run, repeat the command with `--resume`. The comman
 
 ## Shape
 
-`BarnetDiscoveryScope` binds a checkpoint to its start date, end date, and older-open choice. The existing `BarnetCheckpointV1` keeps page progress, the ordered completed-query keys, and the references seen across overlapping searches.
+`BarnetDiscoveryScope` binds a checkpoint to its start date, end date, and older-open choice. The existing `BarnetCheckpointV1` keeps page progress, the ordered completed-query keys, and the reference-locator identities seen across overlapping searches.
 
 The adapter owns four query families:
 
