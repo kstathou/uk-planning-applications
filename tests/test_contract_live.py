@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 
 import yimby.authorities.arun.adapter as arun
 import yimby.authorities.camden.adapter as camden
+import yimby.authorities.camden.discovery as camden_discovery
 import yimby.authorities.devon.adapter as devon
 from yimby import AuthorityId, Collector, DiscoveryWindow
 from yimby.adapters import AuthorityPackage
@@ -881,6 +882,104 @@ def test_camden_official_detail_and_document_shapes() -> None:
     assert snapshot.payload.grid_easting is None
     assert snapshot.payload.grid_northing is None
     assert camden.CamdenAdapter().normalise(snapshot).metadata.location is None
+
+
+def test_camden_native_shape_and_parser_fail_closed_branches() -> None:
+    with pytest.raises(ValueError, match="date disagrees"):
+        camden.CamdenDocumentV1(
+            title="Notice",
+            url="https://camdocs.camden.gov.uk/notice",  # type: ignore[arg-type]
+            created_date=date(2026, 9, 15),
+            created_at=datetime(2026, 9, 16, 12),  # noqa: DTZ001
+        )
+    with pytest.raises(ValueError, match="both present or both absent"):
+        camden.CamdenApplicationV1(
+            public_reference="A/1",
+            proposal="Proposal",
+            current_status="REGISTERED",
+            grid_easting=530748,
+            grid_northing=None,
+            documents=(),
+            comments=(),
+        )
+
+    live_checkpoint = camden_discovery.initial_live_checkpoint(
+        DiscoveryWindow(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        )
+    )
+    with pytest.raises(camden.CamdenCheckpointModeError, match="live checkpoint"):
+        asyncio.run(
+            _batches(
+                camden.CamdenAdapter(),
+                _Session(_CamdenMock(), mode=TransportMode.FIXTURE),
+                DiscoveryWindow(
+                    start=date(2026, 8, 18),
+                    end=date(2026, 9, 16),
+                    include_open=True,
+                ),
+                live_checkpoint,
+            )
+        )
+
+    assert (
+        camden._parse_documents(
+            b"""
+        <table id="casefilesummary"><tr><td>short</td></tr>
+          <tr><td><label>Records:</label></td><td>0</td></tr></table>
+        <table id="recordtable"><thead><tr><th>Title</th></tr></thead>
+          <tbody><tr><td>no link</td></tr></tbody></table>
+        """
+        )
+        == ()
+    )
+    assert (
+        camden._reported_document_count(
+            BeautifulSoup(
+                '<table id="casefilesummary"></table><p>Total 2 records</p>',
+                "html.parser",
+            )
+        )
+        == 2
+    )
+    row = BeautifulSoup(
+        "<table><thead><tr><th>Description</th></tr></thead>"
+        "<tbody><tr><td>value</td></tr></tbody></table>",
+        "html.parser",
+    ).select_one("tbody tr")
+    assert row is not None
+    assert camden._row_cell(row, "title", "description") is not None
+    assert camden._row_cell(row, "missing") is None
+
+    fields = camden._parse_dataview(
+        b"""
+        <div class="dataview"><ul>
+          <li><div>unlabelled</div></li>
+          <li><div><span>Application Number</span>A/1<em></em></div></li>
+          <li><div><span>Proposal</span>Value</div></li>
+        </ul></div>
+        """
+    )
+    assert fields["application number"] == "A/1"
+    with pytest.raises(camden.CamdenParseError, match="duplicate detail label"):
+        camden._parse_dataview(
+            b'<div class="dataview"><dl><dt>Reference</dt><dd>A/1</dd>'
+            b"<dt>Reference</dt><dd>A/2</dd></dl></div>"
+        )
+
+    assert camden._coordinate_pair({"location co ordinates": "Easting Northing"}) == (
+        None,
+        None,
+    )
+    with pytest.raises(camden.CamdenParseError, match="coordinate pair"):
+        camden._coordinate_pair({"location co ordinates": "Easting 1 Northing"})
+    with pytest.raises(camden.CamdenParseError, match="coordinate pair"):
+        camden._coordinate_pair({"easting": "1"})
+    with pytest.raises(camden.CamdenParseError, match="coordinate pair"):
+        camden._coordinate_pair({"easting": "one", "northing": "2"})
+    assert camden._parse_document_datetime(None) is None
 
 
 async def _batches(

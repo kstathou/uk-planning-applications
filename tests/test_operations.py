@@ -633,6 +633,61 @@ def test_authority_reference_and_evidence_integrity_proofs(tmp_path: Path) -> No
     store.close()
 
 
+@pytest.mark.parametrize(
+    ("corruption", "expected_code"),
+    [
+        ("missing-rebuild", "application-without-rebuild-input"),
+        ("empty-evidence", "application-without-evidence"),
+        ("unregistered", "unregistered-digest"),
+        ("path-mismatch", "path-mismatch"),
+        ("missing-path", "missing-path"),
+    ],
+)
+def test_evidence_integrity_reports_broken_authority_links(
+    tmp_path: Path,
+    corruption: str,
+    expected_code: str,
+) -> None:
+    """Every broken application-to-evidence edge is named in the proof."""
+    root = tmp_path / corruption
+    store = _store(root)
+    _collect_barnet(store)
+    store.close()
+    database = root / "yimby.sqlite3"
+
+    with closing(sqlite3.connect(database)) as connection:
+        digest = connection.execute("SELECT digest FROM evidence LIMIT 1").fetchone()[0]
+        if corruption == "missing-rebuild":
+            connection.execute("DELETE FROM native_rebuild_inputs")
+        elif corruption == "empty-evidence":
+            connection.execute(
+                "UPDATE native_rebuild_inputs SET evidence_digests_json = '[]'"
+            )
+        elif corruption == "unregistered":
+            connection.execute(
+                "UPDATE native_rebuild_inputs SET evidence_digests_json = ?",
+                (json.dumps(["a" * 64]),),
+            )
+        elif corruption == "path-mismatch":
+            connection.execute(
+                "UPDATE evidence SET path = 'wrong/path.gz' WHERE digest = ?",
+                (digest,),
+            )
+        connection.commit()
+
+    if corruption == "missing-path":
+        evidence_path = next((root / "evidence").rglob(f"{digest}.gz"))
+        evidence_path.unlink()
+
+    reopened = _store(root)
+    codes = {
+        issue.code
+        for issue in reopened.evidence_integrity(AuthorityId("barnet")).issues
+    }
+    assert expected_code in codes
+    reopened.close()
+
+
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
     """Public output is allowlisted and every format is deterministic/readable."""
     store = _store(tmp_path / "data")
