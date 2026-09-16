@@ -89,6 +89,7 @@ UNCHANGED_AND_REBUILT_VERSIONS = 2
 BARNET_REQUEST_COUNT = 3
 REPEATED_RETRY_ATTEMPTS = 2
 INTERRUPTED_RETRY_ATTEMPTS = 3
+REMOVAL_AND_REVERSION_CHANGES = 2
 
 
 def _store(root: Path) -> SqliteStore:
@@ -404,6 +405,77 @@ def test_semantic_ordering_does_not_create_false_changes(tmp_path: Path) -> None
     store.close()
 
 
+def test_removal_and_reversion_preserve_observed_transition_order(
+    tmp_path: Path,
+) -> None:
+    """A to B to A remains two observed changes with two reusable states."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    original = _rich_observation()
+    added = DocumentRecord(
+        title="Application form",
+        url=HttpUrl("https://example.test/application.pdf"),
+    )
+    states = (
+        ("with-form", (*original.normalised.documents, added)),
+        ("removed-form", original.normalised.documents),
+        ("restored-form", (*original.normalised.documents, added)),
+    )
+    application_id: ApplicationId | None = None
+    for native_state, documents in states:
+        run_id = store.begin_run(AuthorityId("barnet"))
+        application_id = store.commit_observation(
+            run_id,
+            original.model_copy(
+                update={
+                    "native_json": json.dumps({"state": native_state}),
+                    "normalised": original.normalised.model_copy(
+                        update={"documents": documents}
+                    ),
+                }
+            ),
+        )
+
+    assert application_id is not None
+    assert (
+        store.semantic_version_count(application_id, "documents")
+        == REMOVAL_AND_REVERSION_CHANGES
+    )
+    assert store.observed_change_count() == REMOVAL_AND_REVERSION_CHANGES
+    assert [item.title for item in store.get_application(application_id).documents] == [
+        "Application form",
+        "Decision notice",
+    ]
+    store.close()
+
+
+def test_normaliser_version_change_is_not_a_source_change(tmp_path: Path) -> None:
+    """Identical source semantics stay unchanged across a normaliser release."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    original = _rich_observation()
+    for version in ("rich-v1", "rich-v2"):
+        run_id = store.begin_run(AuthorityId("barnet"))
+        store.commit_observation(
+            run_id,
+            original.model_copy(
+                update={
+                    "normalised": original.normalised.model_copy(
+                        update={"normaliser_version": version}
+                    )
+                }
+            ),
+        )
+
+    application_id = store.application_views()[0].application.id
+    assert (
+        store.semantic_version_count(application_id, "application")
+        == REMOVAL_AND_REVERSION_CHANGES
+    )
+    assert store.observed_change_count() == 0
+    store.close()
+
+
 def test_coordinate_conversion_and_camden_fixture(tmp_path: Path) -> None:
     """Complete BNG pairs convert to WGS84 while missing pairs stay unknown."""
     assert bng_to_wgs84(None, 180000) is None
@@ -454,6 +526,7 @@ def test_offline_rebuild_preserves_versions_and_requires_matching_schema(
     report = rebuild_normalised(store, barnet_registry())
     assert report.model_dump() == {"rebuilt": 1, "transport_requests": 0}
     assert store.application_view(application_id).normaliser_version == "barnet-v2"
+    assert store.observed_change_count() == 0
     assert (
         store.semantic_version_count(application_id, "application")
         == UNCHANGED_AND_REBUILT_VERSIONS
@@ -650,7 +723,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4)
+    assert store.migration_versions() == (1, 2, 3, 4, 5)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -686,7 +759,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()

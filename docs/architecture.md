@@ -68,6 +68,11 @@ The store enforces these invariants:
 - A semantic hash excludes transport timestamps, tokens, and irrelevant ordering.
 - An unchanged observation updates freshness without adding a version.
 - A changed section adds a version and retains earlier states.
+- Every observation links to the exact native and semantic versions current at
+  that point. A later return to an earlier semantic hash records a new
+  transition without duplicating the reusable state.
+- Source-observed transitions and offline normaliser rebuilds have separate
+  ledgers, so a normaliser release is not reported as a portal change.
 - Application versions include mapped common metadata, so a meaningful
   metadata-only change is not lost.
 - Active and recently decided records are next due weekly; decisions older

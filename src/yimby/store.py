@@ -273,18 +273,26 @@ class SqliteStore:
                 ),
             )
             self._commit_normalised(application_id, normalised)
-            self._connection.execute(
-                """
-                INSERT INTO observations(
-                    run_id, application_id, observed_at, completeness_json
-                ) VALUES (?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    application_id,
-                    collected.observed_at.isoformat(),
-                    normalised.completeness.model_dump_json(),
-                ),
+            observation_id = next(
+                self._connection.execute(
+                    """
+                    INSERT INTO observations(
+                        run_id, application_id, observed_at, completeness_json
+                    ) VALUES (?, ?, ?, ?)
+                    RETURNING id
+                    """,
+                    (
+                        run_id,
+                        application_id,
+                        collected.observed_at.isoformat(),
+                        normalised.completeness.model_dump_json(),
+                    ),
+                )
+            )["id"]
+            self._record_observed_versions(
+                observation_id,
+                application_id,
+                native_hash,
             )
             for capture, path in evidence_paths:
                 self._connection.execute(
@@ -931,16 +939,25 @@ class SqliteStore:
         return int(row["count"])
 
     def observed_change_count(self) -> int:
-        """Count semantic versions after the initial state of each section."""
+        """Count source-observed section transitions, including reversions."""
         row = next(
             self._connection.execute(
                 """
-                SELECT COALESCE(SUM(version_count - 1), 0) AS changes
+                SELECT COUNT(*) AS changes
                 FROM (
-                    SELECT COUNT(*) AS version_count
-                    FROM semantic_versions
-                    GROUP BY application_id, section
+                    SELECT version.semantic_hash,
+                        LAG(version.semantic_hash) OVER (
+                            PARTITION BY observation.application_id, observed.section
+                            ORDER BY observed.observation_id
+                        ) AS previous_semantic_hash
+                    FROM observation_section_versions AS observed
+                    JOIN observations AS observation
+                        ON observation.id = observed.observation_id
+                    JOIN semantic_versions AS version
+                        ON version.id = observed.version_id
                 )
+                WHERE previous_semantic_hash IS NOT NULL
+                    AND semantic_hash != previous_semantic_hash
                 """
             )
         )
@@ -1184,6 +1201,32 @@ class SqliteStore:
                 version_id = excluded.version_id
             """,
             (application_id, section, row["id"]),
+        )
+
+    def _record_observed_versions(
+        self,
+        observation_id: int,
+        application_id: ApplicationId,
+        native_hash: str,
+    ) -> None:
+        self._connection.execute(
+            """
+            INSERT INTO observation_native_versions(
+                observation_id, application_id, payload_hash
+            ) VALUES (?, ?, ?)
+            """,
+            (observation_id, application_id, native_hash),
+        )
+        self._connection.execute(
+            """
+            INSERT INTO observation_section_versions(
+                observation_id, section, version_id
+            )
+            SELECT ?, section, version_id
+            FROM section_current
+            WHERE application_id = ?
+            """,
+            (observation_id, application_id),
         )
 
     def _commit_metadata(

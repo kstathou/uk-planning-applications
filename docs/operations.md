@@ -127,8 +127,10 @@ uv run yimby --data-dir .yimby dashboard
 This starts a local Streamlit process. The dashboard shows the fixed coverage
 denominator, package and live readiness, freshness, failures, backlog, request
 and byte costs, duration, browser time, storage growth, application search,
-observed changes, a WGS84 map, and unmapped counts. Use `dashboard --json` for a
-non-interactive snapshot suitable for tests and scripts.
+observed source changes, a WGS84 map, and unmapped counts. The change count
+includes removals and reversions but excludes normaliser-only rebuilds. Use
+`dashboard --json` for a non-interactive snapshot suitable for tests and
+scripts.
 
 ## Backup and restore
 
