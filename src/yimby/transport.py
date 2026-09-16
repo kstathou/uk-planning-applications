@@ -32,6 +32,7 @@ _ATTACHMENT_SUFFIXES = {
 _ATTACHMENT_PATH_FRAGMENTS = (
     "/document/download",
     "/sfc/servlet.shepherd/document/download/",
+    "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
 )
 

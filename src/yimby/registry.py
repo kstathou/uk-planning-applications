@@ -65,8 +65,10 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("haringey"): _status(
         LiveReadiness.BROWSER_ONLY,
-        "the investigated Salesforce journey requires a browser adapter",
-        "portal inventory records a JavaScript and Salesforce boundary",
+        "the rolling seven-day browser journey is implemented; advanced and "
+        "older-open enumeration remain unresolved",
+        "captured Arcus quick-link, pagination, detail, comments, and "
+        "file-tab selectors",
         LiveTransportKind.BROWSER,
     ),
     AuthorityId("devon"): _status(
@@ -103,8 +105,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("cheshire-east"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "discovery was verified but detail collection remains inconclusive",
-        "portal inventory records discovery-only evidence",
+        "valid-date-from table discovery is implemented but count, pagination, "
+        "window fidelity, and detail remain unresolved",
+        "captured Cheshire East form controls, result table, and numeric View locator",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("blackburn-with-darwen"): _status(

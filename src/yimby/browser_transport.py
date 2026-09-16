@@ -8,12 +8,13 @@ import asyncio
 from hashlib import sha256
 from pathlib import PurePosixPath
 from time import monotonic
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import (
     Browser,
     BrowserContext,
+    Page,
     Playwright,
     Route,
     async_playwright,
@@ -50,6 +51,7 @@ _ATTACHMENT_SUFFIXES = {
 _ATTACHMENT_PATH_FRAGMENTS = (
     "/document/download",
     "/sfc/servlet.shepherd/document/download/",
+    "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
 )
 _ATTACHMENT_MEDIA_PREFIXES = (
@@ -82,6 +84,15 @@ class BrowserBoundary(Protocol):
 
     async def aclose(self) -> None:
         """Release browser resources."""
+
+
+@runtime_checkable
+class InteractiveBrowserBoundary(Protocol):
+    """Generic page lifecycle used only by authority-owned page objects."""
+
+    async def interact[T](self, operation: Callable[[Page], Awaitable[T]]) -> T:
+        """Run one authority-owned interaction in a fresh page."""
+        ...
 
 
 class BrowserWorker:
@@ -149,6 +160,14 @@ class PlaywrightBoundary:
         finally:
             await page.close()
 
+    async def interact[T](self, operation: Callable[[Page], Awaitable[T]]) -> T:
+        """Provide a fresh page without learning authority selectors."""
+        page = await self._context.new_page()
+        try:
+            return await operation(page)
+        finally:
+            await page.close()
+
     async def aclose(self) -> None:
         """Close context, browser, and Playwright driver."""
         await self._context.close()
@@ -206,6 +225,35 @@ class PlaywrightPortalSession:
             media_type=payload.media_type,
             body=payload.body,
             digest=EvidenceDigest(sha256(payload.body).hexdigest()),
+        )
+
+    async def run_browser[T](self, operation: Callable[[Page], Awaitable[T]]) -> T:
+        """Run a semantic authority page object in the shared browser slot."""
+        boundary = self._boundary
+        if not isinstance(boundary, InteractiveBrowserBoundary):
+            raise _source_error(None)
+        started = self._clock()
+        try:
+            return await self._worker.run(lambda: boundary.interact(operation))
+        finally:
+            self._browser_time_ms += max(0, round((self._clock() - started) * 1000))
+
+    def retain_rendered(
+        self,
+        url: str,
+        body: bytes,
+        *,
+        media_type: str = "text/html",
+    ) -> EvidenceCapture:
+        """Account for rendered markup captured by an authority page object."""
+        safe_url = _safe_url(url)
+        self._requested_urls.append(safe_url)
+        self._transferred_bytes += len(body)
+        return EvidenceCapture(
+            url=HttpUrl(safe_url),
+            media_type=media_type,
+            body=body,
+            digest=EvidenceDigest(sha256(body).hexdigest()),
         )
 
     @property
