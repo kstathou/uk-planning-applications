@@ -413,21 +413,38 @@ def _documents(
     header_only: bool = False,
     malformed: bool = False,
     structural_cell: str = "",
+    compact: bool = False,
+    header_drift: bool = False,
 ) -> bytes:
     if malformed:
         return b"<h2>Documents</h2><p>Unexpected response</p>"
-    row = (
-        ""
-        if header_only
-        else f"""
+    if compact:
+        row = "" if header_only else """
+      <tr><td>15/09/2026</td><td>Plan</td>
+      <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
+    """
+        header = """
+      <tr><th>Date Published</th><th>Document Type</th>
+      <th>Description</th><th>View</th></tr>
+    """
+    else:
+        row = (
+            ""
+            if header_only
+            else f"""
       <tr><td>{structural_cell}</td><td>15/09/2026</td><td>Plan</td><td>A-01</td>
       <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
     """
-    )
-    return f"""
-    <table summary="Documents">
+        )
+        header = """
       <tr><td></td><td>Date Published</td><td>Document Type</td><td>Measure</td>
       <td>Description</td><td>View</td></tr>
+    """
+    if header_drift:
+        header = header.replace("View", "Download")
+    return f"""
+    <table summary="Documents">
+      {header}
       {row}
     </table>
     """.encode()
@@ -447,6 +464,8 @@ class _LeedsDetailMock:
         structural_document_cell: bool = False,
         invalid_document_cell_text: bool = False,
         transient_document_failures: int = 0,
+        compact_documents: bool = False,
+        document_header_drift: bool = False,
     ) -> None:
         self.reference = reference
         self.blank_optional = blank_optional
@@ -458,6 +477,8 @@ class _LeedsDetailMock:
         self.structural_document_cell = structural_document_cell
         self.invalid_document_cell_text = invalid_document_cell_text
         self.transient_document_failures = transient_document_failures
+        self.compact_documents = compact_documents
+        self.document_header_drift = document_header_drift
         self.tabs: list[str] = []
         self.attachment_paths: list[str] = []
 
@@ -500,6 +521,8 @@ class _LeedsDetailMock:
                     content=_documents(
                         header_only=self.header_only,
                         malformed=self.malformed_documents,
+                        compact=self.compact_documents,
+                        header_drift=self.document_header_drift,
                         structural_cell=(
                             '<label class="hide">Select this document</label>'
                             '<input type="checkbox" name="file" value="plan.pdf">'
@@ -570,6 +593,17 @@ def test_leeds_accepts_the_live_document_selection_cell() -> None:
     assert isinstance(snapshot.completeness.documents, CompleteSection)
 
 
+def test_leeds_accepts_the_live_compact_document_table() -> None:
+    """Listed-building records can omit selection and measure columns."""
+    snapshot = asyncio.run(_fetch(_LeedsDetailMock(compact_documents=True)))
+
+    assert len(snapshot.payload.documents) == 1
+    assert snapshot.payload.documents[0].published_date == date(2026, 9, 15)
+    assert snapshot.payload.documents[0].document_type == "Plan"
+    assert snapshot.payload.documents[0].drawing_number is None
+    assert snapshot.payload.documents[0].description == "Tree location plan"
+
+
 def test_leeds_rejects_unrecognised_document_selection_text() -> None:
     """Unexpected data in the structural cell cannot shift document columns."""
     snapshot = asyncio.run(_fetch(_LeedsDetailMock(invalid_document_cell_text=True)))
@@ -627,7 +661,7 @@ def test_leeds_rejects_a_persistent_document_shell() -> None:
     assert type(raised.value).__name__ == "LeedsDetailUnavailableError"
 
 
-@pytest.mark.parametrize("failure", ["malformed", "unavailable"])
+@pytest.mark.parametrize("failure", ["malformed", "unavailable", "header"])
 def test_leeds_preserves_document_section_failures(failure: str) -> None:
     """An unverified document index remains failed rather than empty."""
     snapshot = asyncio.run(
@@ -635,6 +669,7 @@ def test_leeds_preserves_document_section_failures(failure: str) -> None:
             _LeedsDetailMock(
                 malformed_documents=failure == "malformed",
                 failed_documents=failure == "unavailable",
+                document_header_drift=failure == "header",
             )
         )
     )
