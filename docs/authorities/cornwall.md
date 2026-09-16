@@ -46,7 +46,8 @@ The weekly-list request was rechecked on 16 September 2026. It posts to
 `weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
 `searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
 `searchType`. The observed date-type values were `DC_Validated` and
-`DC_Decided`.
+`DC_Decided`. The adapter preserves the form-supplied `searchType` value as
+portal-owned state rather than replacing it with an inferred weekly-list value.
 
 The live result used `li.searchresult` rows and published 34 records across
 four pages. Summary links carried the portal key in

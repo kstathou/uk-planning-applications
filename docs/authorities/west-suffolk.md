@@ -30,18 +30,32 @@ An empty comments tab does not imply that no representations exist. The document
 
 ## Known limits
 
-This walkthrough covered one weekly validated list, one current record, and its document index. It did not prove decided searches, older open enumeration, pagination beyond one result page, related-case detail, retries, or incremental updates.
+The original walkthrough covered one weekly validated list, one current record,
+and its document index. A follow-up live adapter run on 16 September 2026 also
+exhausted the two-page decided list and fetched one summary plus its safe child
+sections. It did not prove older open enumeration, related-case detail, retries,
+incremental updates, or a complete persisted bootstrap of every discovered
+record.
 
 ## Request contract capture
 
 The weekly-list request was rechecked on 16 September 2026. It posts to
 `weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
 `searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
-`searchType`. The date-type values were `DC_Validated` and `DC_Decided`.
+`searchType`. The hidden form value was `searchType=Application`; the adapter
+preserves that portal-owned value. The date-type values were `DC_Validated` and
+`DC_Decided`.
 
-The current validated response exposed three `li.searchresult` rows. Summary
-links carried the portal key in
+The live adapter run found three validated applications and fourteen decided
+applications for the week beginning 14 September 2026. The validated response
+was an under-capacity first page without a displayed total. Its selected page
+capacity and absence of pagination established terminality. The decided
+response reported `Showing 1-10 of 14` and was exhausted across two pages.
+Summary links carried the portal key in
 `applicationDetails.do?keyVal=...&activeTab=summary`; each row also published
 the human reference, proposal, address, received date, validated date, status,
-and comment-open marker. This confirms the current weekly request and row
-contract, not the open decided, older-open, retry, or incremental checks above.
+and comment-open marker. The smoke fetched `DC/26/1388/TCA`, completed without a
+detail error, transferred no attachment body, and retained a resumable
+checkpoint. This confirms weekly discovery, pagination, and one bounded detail
+path. It does not establish a complete persisted bootstrap, older-open coverage,
+or incremental operation.

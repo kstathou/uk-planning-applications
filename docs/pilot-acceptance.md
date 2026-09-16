@@ -36,7 +36,7 @@ requirement.
 | Leeds | Verified | Discovery route recorded; detail blocked | Weekly discovery adapter; detail explicitly unavailable | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
-| West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Real HTTP adapter implemented; live run pending | Open | Open |
+| West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Live weekly discovery completed for 3 validated and 14 decided applications; one bounded detail fetched with no attachment body | Open | Open |
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
@@ -47,3 +47,10 @@ repeating completed pages. All fifteen authorities still require a live
 bootstrap and two successful weekly cycles. Blocked and partial authorities
 remain in coverage denominators and failure reporting until those checks
 succeed.
+
+Current source-health checks on 16 September 2026 returned an empty reply from
+Cornwall and timed out at Durham after bounded retries. West Suffolk was healthy
+for the completed weekly discovery smoke. The West Suffolk result does not move
+its live-bootstrap cell because the smoke checkpoints discovery and fetches one
+detail record, but does not persist every discovered application through the
+operational collection store.

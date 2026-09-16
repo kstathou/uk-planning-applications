@@ -40,7 +40,9 @@ The document index exposed all six rows. Metadata included publication date, doc
 The weekly-list request was rechecked on 16 September 2026. It posts to
 `weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
 `searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
-`searchType`. The date-type values were `DC_Validated` and `DC_Decided`.
+`searchType`. The date-type values were `DC_Validated` and `DC_Decided`. The
+adapter preserves the form-supplied `searchType` value as portal-owned state
+rather than replacing it with an inferred weekly-list value.
 
 The live validated response exposed nine `li.searchresult` rows without a
 second result page. Each summary link carried the portal key in

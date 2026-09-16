@@ -39,7 +39,9 @@ This is a failed detail request, not an empty application. Discovery is verified
 The weekly-list request was rechecked on 16 September 2026. It posts to
 `weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
 `searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
-`searchType`. The date-type values were `DC_Validated` and `DC_Decided`.
+`searchType`. The date-type values were `DC_Validated` and `DC_Decided`. The
+adapter preserves the form-supplied `searchType` value as portal-owned state
+rather than replacing it with an inferred weekly-list value.
 
 Selecting the week beginning 7 September 2026 again produced 156 records. The
 response used `li.searchresult` rows and
