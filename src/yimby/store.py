@@ -70,6 +70,12 @@ _QUALIFICATION_LINEAGE_COLUMNS = (
     ("scope_json", "TEXT", 1, 0),
     ("created_at", "TEXT", 1, 0),
 )
+_QUALIFICATION_LINEAGE_DEFINITION = (
+    "CREATE TABLE qualification_lineage ( authority_id TEXT NOT NULL, "
+    "qualification TEXT NOT NULL, phase TEXT NOT NULL CHECK (phase = 'qualified'), "
+    "scope_json TEXT NOT NULL, created_at TEXT NOT NULL, "
+    "PRIMARY KEY (authority_id, qualification) )"
+)
 
 
 class _ApplicationSection(FrozenModel):
@@ -1300,16 +1306,26 @@ class SqliteStore:
                 "PRAGMA table_info(qualification_lineage)"
             )
         )
+        definition = self._connection.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'qualification_lineage'
+            """
+        ).fetchone()
+        definition_sql = (
+            None if definition is None else " ".join(definition["sql"].split())
+        )
         if (
             current is None
             or current["name"] != current_name
             or columns != _QUALIFICATION_LINEAGE_COLUMNS
+            or definition_sql != _QUALIFICATION_LINEAGE_DEFINITION
         ):
             message = "migration 009 Barnet qualification lineage schema is invalid"
             raise sqlite3.IntegrityError(message)
-        self._validate_qualification_lineage_phase()
+        self._validate_qualification_lineage_accepts_qualified_phase()
 
-    def _validate_qualification_lineage_phase(self) -> None:
+    def _validate_qualification_lineage_accepts_qualified_phase(self) -> None:
         message = "migration 009 Barnet qualification lineage phase is invalid"
         probe = str(uuid4())
         self._connection.execute("SAVEPOINT validate_qualification_lineage")
@@ -1325,19 +1341,6 @@ class SqliteStore:
                 )
             except sqlite3.IntegrityError as error:
                 raise sqlite3.IntegrityError(message) from error
-            try:
-                self._connection.execute(
-                    """
-                    INSERT INTO qualification_lineage(
-                        authority_id, qualification, phase, scope_json, created_at
-                    ) VALUES (?, ?, 'invalid', '{}', '2000-01-01T00:00:00+00:00')
-                    """,
-                    (f"__schema_probe__{probe}", "invalid"),
-                )
-            except sqlite3.IntegrityError:
-                pass
-            else:
-                raise sqlite3.IntegrityError(message)
         finally:
             self._connection.execute("ROLLBACK TO validate_qualification_lineage")
             self._connection.execute("RELEASE validate_qualification_lineage")

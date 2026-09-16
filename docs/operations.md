@@ -157,10 +157,12 @@ the earlier Barnet branch is reconciled from the legacy
 `006_qualification_lineage.sql` history row to 009 before migration discovery.
 That releases version 006 for OPDC rather than causing its integration migration
 to be skipped. Startup independently verifies migration 009's owning filename
-and exact required table shape. A rolled-back schema probe also proves that the
-`qualified` phase is accepted and every other phase is rejected. An
-incompatible row, missing/malformed lineage table, or wrong phase constraint
-therefore fails closed even when no legacy 006 row is present.
+and canonical table definition, including the exact
+`CHECK (phase = 'qualified')` constraint. A rolled-back schema probe also
+proves that the accepted `qualified` value remains insertable in the presence
+of triggers. An incompatible row, missing/malformed lineage table, wrong phase
+constraint, or contradictory trigger therefore fails closed even when no
+legacy 006 row is present.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 

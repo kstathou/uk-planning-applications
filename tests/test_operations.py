@@ -867,13 +867,14 @@ def test_legacy_barnet_lineage_migration_releases_reserved_version(  # noqa: D10
     [
         "phase TEXT NOT NULL",
         "phase TEXT NOT NULL CHECK (phase = 'other')",
+        "phase TEXT NOT NULL CHECK (phase != 'invalid')",
+        "phase TEXT NOT NULL CHECK (qualification = 'valid')",
     ],
 )
-def test_lineage_migration_requires_exact_phase_semantics(
+def test_lineage_migration_requires_exact_phase_semantics(  # noqa: D103
     phase_column: str,
     tmp_path: Path,
 ) -> None:
-    """Column metadata alone cannot prove the required phase constraint."""
     root = tmp_path / "invalid-phase"
     store = _store(root)
     store.close()
@@ -889,6 +890,29 @@ def test_lineage_migration_requires_exact_phase_semantics(
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (authority_id, qualification)
             )
+            """
+        )
+        connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="schema is invalid"):
+        _store(root)
+
+
+def test_lineage_migration_requires_qualified_phase_to_be_insertable(
+    tmp_path: Path,
+) -> None:
+    """A trigger cannot contradict the canonical table's accepted phase."""
+    root = tmp_path / "contradictory-trigger"
+    store = _store(root)
+    store.close()
+    with closing(sqlite3.connect(root / "yimby.sqlite3")) as connection:
+        connection.execute(
+            """
+            CREATE TRIGGER reject_qualified_lineage
+            BEFORE INSERT ON qualification_lineage
+            WHEN NEW.phase = 'qualified'
+            BEGIN
+                SELECT RAISE(ABORT, 'qualified phase rejected');
+            END
             """
         )
         connection.commit()
