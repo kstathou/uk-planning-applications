@@ -175,7 +175,11 @@ The five development corporations are Ebbsfleet, Hartlepool, Middlesbrough, Old 
 
 This is a baseline as of **15 September 2026**, calculated from the [government's total of 331 planning authorities](https://www.gov.uk/government/statistics/planning-applications-in-england-january-to-march-2026/planning-applications-in-england-january-to-march-2026-technical-notes), plus [Oxford Street Development Corporation taking on planning powers on 10 August 2026](https://www.oxfordstreetdc.org.uk/). The [government council list](https://assets.publishing.service.gov.uk/media/67371541c0b2bbee1a1271ed/List_of_councils_in_England_2023.pdf) provides the council breakdown, and the [Planning Data organisation directory](https://provide.planning.data.gov.uk/organisations) lists the National Park Authorities and Broads Authority.
 
-Keep authority counts separate from website and portal counts. Shared portals may serve several authorities, while one authority may require multiple current registers, legacy registers, or supporting services. Confirm the actual portal inventory during browser investigation and associate every source with its authorities and covered periods.
+Keep authority counts separate from website and portal counts. Shared portals may serve several authorities, while one authority may require multiple current registers, legacy registers, or supporting services.
+
+Before browser investigation or scraping, exhaust first-party machine-readable sources in this order: official authority or public-sector APIs, official open-data feeds and downloadable datasets, then official portal service endpoints such as Salesforce, Arcus, GIS, and web-map APIs. Record each source's schema, identity keys, coverage period, counts, caps, and failure boundary. Use browser capture only for coverage that those sources cannot prove. Browser-visible content must not replace a missing deterministic identity join or completeness proof.
+
+Confirm the actual portal inventory after that machine-source pass and associate every source with its authorities and covered periods.
 
 For each rollout batch:
 

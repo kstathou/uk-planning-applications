@@ -239,6 +239,68 @@ has zero PKID overlap to exploit. Qualification therefore remains fail-closed,
 the adapter stays `BROWSER_ONLY`, and no receipt or weekly-cycle credit is
 emitted.
 
+## Official machine-source follow-up on 16 September 2026
+
+The follow-up applied the machine-first source rule before any further browser
+work. It checked the council's two iShare map configurations, the Greater
+London Authority's Planning London Datahub, the national Planning Data API and
+bulk catalogue, and the Salesforce Experience Cloud sitemap inventory. All
+multi-request sequences retained the host's minimum two-second gap. No browser
+request or attachment-body request was made.
+
+The `mapsources/WebTeam` machine configuration exposes four planning layers.
+`planning_alerts` returns the same 826 PKIDs as `curr_planning_apps_solo`, with
+exactly 826 overlapping PKIDs, but exposes only title, dead legacy link, and
+description. `All_Planning_Applications` advertises only `ref_no`, proposal,
+and decision; its WFS query fails because its configured `ref_no` column does
+not exist, while its feature-metadata query reports no results. The remaining
+current and decided layers expose no additional identity field. The
+`mapsources/AllMaps` configuration likewise publishes only address, proposal,
+and application link for its active planning layers. Every planning
+`DescribeFeatureType` response remains geometry-only, and the two additional
+advertised layers that are absent from the active configuration return no
+feature metadata. This exhausts the planning layers advertised by both
+official map sources without finding a PKID-to-HGY field.
+
+The GLA's published read-only `applications` API returned exactly 27,591
+Haringey records. Its field-capabilities response contains 349 paths and 68
+root fields. The only root identity or source fields are `id`, `lpa_app_no`,
+`pp_id`, `bo_system`, and `url_planning_app`; neither PKID nor another legacy
+local-record identifier is present. The records comprise 12,249 `CSV Data
+Import`, 9,514 `Arcus`, 3,913 `FME Legacy Data Import`, 1,703 `Northgate M3`,
+and 212 `Portal` rows. All 9,514 Arcus rows publish a Salesforce record URL,
+as do 12,071 CSV and 197 Portal rows, but all 3,913 FME-legacy and all 1,703
+Northgate rows omit that URL. A query across every searchable field for the two
+diagnostic PKIDs `19085` and `442757` returned zero records. The Arcus example
+`HGY/2022/2811` is present with its Salesforce URL; the older
+`HGY/1999/0250` example is absent. The API therefore provides useful HGY-to-
+Salesforce identities for covered records, but neither a PKID join nor complete
+historic coverage.
+
+The national Planning Data API returned zero Haringey-managed
+`planning-application` entities. A boundary query returned only four
+applications belonging to another authority. Across all 831 entities managed
+by Haringey, only the brownfield-land dataset contains `PKID=` links: 120
+unique authoritative PKID-to-HGY pairs among 277 rows. Their intersection with
+the 826 legacy-current PKIDs is exactly zero. No other one of Haringey's 13
+published datasets contains a PKID.
+
+The Salesforce sitemap index publishes eight historical planning-application
+chunks plus a weekly chunk. They contain 150,755 historical URLs and 105
+weekly URLs, or 150,770 unique HGY-reference-to-Salesforce-record pairs after
+deduplication. The inventory contains no `PKID` token. It confirms the known
+downstream pairs `HGY/1999/0250` to `a0i8d000002Flr2AAC` and
+`HGY/2022/2811` to `a0i8d000002GPH8AAO`, but only when the HGY reference is
+already known.
+
+The raw-response digests and query counts are recorded in
+`docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`. Together,
+these official sources prove a large HGY-to-Salesforce inventory and several
+separate PKID-to-HGY inventories, but none intersects the 826 required PKIDs.
+All 826 therefore remain unresolved. Address, proposal, or geometry matching
+would still be an inferred content join, so the complete 30-day-plus-older-open
+inventory remains unproved and readiness is not promoted.
+
 ## Authority qualification command
 
 Haringey now has an explicit, resumable, fail-closed qualification boundary:
@@ -280,7 +342,8 @@ failed checks
 `HaringeyWindowUnavailableError`. The adapter rejected the unsupported scope
 before opening a browser. Neither the final receipt nor any randomized
 temporary receipt was created. The sanitized blocker evidence is committed as
-`docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`; its SHA-256
-is `2a773e51dcbc705daae6281d68753395967c394e21d3e38fda5840621b4aaeac`.
+`docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`; after the
+machine-source follow-up its SHA-256 is
+`3e8f7ea3815a168f3ec6afcd35bbbd54902becef80ba4cf84854a1a88f5236dc`.
 The tool therefore makes the current source boundary reproducible; it does not
 relax it.

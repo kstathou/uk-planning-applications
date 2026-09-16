@@ -210,6 +210,150 @@
       "framed_response_sha256": "b4d7d2461397c9c1d119747cda731a4bc4fe0a9cba56a890c82f94ab41d9882a",
       "digest_framing": "For each tile in row-major order, the ASCII row:column:response-byte-count plus newline was hashed immediately before the raw response body.",
       "conclusion": "The decided layer is a complete unambiguous PKID-to-HGY mapping for its advertised population, but its zero intersection with the 826 legacy-current PKIDs means it supplies none of the required cutover identity crosswalk."
+    },
+    "official_machine_source_follow_up": {
+      "observed_at": "2026-09-16T16:09:27Z",
+      "source_order": [
+        "official Haringey GIS and web-map APIs",
+        "official GLA Planning London Datahub API",
+        "official national Planning Data API and datasets",
+        "official Salesforce Experience Cloud machine metadata"
+      ],
+      "browser_requests": 0,
+      "attachment_body_requests": 0,
+      "minimum_inter_request_gap_seconds": 2,
+      "haringey_ishare": {
+        "webteam_capabilities_sha256": "5d986160354fa7b54844258de1ee510621a2dcd4105e03cc3a6f65ad4b925081",
+        "webteam_mapsource_sha256": "2476ca2a35332ff9b3387cd51efeacd4529b32f36f1fce982d189b4bf06324b1",
+        "allmaps_capabilities_sha256": "4c4e484417d34541db1647ece99672a3c1657c120746c015d05895267e3c0fa0",
+        "allmaps_mapsource_sha256": "9161b601f8f43f76d5eef5765d996375391f1dff6b1d94ece2c7e0f5fc75c1ed",
+        "webteam_planning_layers": [
+          "All_Planning_Applications",
+          "planning_alerts",
+          "curr_planning_apps_solo",
+          "decided_planning_apps_solo"
+        ],
+        "planning_alerts": {
+          "response_bytes": 945943,
+          "response_sha256": "2d14b6309ac234a5699513cc602574c0dc0ffa0b782e2a99a2f4a5295b065708",
+          "unique_pkid_count": 826,
+          "legacy_current_overlap_pkid_count": 826,
+          "published_fields": [
+            "title",
+            "legacy detail link containing PKID",
+            "description"
+          ],
+          "hgy_reference_count": 0,
+          "conclusion": "This is an exact duplicate identity population of the legacy-current layer with no additional crosswalk field."
+        },
+        "all_planning_applications": {
+          "published_fields": [
+            "ref_no",
+            "proposal",
+            "decision"
+          ],
+          "wfs_state": "server error because configured column ref_no does not exist",
+          "feature_metadata_state": "no results found"
+        },
+        "allmaps_active_planning_fields": [
+          "address",
+          "proposal",
+          "application link"
+        ],
+        "planning_describe_feature_type_state": "geometry-only for every advertised planning layer",
+        "additional_advertised_layer_state": "curr_planning_apps_points and decided_planning_apps return no feature metadata",
+        "conclusion": "Every planning layer advertised by both official map sources was inspected; none adds a PKID-to-HGY or PKID-to-Salesforce field for the legacy-current cohort."
+      },
+      "planning_london_datahub": {
+        "api_url": "https://planningdata.london.gov.uk/api-guest/applications/_search",
+        "haringey_record_count": 27591,
+        "field_path_count": 349,
+        "root_field_count": 68,
+        "identity_and_source_fields": [
+          "id",
+          "lpa_app_no",
+          "pp_id",
+          "bo_system",
+          "url_planning_app"
+        ],
+        "legacy_pkid_field_present": false,
+        "back_office_system_counts": {
+          "CSV Data Import": 12249,
+          "Arcus": 9514,
+          "FME Legacy Data Import": 3913,
+          "Northgate M3": 1703,
+          "Portal": 212
+        },
+        "records_with_salesforce_url": 21782,
+        "salesforce_url_counts_by_system": {
+          "CSV Data Import": 12071,
+          "Arcus": 9514,
+          "FME Legacy Data Import": 0,
+          "Northgate M3": 0,
+          "Portal": 197
+        },
+        "sample_pkid_query": {
+          "values": [
+            "19085",
+            "442757"
+          ],
+          "hits_across_all_searchable_fields": 0
+        },
+        "known_reference_probe": {
+          "HGY/2022/2811": "present as Arcus record Haringey-HGY_2022_2811",
+          "HGY/1999/0250": "absent"
+        },
+        "response_sha256": {
+          "field_capabilities": "7aa1f4d701da41cd086651687cfdb8989a2a21617356c34afe893b5503047b97",
+          "coverage": "b174688c9d06e0e9a52f52f20c0a6246a7ede2033ebb31c52e3245bdae35911e",
+          "known_references": "eb550eb50eb789ad9066fb7dcef0fbeecacfc6ce83ac810eaf182cd7bfcc0550",
+          "pkid_probe": "d632dbdf82d69e2198cfd1a6663cbee22fbdfe507af74e075b20932799aa232a",
+          "planning_urls": "0b99ce8a422d029ac9331d3fa1fdc6204edb7721dd54a7a78d0ed316ad35808d",
+          "url_counts_by_system": "7f6f67b62662db9846f322ef3aa91e68f4f171d411a1f2702b8d81499ca7a27e"
+        },
+        "conclusion": "The official regional feed supplies HGY and Salesforce identities for covered records but publishes no PKID, omits Salesforce URLs for every FME-legacy and Northgate record, and does not contain the older diagnostic reference. It cannot prove the missing crosswalk or complete historic coverage."
+      },
+      "national_planning_data": {
+        "haringey_managed_entity_count": 831,
+        "haringey_managed_dataset_count": 13,
+        "haringey_managed_planning_application_count": 0,
+        "planning_applications_within_haringey_boundary": 4,
+        "boundary_result_organisation_entity": 90,
+        "brownfield_land_count": 277,
+        "brownfield_unique_pkid_hgy_pair_count": 120,
+        "legacy_current_overlap_pkid_count": 0,
+        "all_haringey_entities_combined_sha256": "4f2b1c86754be6dd38af902ff0b81449bfb0ee84c10cb51b48c7a996d5734393",
+        "brownfield_pages_combined_sha256": "f0301c413b811ef20314f1eda9691f2d17e4003570431e21208675d29e6701b9",
+        "conclusion": "Only the brownfield-land dataset contains PKID links, and none of its 120 authoritative PKID-to-HGY pairs belongs to the 826 legacy-current cohort."
+      },
+      "salesforce_sitemaps": {
+        "index_url": "https://publicregister.haringey.gov.uk/pr/s/sitemap.xml",
+        "planning_historical_chunk_count": 8,
+        "historical_url_count": 150755,
+        "weekly_url_count": 105,
+        "unique_hgy_salesforce_pair_count": 150770,
+        "pkid_token_count": 0,
+        "known_pairs": [
+          {
+            "public_reference": "HGY/1999/0250",
+            "salesforce_record_id": "a0i8d000002Flr2AAC"
+          },
+          {
+            "public_reference": "HGY/2022/2811",
+            "salesforce_record_id": "a0i8d000002GPH8AAO"
+          }
+        ],
+        "index_sha256": "a7478615048bd2559909306ee3b476865be9fa5679e3fa8301f803ea117b7786",
+        "ordered_planning_chunks_sha256": "bb09c7930d1ed41ee1b1878c79150758245aae792f01b125df40eaa489fdb9e6",
+        "conclusion": "The sitemap proves a large HGY-to-Salesforce identity inventory but exposes no PKID, so it cannot establish the required upstream PKID-to-HGY join."
+      },
+      "crosswalk_result": {
+        "legacy_current_pkid_count": 826,
+        "officially_resolved_pkid_count": 0,
+        "unresolved_pkid_count": 826,
+        "ambiguous_pkid_count": 0,
+        "conclusion": "No official machine-readable source exposes a deterministic crosswalk for any member of the required legacy-current cohort."
+      }
     }
   },
   "live_smoke": {
@@ -313,7 +457,7 @@
     {
       "name": "legacy-pkid-identity-crosswalk",
       "state": "failed",
-      "reason": "The official legacy links are dead, the current map publishes no HGY reference, the complete decided map has zero PKID overlap, PKID is not searchable in Arcus, and neither the FULL guest layout nor the configured public detail payload exposes a legacy identifier."
+      "reason": "The official legacy links are dead, the current and duplicate planning-alerts maps publish no HGY reference, every official PKID-to-HGY dataset has zero cohort overlap, the GLA and Salesforce machine inventories publish no PKID, PKID is not searchable in Arcus, and neither the FULL guest layout nor the configured public detail payload exposes a legacy identifier."
     },
     {
       "name": "terminal-checkpoint-coherence",
@@ -364,5 +508,5 @@
       "reason": "requires a successful live bootstrap and a second genuinely later run"
     }
   ],
-  "blocker": "The portal recovered and proved an inclusive user-defined weekly interval. Separately named and independently reconcilable legacy and Arcus current-map layers now provide a credible cross-era older-open discovery boundary, even though both are stale supersets. Full collection still cannot be qualified: all 826 legacy features identify applications only by PKID on a council host that no longer resolves; the current map publishes no HGY reference; the independently reconciled 13,974-record decided map has zero PKID overlap; Arcus does not search by PKID; and neither its FULL guest layout nor its configured public detail payload exposes a legacy identifier. Address/proposal matching is not accepted as identity evidence. The 30-day-plus-older-open bootstrap and all dependent qualification checks therefore remain stopped."
+  "blocker": "The portal recovered and proved an inclusive user-defined weekly interval. Separately named and independently reconcilable legacy and Arcus current-map layers provide a credible cross-era older-open discovery boundary, even though both are stale supersets. A machine-first follow-up exhausted both official Haringey map configurations, the GLA Planning London Datahub, all Haringey-managed national Planning Data entities, and the public Salesforce planning sitemaps. The duplicate planning-alerts layer adds no identity; the all-applications layer is server-broken; the GLA publishes no PKID and lacks complete historic coverage; the national brownfield set has zero overlap; and the Salesforce inventory proves HGY-to-record-ID pairs only. All 826 legacy-current PKIDs remain unresolved. The legacy links still target a council host that no longer resolves, Arcus does not search by PKID, and neither its FULL guest layout nor its configured public detail payload exposes a legacy identifier. Address/proposal or geometry matching is not accepted as identity evidence. The 30-day-plus-older-open bootstrap and all dependent qualification checks therefore remain stopped."
 }

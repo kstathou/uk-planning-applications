@@ -121,3 +121,18 @@ the typed receipt records both pending genuinely later refresh obligations.
 The remediated production run remained fail-closed with the same two source
 errors and no receipt. Sanitized evidence is tracked in
 `docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`.
+
+An official-machine-source follow-up then exhausted both advertised Haringey
+iShare map configurations, the GLA Planning London Datahub API, all 831
+Haringey-managed national Planning Data entities, and the public Salesforce
+planning sitemaps before any further browser work. The GLA exposes 27,591
+Haringey records and Salesforce URLs for all 9,514 Arcus rows, while the
+Salesforce sitemaps expose 150,770 unique HGY-reference-to-record-ID pairs.
+Neither source publishes a legacy PKID. The national brownfield data supplies
+120 authoritative PKID-to-HGY pairs, and the separately named council map
+layers supply other PKID sets, but every one has zero overlap with the 826
+legacy-current PKIDs. The additional `planning_alerts` map layer is an exact
+826-PKID duplicate with no additional identity field, and the advertised
+all-applications layer is server-broken. All 826 required identities therefore
+remain unresolved, so bootstrap, receipt, readiness, and both later weekly
+cycles remain open.
