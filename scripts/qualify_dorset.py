@@ -740,6 +740,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
+    prior_receipt: DorsetQualificationReceiptV1 | None,
 ) -> DorsetQualificationReceiptV1:
     registry = AuthorityRegistry((DORSET_PACKAGE,))
     collector = Collector(registry, store)
@@ -753,16 +754,20 @@ async def _qualify(
     prior_status_count = len(store.run_statuses())
     observed_initial = await _collect_once(collector, window, session_factory)
     source_run_id, source_metrics = store.latest_successful_nonempty_run(_AUTHORITY_ID)
-    initial = (
-        DorsetQualificationCost(
-            fetch_calls=source_metrics.request_count,
-            successful_requests=source_metrics.request_count,
-            transferred_bytes=source_metrics.transferred_bytes,
-            attachment_body_requests=0,
-        )
-        if observed_initial.fetch_calls == 0
-        else observed_initial
-    )
+    initial = observed_initial
+    if observed_initial.fetch_calls == 0:
+        if prior_receipt is None:
+            raise QualificationFailedError(("live-source-proof",))
+        prior_cost = prior_receipt.costs.initial
+        if (
+            prior_receipt.source_run_id != source_run_id
+            or prior_cost.fetch_calls != source_metrics.request_count
+            or prior_cost.successful_requests != source_metrics.request_count
+            or prior_cost.transferred_bytes != source_metrics.transferred_bytes
+            or prior_cost.attachment_body_requests != 0
+        ):
+            raise QualificationFailedError(("live-source-proof",))
+        initial = prior_cost
     checkpoint = _terminal_checkpoint(store, config.scope)
     first_snapshot = store.qualification_snapshot(
         _AUTHORITY_ID,
@@ -842,6 +847,12 @@ def _write_receipt(path: Path, receipt: DorsetQualificationReceiptV1) -> None:
         os.close(directory)
 
 
+def _existing_receipt(path: Path) -> DorsetQualificationReceiptV1 | None:
+    if not path.is_file():
+        return None
+    return DorsetQualificationReceiptV1.model_validate_json(path.read_text())
+
+
 def _default_session(
     *,
     transport: httpx.AsyncBaseTransport | None = None,
@@ -890,8 +901,17 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
-                _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
+                receipt_path = config.data_dir / _RECEIPT_NAME
+                receipt = asyncio.run(
+                    _qualify(
+                        store,
+                        config,
+                        session_factory,
+                        now,
+                        _existing_receipt(receipt_path),
+                    )
+                )
+                _write_receipt(receipt_path, receipt)
             finally:
                 store.close()
     except QualificationFailedError as error:
