@@ -308,11 +308,14 @@ def test_arun_open_plan_stops_at_a_pre_2024_scope_end() -> None:
     )
     assert all(query.end <= scope.end for query in open_queries)
 
-    assert len(
-        arun._canonical_query_plan(
-            scope.model_copy(update={"end": date(1947, 12, 31)})
+    assert (
+        len(
+            arun._canonical_query_plan(
+                scope.model_copy(update={"end": date(1947, 12, 31)})
+            )
         )
-    ) == 2
+        == 2
+    )
     historical = arun._canonical_query_plan(
         scope.model_copy(update={"end": date(1990, 9, 16)})
     )
@@ -526,8 +529,7 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
     assert terminal.cursor.progress.seen_references == _DiscoveryResponder.references
     assert terminal.cursor.search_form_evidence is not None
     assert all(
-        item.initial_evidence is not None
-        for item in terminal.cursor.progress.completed
+        item.initial_evidence is not None for item in terminal.cursor.progress.completed
     )
     assert terminal.cursor.progress.completed[0].references == (
         "BR/1/26/PL",
@@ -1208,7 +1210,7 @@ def test_arun_qualification_reports_a_stable_parse_boundary(
 
     result = module.main(
         args,
-        session_factory=lambda: _Session(lambda request: b"<html></html>"),
+        session_factory=lambda: _Session(lambda _request: b"<html></html>"),
     )
 
     assert result == 1
@@ -1322,18 +1324,24 @@ def test_arun_qualification_replaces_an_existing_receipt_atomically(
         "--include-open",
     ]
 
-    assert module.main(
-        args,
-        session_factory=lambda: _Session(_QualificationResponder()),
-    ) == 0
+    assert (
+        module.main(
+            args,
+            session_factory=lambda: _Session(_QualificationResponder()),
+        )
+        == 0
+    )
     capsys.readouterr()
     receipt_path = data_dir / "arun-qualification-v2.json"
     receipt_path.write_text("old receipt", encoding="utf-8")
 
-    assert module.main(
-        [*args, "--resume"],
-        session_factory=lambda: _Session(_QualificationResponder()),
-    ) == 0
+    assert (
+        module.main(
+            [*args, "--resume"],
+            session_factory=lambda: _Session(_QualificationResponder()),
+        )
+        == 0
+    )
     replaced = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert replaced["schema_version"] == 2
     assert all(check["ok"] for check in replaced["checks"])

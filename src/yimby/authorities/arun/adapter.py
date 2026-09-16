@@ -418,9 +418,7 @@ class ArunAdapter:
             PortalRequest(url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH)
         )
         form = _parse_search_form(form_capture.body)
-        cursor = cursor.model_copy(
-            update={"search_form_evidence": form_capture.digest}
-        )
+        cursor = cursor.model_copy(update={"search_form_evidence": form_capture.digest})
         pending_evidence: tuple[EvidenceCapture, ...] = (form_capture,)
         while True:
             progress = cursor.progress

@@ -540,17 +540,13 @@ def _base_checks(
         QualificationCheck(
             name="application-evidence-capture-count",
             ok=(
-                state.evidence.application_capture_count
-                == snapshot.applications * 2
+                state.evidence.application_capture_count == snapshot.applications * 2
                 and snapshot.applications > 0
             ),
         ),
         QualificationCheck(
             name="search-evidence-capture-count",
-            ok=(
-                state.evidence.search_capture_count
-                >= len(state.query_inventory) + 1
-            ),
+            ok=(state.evidence.search_capture_count >= len(state.query_inventory) + 1),
         ),
         QualificationCheck(
             name="current-sections",
