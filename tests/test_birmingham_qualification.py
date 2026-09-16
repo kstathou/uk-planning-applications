@@ -436,6 +436,10 @@ def _late_clock() -> datetime:
     return datetime(2026, 10, 1, 12, tzinfo=UTC)
 
 
+def _early_clock() -> datetime:
+    return datetime(2026, 9, 14, 12, tzinfo=UTC)
+
+
 @pytest.mark.parametrize(
     ("remove", "replacement", "error"),
     [
@@ -783,11 +787,16 @@ def test_birmingham_replay_rejects_unknown_receipt_claim(
         "unresolved-profile-date",
         "historical-sample-date",
         "issued-predicate",
+        "issued-decision-date",
+        "future-issued-date",
         "missing-predicate-key",
+        "invalid-issued-reference",
         "unresolved-predicate",
+        "invalid-unresolved-reference",
         "blank-appeal",
         "pending-appeal",
         "late-execution",
+        "early-execution",
     ],
 )
 def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C901, PLR0912, PLR0915
@@ -862,13 +871,31 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C
         sample = json.loads(bodies[11])
         sample["features"][0]["attributes"]["APPLICATION_DECISION"] = "Approve"
         bodies[11] = _json_bytes(sample)
+    elif failure == "issued-decision-date":
+        sample = json.loads(bodies[11])
+        sample["features"][0]["attributes"]["Decision_Date"] = 995_328_000_000
+        bodies[11] = _json_bytes(sample)
+    elif failure == "future-issued-date":
+        sample = json.loads(bodies[11])
+        sample["features"][0]["attributes"]["Date_Issued"] = int(
+            datetime(2050, 1, 1, tzinfo=UTC).timestamp() * 1000
+        )
+        bodies[11] = _json_bytes(sample)
     elif failure == "missing-predicate-key":
         sample = json.loads(bodies[11])
         del sample["features"][0]["attributes"]["APPLICATION_DECISION"]
         bodies[11] = _json_bytes(sample)
+    elif failure == "invalid-issued-reference":
+        sample = json.loads(bodies[11])
+        sample["features"][0]["attributes"]["REFERENCE"] = "not-a-reference"
+        bodies[11] = _json_bytes(sample)
     elif failure == "unresolved-predicate":
         sample = json.loads(bodies[13])
         sample["features"][0]["attributes"]["Decision_Date"] = 1_300_000_000_000
+        bodies[13] = _json_bytes(sample)
+    elif failure == "invalid-unresolved-reference":
+        sample = json.loads(bodies[13])
+        sample["features"][0]["attributes"]["REFERENCE"] = "not-a-reference"
         bodies[13] = _json_bytes(sample)
     elif failure == "blank-appeal":
         sample = json.loads(bodies[13])
@@ -880,8 +907,10 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C
         for feature in sample["features"]:
             feature["attributes"]["APPEAL_DECISION"] = "Pending"
         bodies[13] = _json_bytes(sample)
-    else:
+    elif failure == "late-execution":
         clock = _late_clock
+    else:
+        clock = _early_clock
     data_dir = tmp_path / failure
     session = _ArcgisSession(bodies)
 
