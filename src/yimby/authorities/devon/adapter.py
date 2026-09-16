@@ -1442,7 +1442,9 @@ async def _fetch_protected(
             intent=request.intent,
             method=RequestMethod.POST,
             form=fields,
-            redirect_boundary=_REDIRECT_BOUNDARY,
+            redirect_boundary=_REDIRECT_BOUNDARY.model_copy(
+                update={"exact_urls": (accepted_url,)}
+            ),
         )
     )
     if _parse_disclaimer(accepted.body) is not None:

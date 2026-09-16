@@ -641,6 +641,21 @@ def test_redirect_boundary_can_restrict_queries_to_observed_paths() -> None:
     assert not boundary.allows("https://example.test/results?unexpected=value")
 
 
+def test_redirect_boundary_can_allow_one_exact_queried_url() -> None:
+    """A validated form action need not allow arbitrary queries on its path."""
+    accepted = HttpUrl("https://example.test/disclaimer/accept?returnUrl=%2Fresults")
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/disclaimer/accept", "/results"),
+        query_paths=(),
+        exact_urls=(accepted,),
+    )
+    assert boundary.allows(str(accepted))
+    assert not boundary.allows(
+        "https://example.test/disclaimer/accept?returnUrl=%2Fother"
+    )
+
+
 def test_http_session_rate_limits_each_physical_redirect_hop() -> None:
     """Each request in an allowed redirect chain receives the host gap."""
     current = [10.0]

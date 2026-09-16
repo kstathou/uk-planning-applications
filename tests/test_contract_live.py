@@ -1243,6 +1243,13 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
             ),
             HttpUrl(devon._ADVANCED_FORM_URL),
         )
+    accepted_action = HttpUrl(
+        f"{devon.BASE_URL}/Disclaimer/Accept?returnUrl=%2FSearch%2FAdvanced"
+    )
+    assert not devon._REDIRECT_BOUNDARY.allows(str(accepted_action))
+    assert devon._REDIRECT_BOUNDARY.model_copy(
+        update={"exact_urls": (accepted_action,)}
+    ).allows(str(accepted_action))
     with pytest.raises(devon.DevonProtectedRouteError):
         devon._validate_disclaimer_action(
             HttpUrl(

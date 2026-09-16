@@ -86,6 +86,7 @@ class RedirectBoundary(FrozenModel):
     exact_paths: tuple[str, ...] = ()
     path_prefixes: tuple[str, ...] = ()
     query_paths: tuple[str, ...] | None = None
+    exact_urls: tuple[HttpUrl, ...] = ()
 
     def allows(self, url: str) -> bool:
         """Return whether a destination remains inside the declared boundary."""
@@ -112,7 +113,12 @@ class RedirectBoundary(FrozenModel):
             or self.query_paths is None
             or candidate.path in self.query_paths
         )
-        return same_origin and not candidate.fragment and allowed_path and query_allowed
+        exact_url = url in {str(item) for item in self.exact_urls}
+        return (
+            same_origin
+            and not candidate.fragment
+            and ((allowed_path and query_allowed) or exact_url)
+        )
 
 
 class PortalRequest(FrozenModel):
