@@ -737,7 +737,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     dashboard = dashboard_snapshot(store, pilot_registry())
     assert dashboard.coverage_implemented == PILOT_AUTHORITY_COUNT
     assert dashboard.coverage_denominator == PILOT_AUTHORITY_COUNT
-    assert dashboard.live_ready == 0
+    assert dashboard.live_ready == 1
     assert dashboard.live_readiness_denominator == PILOT_AUTHORITY_COUNT
     assert dashboard.application_count == 1
     assert dashboard.request_count == BARNET_REQUEST_COUNT
