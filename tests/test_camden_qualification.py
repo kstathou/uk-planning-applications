@@ -287,7 +287,7 @@ def test_camden_qualification_writes_proof_receipt_and_immediate_refresh(
     assert agreement["application_count"] == 3
     assert agreement["rebuild_input_count"] == 3
     assert agreement["exact_match"] is True
-    assert receipt["evidence_integrity"]["captures_checked"] == 4
+    assert receipt["evidence_integrity"]["captures_checked"] == 9
     assert receipt["evidence_integrity"]["issues"] == []
     assert receipt["costs"]["rerun"] == {
         "request_count": 6,

@@ -206,8 +206,33 @@ class SqliteStore:
         authority_id: AuthorityId,
         batch: DurableDiscoveryBatch,
     ) -> None:
-        """Queue references and advance their checkpoint atomically."""
+        """Retain evidence, queue references, and advance the checkpoint atomically."""
+        evidence_paths = [
+            (capture, self._evidence.put(capture)) for capture in batch.evidence
+        ]
         with self._connection:
+            for capture, path in evidence_paths:
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO evidence(
+                        digest, path, source_url, media_type
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        capture.digest,
+                        self._evidence.relative_path(path),
+                        str(capture.url),
+                        capture.media_type,
+                    ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO discovery_evidence(
+                        authority_id, run_id, digest
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (authority_id, run_id, capture.digest),
+                )
             for reference in batch.references:
                 self._connection.execute(
                     """
@@ -1174,6 +1199,16 @@ class SqliteStore:
                     )
                 )
             linked_digests.update(digests)
+        linked_digests.update(
+            row["digest"]
+            for row in self._connection.execute(
+                """
+                SELECT DISTINCT digest FROM discovery_evidence
+                WHERE authority_id = ?
+                """,
+                (authority_id,),
+            )
+        )
 
         manifest: list[tuple[str, str, int, int]] = []
         captures_checked = 0
@@ -1233,6 +1268,20 @@ class SqliteStore:
             manifest_sha256=sha256(manifest_payload).hexdigest(),
             issues=tuple(issues),
         )
+
+    def discovery_evidence_count(self, authority_id: AuthorityId) -> int:
+        """Count distinct discovery captures retained for one authority."""
+        row = next(
+            self._connection.execute(
+                """
+                SELECT COUNT(DISTINCT digest) AS count
+                FROM discovery_evidence
+                WHERE authority_id = ?
+                """,
+                (authority_id,),
+            )
+        )
+        return int(row["count"])
 
     def metrics_totals(self) -> RunMetrics:
         """Aggregate completed collection costs for dashboard display."""

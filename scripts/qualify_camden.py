@@ -531,6 +531,10 @@ async def _qualify(
             ),
         ),
         QualificationCheck(
+            name="discovery-evidence-retained",
+            ok=store.discovery_evidence_count(_AUTHORITY_ID) > 0,
+        ),
+        QualificationCheck(
             name="immediate-refresh",
             ok=(
                 bool(expected_refreshes)

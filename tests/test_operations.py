@@ -52,6 +52,7 @@ from yimby.domain import (
     Completeness,
     CompleteSection,
     DocumentRecord,
+    DurableDiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
     NormalisedObservation,
@@ -61,6 +62,7 @@ from yimby.domain import (
     RunStatus,
     SourceId,
     SourceReference,
+    StoredCheckpoint,
     TransportMode,
 )
 from yimby.evidence import EvidenceIntegrityError, EvidenceStore
@@ -630,6 +632,41 @@ def test_authority_reference_and_evidence_integrity_proofs(tmp_path: Path) -> No
         issue.code for issue in store.evidence_integrity(AuthorityId("barnet")).issues
     } == {"invalid-gzip"}
     evidence_path.write_bytes(original)
+    store.close()
+
+
+def test_discovery_evidence_is_registered_linked_and_verified(tmp_path: Path) -> None:
+    """Discovery proof is a first-class authority-linked evidence capture."""
+    store = _store(tmp_path)
+    authority_id = AuthorityId("camden")
+    run_id = store.begin_run(authority_id)
+    body = b'{"reported_count":331,"schema_version":1}'
+    capture = EvidenceCapture(
+        url=HttpUrl("https://planningrecords.camden.gov.uk/results"),
+        media_type="application/vnd.yimby.camden-discovery+json",
+        body=body,
+        digest=EvidenceDigest(sha256(body).hexdigest()),
+    )
+
+    store.commit_discovery(
+        run_id,
+        authority_id,
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json='{"kind":"test"}',
+            ),
+            complete=False,
+            evidence=(capture,),
+        ),
+    )
+
+    assert store.discovery_evidence_count(authority_id) == 1
+    integrity = store.evidence_integrity(authority_id)
+    assert integrity.captures_checked == 1
+    assert integrity.uncompressed_bytes == len(body)
+    assert integrity.issues == ()
     store.close()
 
 

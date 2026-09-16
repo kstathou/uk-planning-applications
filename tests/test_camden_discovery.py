@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import date
 from hashlib import sha256
 from typing import TYPE_CHECKING, cast
@@ -804,6 +805,36 @@ def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> N
     assert rerun.requests == []
 
 
+def test_camden_discovery_retains_sanitised_reproducible_page_evidence() -> None:
+    batches = asyncio.run(
+        _first_batches(
+            CamdenAdapter(),
+            _DiscoverySession(_DiscoveryPortal()),
+            _window(),
+            2,
+        )
+    )
+
+    first, second = (batch.evidence[0] for batch in batches)
+    first_payload = json.loads(first.body)
+    second_payload = json.loads(second.body)
+    assert first_payload["reported_count"] == 12
+    assert first_payload["requested_offset"] == 0
+    assert first_payload["next_offset"] == 10
+    assert first_payload["references"][0] == {
+        "reference": "2026/1/P",
+        "locator": "1000",
+    }
+    assert second_payload["requested_offset"] == 10
+    assert second_payload["next_offset"] is None
+    assert second_payload["references"][-1]["reference"] == "2026/12/P"
+    assert first.digest == EvidenceDigest(sha256(first.body).hexdigest())
+    assert second.digest == EvidenceDigest(sha256(second.body).hexdigest())
+    assert urlsplit(str(second.url)).query == ""
+    assert b"XMLLoc" not in second.body
+    assert b"fresh-DATE_RECEIVED" not in second.body
+
+
 def test_camden_live_discovery_rejects_resumed_prefix_drift() -> None:
     adapter = CamdenAdapter()
     window = _window()
@@ -955,4 +986,13 @@ def test_camden_resume_replay_fails_closed(
         ordered_prefix=_prefix(),
     )
     with pytest.raises(discovery.CamdenResumeDriftError, match=match):
-        asyncio.run(discovery._replay_prefix(_ReplaySession([]), page, cursor))  # type: ignore[arg-type]
+        asyncio.run(
+            discovery._replay_prefix(
+                _ReplaySession([]),  # type: ignore[arg-type]
+                discovery._CapturedResultPage(page=page, evidence=()),
+                cursor,
+                discovery.camden_query_inventory(
+                    discovery.CamdenDiscoveryScopeV1.from_window(_window())
+                )[0],
+            )
+        )

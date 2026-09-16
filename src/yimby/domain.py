@@ -198,12 +198,22 @@ class StoredCheckpoint(FrozenModel):
     payload_json: str
 
 
+class EvidenceCapture(FrozenModel):
+    """One permitted response retained as source evidence."""
+
+    url: HttpUrl
+    media_type: str
+    body: bytes
+    digest: EvidenceDigest
+
+
 class DiscoveryBatch[CheckpointT: BaseModel](FrozenModel):
     """References and the checkpoint that becomes valid with them."""
 
     references: tuple[SourceReference, ...]
     next_checkpoint: CheckpointT
     complete: bool
+    evidence: tuple[EvidenceCapture, ...] = ()
 
 
 class DurableDiscoveryBatch(FrozenModel):
@@ -212,15 +222,7 @@ class DurableDiscoveryBatch(FrozenModel):
     references: tuple[SourceReference, ...]
     next_checkpoint: StoredCheckpoint
     complete: bool
-
-
-class EvidenceCapture(FrozenModel):
-    """One permitted response retained as source evidence."""
-
-    url: HttpUrl
-    media_type: str
-    body: bytes
-    digest: EvidenceDigest
+    evidence: tuple[EvidenceCapture, ...] = ()
 
 
 class NativeDocument(FrozenModel):

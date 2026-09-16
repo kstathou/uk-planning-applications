@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import date  # noqa: TC003 - Pydantic resolves this annotation at runtime.
 from enum import StrEnum
+from hashlib import sha256
 from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, Self
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
@@ -18,6 +20,8 @@ from pydantic import ConfigDict, Field, HttpUrl, RootModel, model_validator
 from yimby.domain import (
     DiscoveryBatch,
     DiscoveryWindow,
+    EvidenceCapture,
+    EvidenceDigest,
     FrozenModel,
     SourceId,
     SourceReference,
@@ -41,6 +45,7 @@ _RESULT_PATHS = {
     "/Northgate/PlanningExplorer17/Generic/StdResults.aspx",
 }
 _RESULT_PAGE_SIZE = 10
+_DISCOVERY_EVIDENCE_MEDIA_TYPE = "application/vnd.yimby.camden-discovery+json"
 _EMPTY_RESULTS = "No Records Found. Please resubmit search with different criteria."
 CAMDEN_SOURCE = SourceId("camden-jsf-search")
 _OVERRIDDEN_CONTROLS = {
@@ -351,16 +356,17 @@ async def discover_live(
             else cursor.query_index
         )
         query = progress.query_inventory[query_index]
-        first_page = await _submit_query(session, query)
+        captured = await _submit_query(session, query)
         if isinstance(cursor, CamdenPagingQueryV1):
-            page = await _replay_prefix(session, first_page, cursor)
+            captured = await _replay_prefix(session, captured, cursor, query)
             query_references = cursor.ordered_prefix
             reported_count = cursor.reported_count
         else:
-            page = first_page
+            page = captured.page
             query_references = ()
-            reported_count = first_page.reported_count
+            reported_count = page.reported_count
         while True:
+            page = captured.page
             if page.reported_count != reported_count:
                 _raise_resume_drift("reported total changed during query")
             query_references = _append_query_page(query_references, page.references)
@@ -404,6 +410,7 @@ async def discover_live(
                 ),
                 next_checkpoint=CamdenCheckpointV1(root=progress),
                 complete=isinstance(next_progress, CamdenTerminalV1),
+                evidence=captured.evidence,
             )
             if page.next_url is None:
                 break
@@ -411,9 +418,10 @@ async def discover_live(
             capture = await session.fetch(
                 PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
             )
-            page = _parse_result_page(
-                capture.body,
+            captured = _capture_result_page(
+                capture,
                 requested_offset=requested_offset,
+                query=query,
             )
 
 
@@ -499,21 +507,24 @@ def _checkpoint_is_terminal(checkpoint: CamdenLiveCheckpointV1) -> bool:
 async def _submit_query(
     session: PortalSession,
     query: CamdenDiscoveryQueryV1,
-) -> _CamdenResultPage:
+) -> _CapturedResultPage:
     form_capture = await session.fetch(
         PortalRequest(url=HttpUrl(GENERAL_SEARCH_URL), intent=RequestIntent.SEARCH)
     )
     form = _parse_general_search_form(form_capture.body)
     result_capture = await session.fetch(_search_request(form, query))
-    return _parse_result_page(result_capture.body, requested_offset=0)
+    return _capture_result_page(result_capture, requested_offset=0, query=query)
 
 
 async def _replay_prefix(
     session: PortalSession,
-    first_page: _CamdenResultPage,
+    first_page: _CapturedResultPage,
     cursor: CamdenPagingQueryV1,
-) -> _CamdenResultPage:
-    page = first_page
+    query: CamdenDiscoveryQueryV1,
+) -> _CapturedResultPage:
+    captured = first_page
+    page = captured.page
+    evidence = list(captured.evidence)
     consumed = 0
     while consumed < len(cursor.ordered_prefix):
         if page.reported_count != cursor.reported_count:
@@ -530,13 +541,27 @@ async def _replay_prefix(
             capture = await session.fetch(
                 PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
             )
-            page = _parse_result_page(capture.body, requested_offset=consumed)
+            captured = _capture_result_page(
+                capture,
+                requested_offset=consumed,
+                query=query,
+            )
+            page = captured.page
+            evidence.extend(captured.evidence)
     if consumed != cursor.next_offset or page.next_url is None:
         _raise_resume_drift("committed prefix cannot continue")
     capture = await session.fetch(
         PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
     )
-    return _parse_result_page(capture.body, requested_offset=cursor.next_offset)
+    captured = _capture_result_page(
+        capture,
+        requested_offset=cursor.next_offset,
+        query=query,
+    )
+    return _CapturedResultPage(
+        page=captured.page,
+        evidence=(*evidence, *captured.evidence),
+    )
 
 
 def _append_query_page(
@@ -584,6 +609,47 @@ class _CamdenResultPage:
     reported_count: int
     references: tuple[CamdenSeenReferenceV1, ...]
     next_url: HttpUrl | None
+
+
+@dataclass(frozen=True, slots=True)
+class _CapturedResultPage:
+    page: _CamdenResultPage
+    evidence: tuple[EvidenceCapture, ...]
+
+
+def _capture_result_page(
+    capture: EvidenceCapture,
+    *,
+    requested_offset: int,
+    query: CamdenDiscoveryQueryV1,
+) -> _CapturedResultPage:
+    page = _parse_result_page(capture.body, requested_offset=requested_offset)
+    payload = json.dumps(
+        {
+            "next_offset": (
+                requested_offset + len(page.references)
+                if page.next_url is not None
+                else None
+            ),
+            "query": query.model_dump(mode="json"),
+            "references": [item.model_dump(mode="json") for item in page.references],
+            "reported_count": page.reported_count,
+            "requested_offset": requested_offset,
+            "schema_version": 1,
+            "source_body_sha256": str(capture.digest),
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    source = urlsplit(str(capture.url))
+    safe_url = urlunsplit((source.scheme, source.netloc, source.path, "", ""))
+    evidence = EvidenceCapture(
+        url=HttpUrl(safe_url),
+        media_type=_DISCOVERY_EVIDENCE_MEDIA_TYPE,
+        body=payload,
+        digest=EvidenceDigest(sha256(payload).hexdigest()),
+    )
+    return _CapturedResultPage(page=page, evidence=(evidence,))
 
 
 def _parse_general_search_form(body: bytes) -> _CamdenSearchForm:
