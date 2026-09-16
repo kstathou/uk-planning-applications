@@ -145,10 +145,14 @@ def _result_page(
     )
     hidden = reported if hidden_reported is None else hidden_reported
     return f"""
-    <div id="divOnlinePlanningSearchResults">{rows}</div>
+    <div>{rows}</div>
+    <input name="PageCount" value="{pages}">
+    <input name="PageSize" value="{page_size}">
+    <input name="TotalRecords" value="{hidden}">
+    <select name="PagingParameters.PageSize"><option selected>{page_size}</option></select>
     <input name="PagingParameters.CurrentPageIndex" value="{page}">
     <input name="PagingParameters.PageSize" value="{page_size}">
-    <input name="PagingParameters.TotalRecords" value="{hidden}">
+    <input name="PagingParameters.TotalRecords" value="0">
     <input name="IsPaginationClicked" value="true">
     <span>Total record(s): {reported}</span>
     <div id="generalSearchPagination" data-url="/AssureLive/ES/Presentation/Planning/OnlinePlanning/SearchResultsForPagination">{links}</div>
