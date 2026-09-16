@@ -1094,7 +1094,10 @@ def test_authority_weekly_discovery_rejects_mismatch_and_open_scope(
 
     asyncio.run(mismatch())
 
-    if case.authority_id == AuthorityId("west-suffolk"):
+    if case.authority_id in {
+        AuthorityId("west-suffolk"),
+        AuthorityId("leeds"),
+    }:
         return
 
     async def open_scope() -> None:
@@ -1795,7 +1798,10 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
             ),
             live_complete=True,
         )
-        if case.authority_id == AuthorityId("west-suffolk"):
+        if case.authority_id in {
+            AuthorityId("west-suffolk"),
+            AuthorityId("leeds"),
+        }:
             terminal_open = [
                 batch
                 async for batch in adapter.discover(

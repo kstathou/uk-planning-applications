@@ -7,8 +7,8 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime, timedelta
 from html import unescape
-from typing import TYPE_CHECKING, NoReturn
-from urllib.parse import parse_qs, quote, urlsplit
+from typing import TYPE_CHECKING, Literal, NoReturn
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -51,9 +51,47 @@ SOURCE = SourceId("leeds-idox-public-access")
 BASE_URL = "https://publicaccess.leeds.gov.uk/online-applications"
 _WEEKLY_FORM_URL = f"{BASE_URL}/search.do?action=weeklyList"
 _WEEKLY_RESULTS_URL = f"{BASE_URL}/weeklyListResults.do?action=firstPage"
+_ADVANCED_FORM_URL = f"{BASE_URL}/search.do?action=advanced"
+_ADVANCED_RESULTS_URL = f"{BASE_URL}/advancedSearchResults.do?action=firstPage"
 _PAGED_RESULTS_URL = f"{BASE_URL}/pagedSearchResults.do"
-_DATE_TYPES = ("DC_Validated", "DC_Decided")
+_DATE_TYPES: tuple[Literal["DC_Validated", "DC_Decided"], ...] = (
+    "DC_Validated",
+    "DC_Decided",
+)
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
+_TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
+_CASE_TYPES = (
+    ("DAG", "Agricultural Determination"),
+    ("ADV", "Application to Display Adverts"),
+    ("CLA", "Certificate Alternative Appropriate Dev"),
+    ("CLE", "Certificate of Existing Lawful Use"),
+    ("CLP", "Certificate of Proposed Lawful Use"),
+    ("DEM", "Demolition Notification"),
+    ("COND", "Discharge of Conditions"),
+    ("EXT", "Extension of Time Period"),
+    ("EDD", "Extension to Determination Date"),
+    ("BNG106", "Floating S106/BNG"),
+    ("FU", "Full Planning Application"),
+    ("HAZ", "Hazardous Substance Consent"),
+    ("DHH", "Householder Determination"),
+    ("LI", "Listed Building Application"),
+    ("LA", "Local Authority Application Reg 4(1)"),
+    ("LATR", "Local Authority Tree Works"),
+    ("S106", "Modify or Discharge S106 Agreement"),
+    ("MOD", "Non Material Amendment"),
+    ("N1490", "Notification of Overhead Line"),
+    ("NPD", "Notification under Permitted Development"),
+    ("OT", "Outline Planning Application"),
+    ("DPD", "Permitted Development Determination"),
+    ("PIP", "Planning Permission in Principle"),
+    ("PRESME", "Pre-Application (SME Builders)"),
+    ("RM", "Reserved Matters Application"),
+    ("TDC", "Technical Details Consent"),
+    ("DTM", "Telecommunications Determination"),
+    ("TWA", "Transport and Works Act 1992"),
+    ("TR", "Tree Works"),
+    ("UNK", "Unknown"),
+)
 
 
 class LeedsDiscoveryScope(FrozenModel):
@@ -64,17 +102,64 @@ class LeedsDiscoveryScope(FrozenModel):
     include_open: bool
 
 
+class LeedsReferenceIdentityV1(FrozenModel):
+    """Stable Leeds reference and source-local locator pair."""
+
+    reference: str
+    locator: str
+
+
 class LeedsCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable Leeds weekly-list progress."""
 
     result_page: str
     live_scope: LeedsDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
+    query_totals: tuple[int, ...] = ()
     active_query: str | None = None
     next_page: int = 1
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
+    seen_identities: tuple[LeedsReferenceIdentityV1, ...] = ()
     live_complete: bool = False
+
+
+class _WeeklyQuery(FrozenModel):
+    week: str
+    date_type: Literal["DC_Validated", "DC_Decided"]
+
+    @property
+    def key(self) -> str:
+        return f"{self.week}|{self.date_type}"
+
+
+class _DateRangeQuery(FrozenModel):
+    kind: Literal["validated", "decision"]
+    start: date
+    end: date
+
+    @property
+    def key(self) -> str:
+        return f"advanced|{self.kind}|{self.start.isoformat()}|{self.end.isoformat()}"
+
+
+class _CurrentCaseTypeQuery(FrozenModel):
+    case_type: str
+
+    @property
+    def key(self) -> str:
+        return f"advanced|current|{self.case_type}"
+
+
+class _ActiveAppealQuery(FrozenModel):
+    appeal_status: Literal["Appeal lodged"] = "Appeal lodged"
+
+    @property
+    def key(self) -> str:
+        return f"advanced|appeal|{self.appeal_status}"
+
+
+type _AdvancedQuery = _DateRangeQuery | _CurrentCaseTypeQuery | _ActiveAppealQuery
 
 
 class LeedsDocumentV1(FrozenModel):
@@ -150,7 +235,7 @@ class LeedsAdapter:
             complete=next_page == "complete",
         )
 
-    async def _discover_live(  # noqa: C901, PLR0912
+    async def _discover_live(  # noqa: C901, PLR0912, PLR0915
         self,
         session: PortalSession,
         window: DiscoveryWindow,
@@ -167,96 +252,131 @@ class LeedsAdapter:
                 result_page="live",
                 live_scope=requested_scope,
             )
-        if window.include_open and progress.live_complete:
-            raise LeedsOpenEnumerationUnsupportedError
         if progress.live_complete:
             yield DiscoveryBatch(references=(), next_checkpoint=progress, complete=True)
             return
-        form_capture = await session.fetch(
+        weekly_capture = await session.fetch(
             PortalRequest(url=HttpUrl(_WEEKLY_FORM_URL), intent=RequestIntent.SEARCH)
         )
-        form = _parse_form(form_capture.body)
-        query_keys = tuple(
-            f"{week}|{date_type}"
-            for week in _intersecting_weeks(form, window)
+        weekly_form = _parse_form(weekly_capture.body)
+        weekly_queries = tuple(
+            _WeeklyQuery(week=week, date_type=date_type)
+            for week in _intersecting_weeks(weekly_form, window)
             for date_type in _DATE_TYPES
+        )
+        advanced_queries = _advanced_query_inventory(window)
+        query_keys = tuple(query.key for query in weekly_queries) + tuple(
+            query.key for query in advanced_queries
         )
         if (
             progress.active_query is not None
             and progress.active_query not in query_keys
         ):
             raise LeedsCheckpointError(progress.active_query)
-        pending = tuple(
-            query for query in query_keys if query not in progress.completed_queries
+        pending_weekly = tuple(
+            query
+            for query in weekly_queries
+            if query.key not in progress.completed_queries
         )
-        for query in pending:
-            week, date_type = query.split("|", maxsplit=1)
-            page = progress.next_page if progress.active_query == query else 1
+        for query in pending_weekly:
+            page = progress.next_page if progress.active_query == query.key else 1
             row_count = (
-                progress.query_row_count if progress.active_query == query else 0
+                progress.query_row_count if progress.active_query == query.key else 0
             )
-            if progress.active_query == query and page > 1:
-                await session.fetch(_weekly_request(form, week, date_type, 1))
+            if progress.active_query == query.key and page > 1:
+                await session.fetch(
+                    _weekly_request(
+                        weekly_form,
+                        query.week,
+                        query.date_type,
+                        1,
+                    )
+                )
             while True:
                 capture = await session.fetch(
-                    _weekly_request(form, week, date_type, page)
+                    _weekly_request(
+                        weekly_form,
+                        query.week,
+                        query.date_type,
+                        page,
+                    )
                 )
                 search_page = _parse_search_page(capture.body)
-                row_count += len(search_page.references)
-                if row_count > search_page.reported or (
-                    not search_page.references and row_count < search_page.reported
-                ):
-                    raise LeedsCountMismatchError(
-                        query, search_page.reported, row_count
-                    )
-                seen = set(progress.seen_references)
-                fresh = []
-                for reference in search_page.references:
-                    if reference.reference not in seen:
-                        seen.add(reference.reference)
-                        fresh.append(reference)
-                last_page = row_count == search_page.reported
-                if last_page:
-                    completed_queries = (*progress.completed_queries, query)
-                    next_checkpoint = progress.model_copy(
-                        update={
-                            "completed_queries": completed_queries,
-                            "active_query": None,
-                            "next_page": 1,
-                            "query_row_count": 0,
-                            "seen_references": tuple(seen),
-                            "live_complete": (
-                                len(completed_queries) == len(query_keys)
-                                and not window.include_open
-                            ),
-                        }
-                    )
-                else:
-                    next_checkpoint = progress.model_copy(
-                        update={
-                            "active_query": query,
-                            "next_page": page + 1,
-                            "query_row_count": row_count,
-                            "seen_references": tuple(seen),
-                        }
-                    )
+                next_checkpoint, fresh, last_page = _advance_checkpoint(
+                    progress,
+                    active_page=_ActivePage(
+                        query_key=query.key,
+                        page=page,
+                        row_count=row_count,
+                    ),
+                    search_page=search_page,
+                    all_query_keys=query_keys,
+                )
                 yield DiscoveryBatch(
-                    references=tuple(fresh),
+                    references=fresh,
                     next_checkpoint=next_checkpoint,
                     complete=next_checkpoint.live_complete,
                 )
                 progress = next_checkpoint
                 if last_page:
                     break
+                row_count = next_checkpoint.query_row_count
                 page += 1
-        if not pending and not window.include_open:
-            completed_checkpoint = progress.model_copy(update={"live_complete": True})
+        if not advanced_queries:
+            if pending_weekly:
+                return
+            completed = progress.model_copy(update={"live_complete": True})
             yield DiscoveryBatch(
-                references=(), next_checkpoint=completed_checkpoint, complete=True
+                references=(), next_checkpoint=completed, complete=True
             )
             return
-        if window.include_open:
-            raise LeedsOpenEnumerationUnsupportedError
+
+        advanced_capture = await session.fetch(
+            PortalRequest(url=HttpUrl(_ADVANCED_FORM_URL), intent=RequestIntent.SEARCH)
+        )
+        advanced_form = _parse_advanced_form(advanced_capture.body)
+        pending_advanced = tuple(
+            query
+            for query in advanced_queries
+            if query.key not in progress.completed_queries
+        )
+        for query in pending_advanced:
+            page = progress.next_page if progress.active_query == query.key else 1
+            row_count = (
+                progress.query_row_count if progress.active_query == query.key else 0
+            )
+            if progress.active_query == query.key and page > 1:
+                await session.fetch(_advanced_request(advanced_form, query, 1))
+            while True:
+                capture = await session.fetch(
+                    _advanced_request(advanced_form, query, page)
+                )
+                search_page = _parse_advanced_search_page(capture.body, page=page)
+                next_checkpoint, fresh, last_page = _advance_checkpoint(
+                    progress,
+                    active_page=_ActivePage(
+                        query_key=query.key,
+                        page=page,
+                        row_count=row_count,
+                    ),
+                    search_page=search_page,
+                    all_query_keys=query_keys,
+                )
+                yield DiscoveryBatch(
+                    references=fresh,
+                    next_checkpoint=next_checkpoint,
+                    complete=next_checkpoint.live_complete,
+                )
+                progress = next_checkpoint
+                if last_page:
+                    break
+                row_count = next_checkpoint.query_row_count
+                page += 1
+        if not pending_advanced:
+            completed = progress.model_copy(update={"live_complete": True})
+            yield DiscoveryBatch(
+                references=(), next_checkpoint=completed, complete=True
+            )
 
     async def fetch(
         self,
@@ -365,6 +485,75 @@ class _SearchPage(FrozenModel):
     reported: int
 
 
+class _ActivePage(FrozenModel):
+    query_key: str
+    page: int
+    row_count: int
+
+
+def _advance_checkpoint(
+    progress: LeedsCheckpointV1,
+    *,
+    active_page: _ActivePage,
+    search_page: _SearchPage,
+    all_query_keys: tuple[str, ...],
+) -> tuple[LeedsCheckpointV1, tuple[SourceReference, ...], bool]:
+    next_row_count = active_page.row_count + len(search_page.references)
+    if next_row_count > search_page.reported or (
+        not search_page.references and next_row_count < search_page.reported
+    ):
+        raise LeedsCountMismatchError(
+            active_page.query_key,
+            search_page.reported,
+            next_row_count,
+        )
+    identities = {
+        identity.reference: identity.locator for identity in progress.seen_identities
+    }
+    seen = set(progress.seen_references)
+    fresh = []
+    for reference in search_page.references:
+        if reference.locator is None:
+            raise LeedsRoutingError(reference.reference)
+        existing_locator = identities.get(reference.reference)
+        if existing_locator is not None and existing_locator != reference.locator:
+            raise LeedsIdentityConflictError(reference.reference)
+        identities[reference.reference] = reference.locator
+        if reference.reference not in seen:
+            seen.add(reference.reference)
+            fresh.append(reference)
+    identity_values = tuple(
+        LeedsReferenceIdentityV1(reference=reference, locator=locator)
+        for reference, locator in sorted(identities.items())
+    )
+    last_page = next_row_count == search_page.reported
+    if last_page:
+        completed_queries = (*progress.completed_queries, active_page.query_key)
+        checkpoint = progress.model_copy(
+            update={
+                "completed_queries": completed_queries,
+                "query_totals": (*progress.query_totals, search_page.reported),
+                "active_query": None,
+                "next_page": 1,
+                "query_row_count": 0,
+                "seen_references": tuple(sorted(seen)),
+                "seen_identities": identity_values,
+                "live_complete": len(completed_queries) == len(all_query_keys),
+            }
+        )
+    else:
+        checkpoint = progress.model_copy(
+            update={
+                "active_query": active_page.query_key,
+                "next_page": active_page.page + 1,
+                "query_row_count": next_row_count,
+                "seen_references": tuple(sorted(seen)),
+                "seen_identities": identity_values,
+            }
+        )
+    return checkpoint, tuple(fresh), last_page
+
+
 def _parse_form(body: bytes) -> Tag:
     soup = BeautifulSoup(body, "html.parser")
     form = soup.select_one("form")
@@ -373,6 +562,106 @@ def _parse_form(body: bytes) -> Tag:
     if not any(field.name == "_csrf" and field.value for field in _form_fields(form)):
         _raise_parse("_csrf")
     return form
+
+
+def _parse_advanced_form(body: bytes) -> Tag:
+    soup = BeautifulSoup(body, "html.parser")
+    forms = soup.select("form#advancedSearchForm")
+    if len(forms) != 1 or not isinstance(forms[0], Tag):
+        _raise_parse("advanced form")
+    form = forms[0]
+    action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
+    if (
+        str(form.get("method", "")).casefold() != "post"
+        or action != _ADVANCED_RESULTS_URL
+    ):
+        _raise_parse("advanced form")
+    required_fields = {
+        "_csrf",
+        "searchCriteria.reference",
+        "searchCriteria.description",
+        "searchCriteria.applicantName",
+        "searchCriteria.caseType",
+        "searchCriteria.ward",
+        "searchCriteria.parish",
+        "searchCriteria.conservationArea",
+        "searchCriteria.agent",
+        "searchCriteria.caseStatus",
+        "searchCriteria.caseDecision",
+        "searchCriteria.appealStatus",
+        "searchCriteria.developmentType",
+        "caseAddressType",
+        "searchCriteria.address",
+        "date(applicationValidatedStart)",
+        "date(applicationValidatedEnd)",
+        "date(applicationCommitteeStart)",
+        "date(applicationCommitteeEnd)",
+        "date(applicationDecisionStart)",
+        "date(applicationDecisionEnd)",
+        "searchType",
+    }
+    if not required_fields.issubset(field.name for field in _form_fields(form)):
+        _raise_parse("advanced form fields")
+    _require_options(
+        form,
+        "searchCriteria.caseStatus",
+        (
+            ("", "All"),
+            ("Current", "Current"),
+            ("Decided", "Decided"),
+            ("Unknown", "Unknown"),
+        ),
+        "case status",
+    )
+    _require_options(
+        form,
+        "searchCriteria.appealStatus",
+        (
+            ("", "All"),
+            ("Appeal decided", "Appeal decided"),
+            ("Appeal lodged", "Appeal lodged"),
+            ("Unknown", "Unknown"),
+        ),
+        "appeal status",
+    )
+    _require_options(
+        form,
+        "searchCriteria.caseType",
+        (("", "All"), *_CASE_TYPES),
+        "case type",
+    )
+    values = {field.name: field.value for field in _form_fields(form)}
+    if values["caseAddressType"] != "Application" or not values["searchType"]:
+        _raise_parse("advanced form discriminators")
+    return form
+
+
+def _require_options(
+    form: Tag,
+    field: str,
+    expected: tuple[tuple[str, str], ...],
+    label: str,
+) -> None:
+    controls = form.select(f'select[name="{field}"]')
+    if len(controls) != 1:
+        _raise_parse(f"advanced {label}")
+    actual = tuple(
+        (str(option.get("value", "")), option.get_text(" ", strip=True))
+        for option in controls[0].select("option[value]")
+    )
+    if actual != expected:
+        _raise_parse(f"advanced {label} options")
+
+
+def _advanced_query_inventory(window: DiscoveryWindow) -> tuple[_AdvancedQuery, ...]:
+    if not window.include_open:
+        return ()
+    return (
+        _DateRangeQuery(kind="validated", start=window.start, end=window.end),
+        _DateRangeQuery(kind="decision", start=window.start, end=window.end),
+        *(_CurrentCaseTypeQuery(case_type=value) for value, _label in _CASE_TYPES),
+        _ActiveAppealQuery(),
+    )
 
 
 def _form_fields(form: Tag) -> tuple[FormField, ...]:
@@ -451,6 +740,58 @@ def _weekly_request(form: Tag, week: str, date_type: str, page: int) -> PortalRe
     )
 
 
+def _advanced_request(
+    form: Tag,
+    query: _AdvancedQuery,
+    page: int,
+) -> PortalRequest:
+    if page > 1:
+        return PortalRequest(
+            url=HttpUrl(f"{_PAGED_RESULTS_URL}?action=page&searchCriteria.page={page}"),
+            intent=RequestIntent.SEARCH,
+        )
+    values = {
+        "searchCriteria.reference": "",
+        "searchCriteria.description": "",
+        "searchCriteria.applicantName": "",
+        "searchCriteria.caseType": "",
+        "searchCriteria.ward": "",
+        "searchCriteria.parish": "",
+        "searchCriteria.conservationArea": "",
+        "searchCriteria.agent": "",
+        "searchCriteria.caseStatus": "",
+        "searchCriteria.caseDecision": "",
+        "searchCriteria.appealStatus": "",
+        "searchCriteria.developmentType": "",
+        "searchCriteria.address": "",
+        "date(applicationValidatedStart)": "",
+        "date(applicationValidatedEnd)": "",
+        "date(applicationCommitteeStart)": "",
+        "date(applicationCommitteeEnd)": "",
+        "date(applicationDecisionStart)": "",
+        "date(applicationDecisionEnd)": "",
+    }
+    if isinstance(query, _DateRangeQuery):
+        prefix = (
+            "applicationValidated"
+            if query.kind == "validated"
+            else "applicationDecision"
+        )
+        values[f"date({prefix}Start)"] = query.start.strftime("%d/%m/%Y")
+        values[f"date({prefix}End)"] = query.end.strftime("%d/%m/%Y")
+    elif isinstance(query, _CurrentCaseTypeQuery):
+        values["searchCriteria.caseStatus"] = "Current"
+        values["searchCriteria.caseType"] = query.case_type
+    else:
+        values["searchCriteria.appealStatus"] = query.appeal_status
+    return PortalRequest(
+        url=HttpUrl(_ADVANCED_RESULTS_URL),
+        intent=RequestIntent.SEARCH,
+        method=RequestMethod.POST,
+        form=_override_fields(form, values),
+    )
+
+
 def _parse_search_page(body: bytes) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
     references = []
@@ -475,6 +816,15 @@ def _parse_search_page(body: bytes) -> _SearchPage:
             raise
         reported = len(references)
     return _SearchPage(references=tuple(references), reported=reported)
+
+
+def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
+    text = BeautifulSoup(body, "html.parser").get_text(" ", strip=True).casefold()
+    if _TOO_MANY_RESULTS in text:
+        raise LeedsSearchCapError
+    if page < 1:
+        _raise_parse("advanced result page")
+    return _parse_search_page(body)
 
 
 def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
@@ -634,6 +984,22 @@ class LeedsCountMismatchError(LeedsParseError):
     def __init__(self, section: str, expected: int, actual: int) -> None:
         """Describe the bounded count disagreement."""
         super().__init__(f"{section} count expected {expected} actual {actual}")
+
+
+class LeedsSearchCapError(RuntimeError):
+    """The official search refused to enumerate a complete partition."""
+
+    def __init__(self) -> None:
+        """Keep the source cap distinct from an empty result."""
+        super().__init__("Leeds search exceeded the official result cap")
+
+
+class LeedsIdentityConflictError(LeedsParseError):
+    """One human reference acquired another source-local locator."""
+
+    def __init__(self, reference: str) -> None:
+        """Name the conflicting public reference."""
+        super().__init__(f"identity conflict {reference}")
 
 
 class LeedsOpenEnumerationUnsupportedError(RuntimeError):
