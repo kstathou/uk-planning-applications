@@ -43,6 +43,15 @@ _CONFIG_ERROR = 2
 _RECENT_WHERE = (
     "Received >= DATE '2026-08-18 00:00:00' AND Received < DATE '2026-09-17 00:00:00'"
 )
+_YEAR_2025_WHERE = (
+    "Received >= DATE '2025-01-01 00:00:00' AND Received < DATE '2026-01-01 00:00:00'"
+)
+_JULY_2026_WHERE = (
+    "Received >= DATE '2026-07-01 00:00:00' AND Received < DATE '2026-08-01 00:00:00'"
+)
+_AUGUST_2026_WHERE = (
+    "Received >= DATE '2026-08-01 00:00:00' AND Received < DATE '2026-09-01 00:00:00'"
+)
 _UNRESOLVED_WHERE = (
     "APPLICATION_DECISION IS NULL AND Decision_Date IS NULL AND Date_Issued IS NULL"
 )
@@ -53,6 +62,9 @@ _DECISION_DATE_MISMATCH_WHERE = (
 _QUERY_NAMES = (
     "layer-metadata",
     "layer-profile",
+    "count-2025",
+    "count-2026-july",
+    "count-2026-august",
     "recent-count",
     "recent-page-0",
     "recent-page-25",
@@ -206,6 +218,9 @@ def _arcgis_bodies() -> tuple[bytes, ...]:
                 ]
             }
         ),
+        _json_bytes({"count": 5802}),
+        _json_bytes({"count": 453}),
+        _json_bytes({"count": 121}),
         _json_bytes({"count": 70}),
         _json_bytes({"features": recent_features[:25], "exceededTransferLimit": True}),
         _json_bytes(
@@ -436,6 +451,17 @@ def _assert_query_inventory(
 
     urls = dict(zip(_QUERY_NAMES, session.requested_urls, strict=True))
     assert urls["layer-metadata"] == f"{_LAYER_URL}?f=json"
+    expected_count_queries = {
+        "count-2025": _YEAR_2025_WHERE,
+        "count-2026-july": _JULY_2026_WHERE,
+        "count-2026-august": _AUGUST_2026_WHERE,
+    }
+    for name, where in expected_count_queries.items():
+        assert _query(urls[name]) == {
+            "f": ["json"],
+            "where": [where],
+            "returnCountOnly": ["true"],
+        }
     assert _query(urls["recent-count"]) == {
         "f": ["json"],
         "where": [_RECENT_WHERE],
@@ -498,6 +524,17 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
         "end": "2026-09-16",
         "include_open": True,
         "inclusive_days": 30,
+    }
+    assert receipt["source_freshness"] == {
+        "status": "not-proven",
+        "latest_received": "2026-09-15",
+        "latest_record_is_current": True,
+        "volume_continuity": "not-proven",
+        "calendar_2025_count": 5802,
+        "july_2026_count": 453,
+        "august_2026_count": 121,
+        "rolling_30_day_count": 70,
+        "reason": "unexplained-recent-volume-decline",
     }
     assert receipt["recent_discovery"] == {
         "status": "proven",
@@ -598,7 +635,7 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
     module = _qualification_module()
     bodies = list(_arcgis_bodies())
     if failure == "recent-total":
-        bodies[2] = _json_bytes({"count": 71})
+        bodies[5] = _json_bytes({"count": 71})
     else:
         metadata = json.loads(bodies[0])
         metadata["type"] = "Map Layer"
