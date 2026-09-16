@@ -17,17 +17,18 @@ from pydantic import ConfigDict, Field, HttpUrl, RootModel
 
 from yimby.domain import (
     ApplicationMetadata,
-    AuthorityCapabilities,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
-    CapabilityState,
     Completeness,
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
     DocumentRecord,
     FrozenModel,
+    LiveReadiness,
+    LiveStatus,
+    LiveTransportKind,
     NativeSnapshot,
     NormalisedObservation,
     Provenance,
@@ -196,7 +197,18 @@ class DorsetAdapter:
         sources=(
             SourceDefinition(id=LIVE_SOURCE, base_url=HttpUrl(f"{LIVE_BASE_URL}/")),
         ),
-        capabilities=AuthorityCapabilities(discovery=CapabilityState.UNKNOWN),
+        live_status=LiveStatus(
+            readiness=LiveReadiness.DISCOVERY_ONLY,
+            reason=(
+                "same-day live bootstrap passed; two weekly refresh cycles "
+                "remain pending"
+            ),
+            evidence=(
+                ".yimby/qualification-dorset-2026-09-16/dorset-qualification-v1.json",
+                "weekly cycles due 2026-09-23 and 2026-09-30",
+            ),
+            transport=LiveTransportKind.HTTP,
+        ),
     )
 
     async def discover(

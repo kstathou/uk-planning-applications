@@ -98,10 +98,11 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         "portal inventory records an unresolved blank client bootstrap",
     ),
     AuthorityId("dorset"): _status(
-        LiveReadiness.BROWSER_ONLY,
-        "the JavaScript map has no bounded implemented discovery path",
-        "portal inventory records a client-rendered map boundary",
-        LiveTransportKind.BROWSER,
+        LiveReadiness.DISCOVERY_ONLY,
+        "same-day live bootstrap passed; two weekly refresh cycles remain pending",
+        "dated Dorset qualification receipt proves the received and outstanding "
+        "query inventory",
+        LiveTransportKind.HTTP,
     ),
     AuthorityId("cheshire-east"): _status(
         LiveReadiness.DISCOVERY_ONLY,
