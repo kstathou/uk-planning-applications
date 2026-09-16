@@ -275,6 +275,24 @@ def test_blackburn_page_object_accepts_valueless_empty_hidden_controls() -> None
     page.search.click.assert_awaited_once_with()
 
 
+def test_blackburn_page_object_accepts_live_hidden_search_discriminators() -> None:
+    page = _search_page()
+    page.controls['input[name="fa"]'].get_attribute = AsyncMock(
+        return_value="search"
+    )
+    page.controls['input[name="submitted"]'].get_attribute = AsyncMock(
+        return_value="true"
+    )
+    session = BlackburnPlaywrightSession(
+        _InteractiveBoundary(cast("Page", page)),
+        pause=AsyncMock(),
+    )
+
+    asyncio.run(session.search(_query(BlackburnQueryKind.RECEIVED)))
+
+    page.search.click.assert_awaited_once_with()
+
+
 def test_blackburn_page_object_rejects_ambiguous_detail_routes() -> None:
     session = BlackburnPlaywrightSession(
         _InteractiveBoundary(cast("Page", _detail_page())),
