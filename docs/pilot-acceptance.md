@@ -29,7 +29,7 @@ requirement.
 | Peak District National Park Authority | Verified | Migrated discovery and detail routes recorded; child sections partial | Rolling-week legacy adapter; client-loaded child sections explicitly failed | Open | Open |
 | Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
 | Old Oak and Park Royal Development Corporation | Verified | Source blocked | Blocked | Open | Open |
-| Dorset | Verified | Statutory search, pagination, detail, document metadata, and unavailable comment text recorded | Fixed 30-day received and unrestricted outstanding adapter; 1,430 applications persisted with exact reference and evidence agreement | Passed 16 September 2026; discovery-only | Pending: 23 and 30 September 2026 |
+| Dorset | Verified | Statutory search, pagination, detail, document metadata, and unavailable comment text recorded | Fixed 30-day received and unrestricted outstanding adapter; 1,436 current applications persisted with exact reference and evidence agreement | Passed 16 September 2026; discovery-only | Pending: 23 and 30 September 2026 |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
@@ -42,8 +42,9 @@ The deterministic column proves package ownership, typed native payloads, parsin
 
 As of 16 September 2026, Dorset has completed a verified same-day live
 bootstrap. Its terminal checkpoint, durable queue, and application table agree
-on 1,430 native identities; all retained evidence re-hashes; and its immediate
-terminal rerun made zero network requests. Dorset remains `discovery-only`
+on 1,436 current native identities; all 1,437 current and historical retained
+evidence records re-hash; and its immediate terminal rerun made zero network
+requests. Dorset remains `discovery-only`
 until the two dated weekly cycles pass. The other fourteen authorities still
 require a complete live bootstrap, and all fifteen remain subject to their
 outstanding operational evidence. Blocked and partial authorities remain in

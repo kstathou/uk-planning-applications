@@ -139,15 +139,18 @@ uv run python scripts/qualify_dorset.py \
 
 The command fixes the inclusive received window at 18 August through 16
 September 2026 and requires the complete outstanding query. It uses one HTTP
-attempt per request, inherits the normal two-second host gap, persists a typed
-v1 receipt atomically, and performs an immediate terminal rerun that must make
-zero network requests. Reuse the same directory with `--resume` after a detail
+attempt per request, applies the two-second host gap to every Dorset network
+hop including redirects, persists a typed v1 receipt atomically, and performs
+an immediate terminal rerun that must make zero network requests. Reuse the
+same directory with `--resume` after a detail
 or transport failure. If the official same-day result ordering invalidates a
 page checkpoint or supersedes a terminal inventory, add `--restart-discovery`.
 That explicit option preserves runs, evidence, queued identities, and
-observations while replacing the same-scope query checkpoint. Terminal
-reference agreement still rejects a stale queued identity. Neither option
-satisfies the weekly-cycle requirement.
+observations. It restarts only the outstanding query when the bounded received
+query is already complete; it fully rescans a superseded terminal inventory.
+Terminal reference agreement scopes exact current identities while retaining
+formerly in-scope rows as history. Neither option satisfies the weekly-cycle
+requirement.
 
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a

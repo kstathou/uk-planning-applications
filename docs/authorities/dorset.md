@@ -26,7 +26,10 @@ The exact live inventory is:
 
 The adapter submits both the ISO and visible Telerik date values, captured
 numeric and date client state, the portal's active calendar values, and the
-clicked search control in native form order. Pagination posts the captured
+clicked search control in native form order. The outstanding checkbox must be
+present, enabled, and typed as a checkbox; the adapter will not fabricate it.
+Every underlying HTTP hop, including automatic disclaimer redirects, receives
+its own Dorset-local two-second host turn. Pagination posts the captured
 upper `NextButton`, whose value is one space, along with the result form's
 current view state. The terminal result page still renders enabled next-button
 chrome. The two agreeing `Page n of n` markers establish terminality, and the
@@ -36,10 +39,12 @@ Search pages are scanned atomically before detail work is released. Each
 nonterminal page commits an empty work batch plus typed checkpoint proof. The
 terminal page releases the complete query reference set. Cross-page duplicate
 references, changed page counts, replay mismatches, short nonterminal pages,
-and conflicting locators all fail closed. `--restart-discovery` replaces a
-same-scope query checkpoint, including a superseded terminal inventory, and
-preserves runs, evidence, queued identities, and observations. Final reference
-agreement rejects any stale durable record.
+and conflicting locators all fail closed. `--restart-discovery` restarts only
+an untrusted active outstanding query when the received query is already
+complete; a superseded terminal inventory is fully rescanned. Both paths
+preserve runs, evidence, queued identities, and observations. Final reference
+agreement proves every terminal identity against the queue and application
+table while retaining formerly in-scope applications as historical records.
 
 ## Detail and section contract
 
@@ -78,25 +83,34 @@ The typed v1 receipt is
 It records:
 
 - 48 received-date pages and 136 unrestricted outstanding pages exhausted.
-- 474 received-date identities plus 956 additional older-open identities.
-- 1,430 applications, queued references, and terminal-checkpoint references with
+- 478 received-date identities plus 958 additional older-open identities.
+- 1,436 current applications, queued references, and terminal-checkpoint
+  references with
   the same SHA-256 identity-set hash,
-  `a0eb643504ea2e98e4ed70d916b35666700a342875c0c52133e063a31b471d30`.
-- 1,430 retained current native records and 1,430 unique evidence digests, all
-  decompressed and re-hashed successfully.
-- The final successful resume made 256 single-attempt fetches, transferred
-  53,934,300 bytes, and made zero attachment-body requests.
+  `20966c1c659f604f4d9bc8011eb478557efbe3ee693051c781763ad482c2c7b7`.
+- 1,437 retained native records and 1,437 unique evidence digests, all
+  decompressed and re-hashed successfully. The extra record is a formerly-open
+  historical application outside the terminal inventory.
+- Successful live source run `050750ab-98bd-4be0-83e8-250ad7196443` made 1,097
+  single-attempt fetches, transferred 129,353,298 bytes, and made zero
+  attachment-body requests.
 - Zero pending retries, failed sections, and unmapped records.
 - A second successful terminal run with zero fetches, zero transferred bytes,
   and no database or evidence change.
 - Receipt SHA-256
-  `27028882645b8cf760613f75349bfcf24d7735f258bc808ade1741e89dfa3778`.
+  `d42f626bff417b376271f2608e1e81c0cddd5bb63959ac897454f46a3582bf65`.
 
 An earlier receipt was superseded after independent review showed that its
 outstanding query had inherited the bounded received dates. The corrected
 unrestricted query advertised 136 pages rather than 40. Historical failed runs
-and live-derived parser stops remain in the same store as audit evidence. The
-receipt selects the final two successful runs and contains no failed check.
+and live-derived parser stops remain in the same store as audit evidence.
+A second independent review then found that redirect hops were not individually
+rate-limited and that a missing outstanding checkbox could be synthesized.
+Both paths now fail closed or remain individually metered. During the corrected
+rescan, the live outstanding set changed from 135 to 136 pages; one contradicted
+pass failed closed and the explicit query-local restart completed the stable
+136-page scan. The receipt cites the successful nonzero live source run, selects
+two successful zero-network validation runs, and contains no failed check.
 
 ## Readiness
 
