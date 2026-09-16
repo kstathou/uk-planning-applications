@@ -66,8 +66,9 @@ attachment-body requests.
 
 The full local bootstrap is stored in
 `.yimby/qualification-opdc-2026-09-16/`. Its private qualification proof keeps
-the original bootstrap cost and full identity inventory. A terminal resume
-validates that proof against the current store without source requests. The
+the cumulative bootstrap request and byte cost plus the full identity
+inventory. A terminal resume validates that cost against durable run rows and
+checks the proof against the current store without source requests. The
 [committed receipt](../evidence/opdc-qualification-2026-09-16.json) is
 sanitized. It retains the scope, query totals, aggregate counts, costs, run
 statuses, checks, and evidence commitments while omitting the 55-row identity
