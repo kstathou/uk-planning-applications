@@ -410,6 +410,12 @@ async def _qualify(
     )
     inventory = expected_live_query_keys(config.scope)
     prior_status_count = len(store.run_statuses())
+    prior_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
+    receipt_anchor_required = (
+        _terminal_checkpoint(store, config.scope)
+        and prior_snapshot.pending_retries == 0
+        and prior_snapshot.failed_sections == 0
+    )
     initial = await _collect_once(collector, window, session_factory)
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     initial_checks = _base_checks(
@@ -421,12 +427,10 @@ async def _qualify(
     )
     _require(initial_checks)
     current_time = now()
-    created_at = current_time
-    if initial.request_count == 0:
-        anchor = _receipt_anchor(prior_receipt, config.scope, current_time)
-        if anchor is None:
-            raise QualificationAnchorError
-        created_at = anchor
+    anchor = _receipt_anchor(prior_receipt, config.scope, current_time)
+    if anchor is None and receipt_anchor_required:
+        raise QualificationAnchorError
+    created_at = current_time if anchor is None else anchor
 
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)

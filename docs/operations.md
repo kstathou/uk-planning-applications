@@ -112,10 +112,13 @@ sections or applications. Let the official site recover and then resume the
 same target. Other failed child sections remain queued for the next resume. Do
 not run parallel Barnet collectors or rotate clients to evade the source limit.
 Requalifying an already terminal target with zero live requests preserves the
-original receipt timestamp and the two follow-up due dates; it cannot postpone
-those cycles by repeatedly rewriting the receipt. A terminal target whose
+original receipt timestamp and the two follow-up due dates. The same anchor is
+preserved when a terminal target performs due detail refreshes, so a refresh
+cannot postpone either cycle. A previously healthy terminal target whose
 receipt is missing, malformed, internally inconsistent, or future-dated fails
-with `receipt-anchor-required` instead of minting a later schedule.
+with `receipt-anchor-required` instead of minting a later schedule. A terminal
+but incomplete bootstrap may still establish its first anchor after queued
+failed sections are repaired.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 
