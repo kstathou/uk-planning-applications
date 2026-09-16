@@ -373,9 +373,8 @@ class BarnetAdapter:
                 else 0
             )
             if progress.active_query == weekly_query.key and page > 1:
-                prior_page_list = []
-                for prior_page in range(1, page):
-                    prior_page_list.append(
+                prior_pages = tuple(
+                    [
                         _parse_search_page(
                             (
                                 await session.fetch(
@@ -383,8 +382,9 @@ class BarnetAdapter:
                                 )
                             ).body
                         )
-                    )
-                prior_pages = tuple(prior_page_list)
+                        for prior_page in range(1, page)
+                    ]
+                )
                 progress = _restore_query_progress(
                     progress,
                     weekly_query.key,
@@ -438,9 +438,8 @@ class BarnetAdapter:
                 else 0
             )
             if progress.active_query == advanced_query.key and page > 1:
-                prior_page_list = []
-                for prior_page in range(1, page):
-                    prior_page_list.append(
+                prior_pages = tuple(
+                    [
                         _parse_advanced_search_page(
                             (
                                 await session.fetch(
@@ -453,8 +452,9 @@ class BarnetAdapter:
                             ).body,
                             page=prior_page,
                         )
-                    )
-                prior_pages = tuple(prior_page_list)
+                        for prior_page in range(1, page)
+                    ]
+                )
                 progress = _restore_query_progress(
                     progress,
                     advanced_query.key,
@@ -838,6 +838,7 @@ def _restore_query_progress(
         zip(progress.seen_references, progress.seen_locators, strict=False)
     )
     restored_references = []
+    restored_locators = []
     restored_row_count = 0
     reported_count = progress.query_reported_count
     for search_page in prior_pages:
@@ -857,12 +858,48 @@ def _restore_query_progress(
             if known_locator is not None and known_locator != reference.locator:
                 _raise_parse("resumed search result identity")
             restored_references.append(reference.reference)
+            restored_locators.append(reference.locator)
         restored_row_count = next_row_count
     if (
         restored_row_count != progress.query_row_count
-        or tuple(restored_references) != active_references
         or reported_count is None
     ):
+        _raise_parse("resumed search result identity")
+    return _apply_restored_query_progress(
+        progress,
+        active_references,
+        tuple(restored_references),
+        tuple(restored_locators),
+        reported_count,
+    )
+
+
+def _apply_restored_query_progress(
+    progress: BarnetCheckpointV1,
+    active_references: tuple[str, ...],
+    restored_references: tuple[str, ...],
+    restored_locators: tuple[str | None, ...],
+    reported_count: int,
+) -> BarnetCheckpointV1:
+    legacy_unordered = (
+        not progress.active_query_references
+        and not progress.tracks_locators
+        and not progress.completed_queries
+        and progress.query_row_count == len(progress.seen_references)
+    )
+    if legacy_unordered:
+        if set(restored_references) != set(active_references):
+            _raise_parse("resumed search result identity")
+        return progress.model_copy(
+            update={
+                "query_reported_count": reported_count,
+                "active_query_references": restored_references,
+                "seen_references": restored_references,
+                "seen_locators": restored_locators,
+                "tracks_locators": True,
+            }
+        )
+    if restored_references != active_references:
         _raise_parse("resumed search result identity")
     return progress.model_copy(
         update={
