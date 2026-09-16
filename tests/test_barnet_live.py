@@ -1047,6 +1047,21 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
     )
     assert accepted.reported == 45
 
+    range_less_multi_page = barnet_adapter._parse_search_page(
+        _result_page((("A", "KEY"),), count=2, pages=2)
+    )
+    with pytest.raises(BarnetParseError, match="displayed result range"):
+        barnet_adapter._advance_checkpoint(
+            BarnetCheckpointV1(cursor="live"),
+            active_page=barnet_adapter._ActivePage(
+                query_key="weekly|2026-09-14|DC_Validated",
+                page=1,
+                row_count=0,
+            ),
+            search_page=range_less_multi_page,
+            all_query_keys=("weekly|2026-09-14|DC_Validated",),
+        )
+
     replayed_first_page = barnet_adapter._parse_search_page(
         _showing_result_page(
             tuple((f"A-{index}", f"KEY-{index}") for index in range(1, 11)),
@@ -1096,6 +1111,12 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             (("A", "KEY"),),
             ("Showing 1-1 of 1",),
             current_page="later",
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            current_page=None,
+            numbered_page=2,
         ),
         _showing_result_page(
             (("A", "KEY"),),
