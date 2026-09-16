@@ -159,6 +159,7 @@ class Collector:
             transferred_bytes=context.session.transferred_bytes,
             duration_ms=max(0, round((monotonic() - context.started) * 1000)),
             browser_time_ms=context.session.browser_time_ms,
+            attachment_body_requests=context.session.attachment_body_requests,
             storage_growth_bytes=max(
                 0,
                 self._store.storage_bytes() - context.storage_before,

@@ -380,7 +380,9 @@ def _durable_bootstrap_cost(store: SqliteStore) -> QualificationCost:
         request_count=sum(run.request_count for run in bootstrap_runs),
         transferred_bytes=sum(run.transferred_bytes for run in bootstrap_runs),
         browser_time_ms=sum(run.browser_time_ms for run in bootstrap_runs),
-        attachment_body_requests=0,
+        attachment_body_requests=sum(
+            run.attachment_body_requests for run in bootstrap_runs
+        ),
     )
 
 
@@ -455,6 +457,8 @@ async def _qualify(
 ) -> BlackburnQualifiedReceiptV1:
     if not _scope_compatible(store, config.scope):
         raise QualificationFailedError(("scope-mismatch",))
+    if any(run.attachment_body_requests > 0 for run in store.run_costs(_AUTHORITY_ID)):
+        raise QualificationFailedError(("attachment-policy",))
     registry = AuthorityRegistry(
         (BLACKBURN_WITH_DARWEN_PACKAGE,),
         PILOT_LIVE_STATUS,

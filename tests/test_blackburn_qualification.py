@@ -116,9 +116,11 @@ class _QualificationSession:
         *,
         fail: bool = False,
         fail_after_searches: int | None = None,
+        attachment_body_requests: int = 0,
     ) -> None:
         self.fail = fail
         self.fail_after_searches = fail_after_searches
+        self._attachment_body_requests = attachment_body_requests
         self.searches: list[blackburn.BlackburnQueryV1] = []
         self.applications: list[blackburn.BlackburnLocatorV1] = []
         self.closed = False
@@ -172,7 +174,7 @@ class _QualificationSession:
 
     @property
     def attachment_body_requests(self) -> int:
-        return 0
+        return self._attachment_body_requests
 
     @property
     def transferred_bytes(self) -> int:
@@ -524,3 +526,37 @@ def test_blackburn_qualification_preserves_interrupted_bootstrap_cost(
     }
     assert receipt["costs"]["initial"]["request_count"] == 7
     assert receipt["costs"]["rerun"]["request_count"] == 0
+
+
+def test_blackburn_qualification_rejects_prior_attachment_attempt(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "interrupted-attachment"
+    sessions: list[_QualificationSession] = []
+
+    async def session_factory() -> _QualificationSession:
+        session = _QualificationSession(
+            fail_after_searches=1 if not sessions else None,
+            attachment_body_requests=1 if not sessions else 0,
+        )
+        sessions.append(session)
+        return session
+
+    assert module.main(_args(data_dir), session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert len(sessions) == 1
+
+    assert (
+        module.main(
+            _args(data_dir, resume=True),
+            session_factory=session_factory,
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["attachment-policy"],
+    }
+    assert len(sessions) == 1

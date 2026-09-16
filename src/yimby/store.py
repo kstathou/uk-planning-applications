@@ -192,7 +192,8 @@ class SqliteStore:
                 UPDATE run_details SET
                     status = ?, finished_at = ?, request_count = ?,
                     transferred_bytes = ?, duration_ms = ?,
-                    browser_time_ms = ?, storage_growth_bytes = ?,
+                    browser_time_ms = ?, attachment_body_requests = ?,
+                    storage_growth_bytes = ?,
                     failure_message = ?
                 WHERE run_id = ?
                 """,
@@ -203,6 +204,7 @@ class SqliteStore:
                     outcome.metrics.transferred_bytes,
                     outcome.metrics.duration_ms,
                     outcome.metrics.browser_time_ms,
+                    outcome.metrics.attachment_body_requests,
                     outcome.metrics.storage_growth_bytes,
                     outcome.failure_message,
                     run_id,
@@ -995,11 +997,12 @@ class SqliteStore:
                 request_count=row["request_count"],
                 transferred_bytes=row["transferred_bytes"],
                 browser_time_ms=row["browser_time_ms"],
+                attachment_body_requests=row["attachment_body_requests"],
             )
             for row in self._connection.execute(
                 """
                 SELECT detail.status, detail.request_count, detail.transferred_bytes,
-                       detail.browser_time_ms
+                       detail.browser_time_ms, detail.attachment_body_requests
                 FROM run_details AS detail
                 JOIN runs AS run ON run.id = detail.run_id
                 WHERE run.authority_id = ?
@@ -1108,6 +1111,8 @@ class SqliteStore:
                     COALESCE(SUM(transferred_bytes), 0) AS transferred_bytes,
                     COALESCE(SUM(duration_ms), 0) AS duration_ms,
                     COALESCE(SUM(browser_time_ms), 0) AS browser_time_ms,
+                    COALESCE(SUM(attachment_body_requests), 0)
+                        AS attachment_body_requests,
                     COALESCE(SUM(storage_growth_bytes), 0) AS storage_growth_bytes
                 FROM run_details
                 """
@@ -1118,6 +1123,7 @@ class SqliteStore:
             transferred_bytes=row["transferred_bytes"],
             duration_ms=row["duration_ms"],
             browser_time_ms=row["browser_time_ms"],
+            attachment_body_requests=row["attachment_body_requests"],
             storage_growth_bytes=row["storage_growth_bytes"],
         )
 
