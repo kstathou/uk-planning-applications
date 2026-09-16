@@ -91,6 +91,11 @@ def _detail_with_documents(reference: str) -> bytes:
       <tr><th>Proposal</th><td>Build one home</td></tr>
       <tr><th>Status</th><td>Undecided</td></tr>
       <tr><th>Parish</th><td>Bognor Regis</td></tr>
+      <tr><th>Received</th><td>01-09-26</td></tr>
+      <tr><th>Validated</th><td>02-09-26</td></tr>
+      <tr><th>Decision By</th><td>01-11-26</td></tr>
+      <tr><th>Comment By</th><td>30-09-26</td></tr>
+      <tr><th>Target Cmte</th><td>15-10-26</td></tr>
     </table>
     <form method="post" action="showDocuments?reference={reference}&amp;module=pl">
       <input type="submit" name="ViewDocuments" value="View Documents">
@@ -472,7 +477,8 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
 
     first = asyncio.run(first_batch())
     assert isinstance(first, DiscoveryBatch)
-    assert [reference.reference for reference in first.references] == ["BR/1/26/PL"]
+    assert first.references == ()
+    assert len(first.evidence) == 2
     assert isinstance(first.next_checkpoint.cursor, arun.ArunLiveCursor)
     assert isinstance(first.next_checkpoint.cursor.progress, arun.ArunAwaitingShowAll)
 
@@ -482,13 +488,19 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
     )
     assert [
         reference.reference for batch in resumed for reference in batch.references
-    ] == ["BR/2/26/PL"]
+    ] == ["BR/1/26/PL", "BR/2/26/PL"]
     terminal = resumed[-1].next_checkpoint
     assert resumed[-1].complete
     assert isinstance(terminal.cursor, arun.ArunLiveCursor)
     assert isinstance(terminal.cursor.progress, arun.ArunComplete)
     assert len(terminal.cursor.progress.completed) == 60
     assert terminal.cursor.progress.seen_references == _DiscoveryResponder.references
+    assert terminal.cursor.search_form_evidence is not None
+    assert all(item.initial_evidence is not None for item in terminal.cursor.progress.completed)
+    assert terminal.cursor.progress.completed[0].references == (
+        "BR/1/26/PL",
+        "BR/2/26/PL",
+    )
 
     terminal_session = _Session(_DiscoveryResponder())
     rerun = asyncio.run(_batches(adapter, terminal_session, window, terminal))
@@ -550,6 +562,11 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
     assert isinstance(terminal, arun.ArunLiveCursor)
     assert isinstance(terminal.progress, arun.ArunComplete)
     assert terminal.progress.completed[0].reported_count == 3
+    assert terminal.progress.completed[0].references == (
+        "NEW/1",
+        "BR/1/26/PL",
+        "BR/2/26/PL",
+    )
 
     def changed_to_exact(request: PortalRequest) -> bytes:
         if request.method == RequestMethod.GET:
@@ -566,6 +583,11 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
         reference.reference for batch in exact for reference in batch.references
     ] == ["NEW/1"]
     assert exact[-1].complete
+    exact_terminal = exact[-1].next_checkpoint.cursor
+    assert isinstance(exact_terminal, arun.ArunLiveCursor)
+    assert isinstance(exact_terminal.progress, arun.ArunComplete)
+    assert exact_terminal.progress.seen_references == ("NEW/1",)
+    assert exact_terminal.progress.completed[0].references == ("NEW/1",)
 
     def changed_exact_with_show_all(request: PortalRequest) -> bytes:
         if request.method == RequestMethod.GET:
@@ -880,6 +902,29 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
     assert plan.title == "Plan"
     assert plan.description is None
     assert all("viewDocument" not in url for url in session.requested_urls)
+    assert snapshot.payload.received_date == date(2026, 9, 1)
+    assert snapshot.payload.validated_date == date(2026, 9, 2)
+    assert snapshot.payload.decision_by_date == date(2026, 11, 1)
+    assert snapshot.payload.comment_by_date == date(2026, 9, 30)
+    assert snapshot.payload.target_committee_date == date(2026, 10, 15)
+
+    decided = snapshot.model_copy(
+        update={
+            "payload": snapshot.payload.model_copy(
+                update={
+                    "decision_status": "Application Permitted",
+                    "decision_date": date(2026, 9, 15),
+                }
+            )
+        }
+    )
+    normalised = arun.ArunAdapter().normalise(decided)
+    assert normalised.metadata.decision == "Application Permitted"
+    assert [event.event_type for event in normalised.metadata.events] == [
+        "decision-due",
+        "comment-deadline",
+        "target-committee",
+    ]
 
 
 def test_arun_fetch_accepts_an_application_without_a_parish_label() -> None:
