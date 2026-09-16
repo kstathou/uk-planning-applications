@@ -47,3 +47,11 @@ other areas still rendered `Loading...`, and no successful child-data request
 was visible in the document. Those sections remain failed or partial, not
 empty. The replacement AssureLive system remains the required source for
 current documents and other migrated fields.
+
+## Implemented boundary
+
+The authority adapter now parses every row already present in the recorded
+weekly DataTable, retains each opaque detail locator, and reads only the visible
+legacy summary. It reports the still-loading document and comment sections as
+failed instead of empty. AssureLive documents, decided cases, older-open cases,
+and client-loaded child data remain unsupported.

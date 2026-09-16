@@ -53,3 +53,11 @@ documents, constraints, and consultees were present in the same response.
 Document metadata links used `/Document/Download` with module, record number,
 plan identifier, image identifier, plan flag, and filename parameters. The
 capture enumerated link metadata only and did not retrieve an attachment body.
+
+## Implemented boundary
+
+The authority adapter now follows the exact rolling 90-day received route,
+accepts the intermediate disclaimer within the same session, and parses the
+record blocks and hidden document metadata from the returned HTML. It retains
+attachment links without following them. Other date windows, decided searches,
+and older-open enumeration remain explicit unsupported boundaries.

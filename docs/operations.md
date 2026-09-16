@@ -95,6 +95,20 @@ Without `--confirm-live`, every smoke exits before constructing a live session.
 Each accepts a non-secret state path for resumable pagination. Leeds stops at
 its explicit unverified-detail boundary even when discovery succeeds.
 
+The captured non-IDOX contracts have matching opt-in smokes:
+
+```sh
+uv run python scripts/smoke_arun.py --confirm-live
+uv run python scripts/smoke_camden.py --confirm-live --reference 2026/2706/L
+uv run python scripts/smoke_devon.py --confirm-live
+uv run python scripts/smoke_peak_district.py --confirm-live
+```
+
+Arun, Devon, and Peak District restrict discovery to their recorded rolling or
+received-date paths. Camden resolves one explicit reference and deliberately
+rejects an unsupported bounded date search. These smokes also refuse before
+creating a live session unless `--confirm-live` is present.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before

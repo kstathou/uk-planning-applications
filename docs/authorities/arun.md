@@ -49,3 +49,12 @@ the reference, location, proposal, and native status, and detail links used
 This closes the previously open bounded-search and result-cap investigation for
 the observed received-date path. Decided searches, window splitting at larger
 caps, comment flows, and incremental changes remain open.
+
+## Implemented boundary
+
+The authority adapter now reproduces the captured received-date POST and its
+source-provided Show All expansion. It de-duplicates references, stores the
+detail locator, and rejects older-open or unsupported window shapes before
+claiming completeness. The visible detail fields are parsed from the recorded
+route. The document action remains unavailable because its exact POST
+parameters were not captured, and no attachment body is requested.

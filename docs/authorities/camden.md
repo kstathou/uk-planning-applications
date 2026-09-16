@@ -57,3 +57,12 @@ created date, title, document type, and an inline source link. The capture read
 that index only and did not retrieve any attachment body. Exact-reference
 extraction and the observed document index are now verified at request level;
 bounded discovery, comments, pagination, and incremental changes remain open.
+
+## Implemented boundary
+
+The authority adapter now resolves an explicit reference through the captured
+ordered JSF form fields, retains the Northgate numeric locator, parses the
+labelled detail record, and reconciles the CMWebDrawer result count before
+retaining document metadata. A bounded date-window discovery call fails before
+network I/O because the captured source exposes no proven bounded enumeration.
+Public comments remain unavailable.
