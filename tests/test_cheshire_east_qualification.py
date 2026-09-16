@@ -958,23 +958,40 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
 
 
 @pytest.mark.parametrize(
-    "tamper",
+    ("tamper_path", "replacement"),
     [
+        (("attempted_requests", 0, "method"), "POST"),
+        (("attempted_requests", 0, "url"), "https://example.com/evil"),
+        (("attempted_requests", 0, "form"), [{"name": "evil", "value": "x"}]),
+        (("attempted_requests", 1, "form", 8, "value"), "Tampered proposal"),
+        (("evidence", 0, "source_url"), "https://example.com/evil"),
+        (("evidence", 0, "media_type"), "application/pdf"),
+        (("source_contract", "recent", "visible_references"), ["26/X"]),
+        (("source_contract", "weekly", "week"), "2030-01-01"),
+        (("source_contract", "detail", "locator"), "999999"),
+        (
+            ("source_contract", "detail", "documents", 0, "url"),
+            "https://example.com/evil",
+        ),
+    ],
+    ids=(
         "request-method",
         "request-url",
         "request-form",
+        "request-form-body-binding",
         "evidence-url",
         "evidence-media-type",
         "recent-zero-with-reference",
         "historical-week",
         "detail-locator",
         "document-url",
-    ],
+    ),
 )
 def test_cheshire_offline_resume_binds_requests_evidence_and_contract(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    tamper: str,
+    tamper_path: tuple[str | int, ...],
+    replacement: object,
 ) -> None:
     module = _qualification_module()
     data_dir = tmp_path / "qualification"
@@ -999,30 +1016,10 @@ def test_cheshire_offline_resume_binds_requests_evidence_and_contract(
     capsys.readouterr()
     receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
-    if tamper == "request-method":
-        payload["attempted_requests"][0]["method"] = "POST"
-    elif tamper == "request-url":
-        payload["attempted_requests"][0]["url"] = "https://example.com/evil"
-    elif tamper == "request-form":
-        payload["attempted_requests"][0]["form"] = [
-            {"name": "evil", "value": "x"}
-        ]
-    elif tamper == "evidence-url":
-        payload["evidence"][0]["source_url"] = "https://example.com/evil"
-    elif tamper == "evidence-media-type":
-        payload["evidence"][0]["media_type"] = "application/pdf"
-    elif tamper == "recent-zero-with-reference":
-        payload["source_contract"]["recent"]["visible_references"] = ["26/X"]
-    elif tamper == "historical-week":
-        payload["source_contract"]["weekly"]["week"] = "2030-01-01"
-    elif tamper == "detail-locator":
-        payload["source_contract"]["detail"]["locator"] = "999999"
-    elif tamper == "document-url":
-        payload["source_contract"]["detail"]["documents"][0]["url"] = (
-            "https://example.com/evil"
-        )
-    else:
-        raise AssertionError(tamper)
+    target = payload
+    for component in tamper_path[:-1]:
+        target = target[component]
+    target[tamper_path[-1]] = replacement
     receipt_path.write_text(json.dumps(payload), encoding="utf-8")
 
     def forbidden_factory() -> _QualificationSession:

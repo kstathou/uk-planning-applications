@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Never, Self
+from urllib.parse import parse_qs, urlsplit
 
 from pydantic import Field, HttpUrl, ValidationError, model_validator
 
@@ -35,6 +36,11 @@ _RECEIPT_NAME = "cheshire-east-qualification-blocker-v2.json"
 _DETAIL_REFERENCE = "26/3335/PRIOR-1A"
 _DETAIL_LOCATOR = "406569"
 _HISTORICAL_WEEK = date(2024, 1, 1)
+_SEARCH_FORM_REQUEST_INDEX = 0
+_RECENT_REQUEST_INDEX = 1
+_WEEKLY_FORM_REQUEST_INDEX = 2
+_WEEKLY_REQUEST_INDEX = 3
+_DETAIL_REQUEST_INDEX = 4
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -49,7 +55,6 @@ Clock = Callable[[], datetime]
 
 
 def _raise_invariant(code: str) -> Never:
-    """Raise one stable receipt invariant code."""
     raise ValueError(code)
 
 
@@ -100,6 +105,13 @@ class RecentContractV1(FrozenModel):
     explicit_zero: bool
     visible_references: tuple[str, ...]
 
+    @model_validator(mode="after")
+    def zero_agrees_with_references(self) -> Self:
+        """Require exactly one of an explicit zero or visible result rows."""
+        if self.explicit_zero == bool(self.visible_references):
+            _raise_invariant("recent-result-mismatch")
+        return self
+
 
 class WeeklyContractV1(FrozenModel):
     """Observed historical weekly boundary without inferred terminality."""
@@ -109,6 +121,13 @@ class WeeklyContractV1(FrozenModel):
     reported_total: int | None
     pagination_links: tuple[str, ...]
     terminal_marker: bool
+
+    @model_validator(mode="after")
+    def total_covers_rows(self) -> Self:
+        """Reject a published total smaller than the rows on the page."""
+        if self.reported_total is not None and self.reported_total < self.row_count:
+            _raise_invariant("weekly-total-mismatch")
+        return self
 
 
 class DocumentContractV1(FrozenModel):
@@ -135,6 +154,20 @@ class DetailContractV1(FrozenModel):
         """Require the published count to describe the retained metadata rows."""
         if self.document_count != len(self.documents):
             _raise_invariant("document-count-mismatch")
+        for document in self.documents:
+            parsed = urlsplit(str(document.url))
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            if (
+                parsed.scheme != "https"
+                or parsed.netloc != "pa.cheshireeast.gov.uk"
+                or parsed.path != "/planning/"
+                or query.get("fa") != ["downloadDocument"]
+                or query.get("public_record_id") != [self.locator]
+                or len(query.get("id", ())) != 1
+                or not query["id"][0].isdigit()
+                or set(query) != {"fa", "id", "public_record_id"}
+            ):
+                _raise_invariant("document-url-mismatch")
         return self
 
 
@@ -250,6 +283,8 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
             )
         ):
             _raise_invariant("receipt-invariant-mismatch")
+        _validate_attempted_request_shapes(self.scope, self.attempted_requests)
+        _validate_evidence_bindings(self.attempted_requests, self.evidence)
 
         checks = {check.name: check.status for check in self.checks}
         if len(checks) != len(self.checks):
@@ -282,6 +317,12 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
                 }
             )
         else:
+            if (
+                self.source_contract.weekly.week != _HISTORICAL_WEEK
+                or self.source_contract.detail.locator != _DETAIL_LOCATOR
+                or self.source_contract.detail.public_reference != _DETAIL_REFERENCE
+            ):
+                _raise_invariant("source-contract-identity-mismatch")
             recent_contradicted = _recent_window_contradicted(
                 self.scope,
                 self.source_contract,
@@ -559,6 +600,103 @@ def _planned_query_inventory(scope: QualificationScopeV1) -> tuple[str, ...]:
     )
 
 
+def _validate_attempted_request_shapes(
+    scope: QualificationScopeV1,
+    requests: tuple[RecordedQueryV1, ...],
+) -> None:
+    static_requests = {
+        _SEARCH_FORM_REQUEST_INDEX: _recorded_query(
+            "source-access|search-form",
+            cheshire.search_form_request(),
+        ),
+        _WEEKLY_FORM_REQUEST_INDEX: _recorded_query(
+            "source-access|weekly-form",
+            cheshire.weekly_received_form_request(),
+        ),
+        _DETAIL_REQUEST_INDEX: _recorded_query(
+            f"detail|{_DETAIL_LOCATOR}",
+            cheshire.detail_request(_DETAIL_LOCATOR),
+        ),
+    }
+    for index, expected in static_requests.items():
+        if len(requests) > index and requests[index] != expected:
+            _raise_invariant("request-shape-mismatch")
+
+    if len(requests) > _RECENT_REQUEST_INDEX:
+        recent = requests[_RECENT_REQUEST_INDEX]
+        fields = _unique_recorded_fields(recent.form)
+        if (
+            recent.method != RequestMethod.POST
+            or str(recent.url) != "https://pa.cheshireeast.gov.uk/planning/index.html"
+            or fields.get("fa") != "search"
+            or fields.get("valid_date_from") != scope.start.strftime("%d-%m-%Y")
+            or fields.get("valid_date_to") != scope.end.strftime("%d-%m-%Y")
+        ):
+            _raise_invariant("request-shape-mismatch")
+
+    if len(requests) > _WEEKLY_REQUEST_INDEX:
+        weekly = requests[_WEEKLY_REQUEST_INDEX]
+        fields = _unique_recorded_fields(weekly.form)
+        if (
+            weekly.method != RequestMethod.POST
+            or str(weekly.url)
+            != (
+                "https://pa.cheshireeast.gov.uk/planning/"
+                "index.html?fa=getReceivedWeeklyList"
+            )
+            or fields != {"week": "01-01-2024", "fa": ""}
+        ):
+            _raise_invariant("request-shape-mismatch")
+
+
+def _unique_recorded_fields(
+    fields: tuple[RecordedFieldV1, ...],
+) -> dict[str, str]:
+    result = {field.name: field.value for field in fields}
+    if len(result) != len(fields):
+        _raise_invariant("request-form-duplicate")
+    return result
+
+
+def _validate_evidence_bindings(
+    requests: tuple[RecordedQueryV1, ...],
+    evidence: tuple[RetainedEvidenceV1, ...],
+) -> None:
+    for request, item in zip(requests, evidence, strict=True):
+        if str(item.source_url) != str(request.url) or item.media_type != "text/html":
+            _raise_invariant("request-evidence-mismatch")
+
+
+def _verify_request_evidence_contract(
+    receipt: CheshireEastQualificationBlockerReceiptV2,
+    bodies: tuple[bytes, ...],
+) -> None:
+    requests = receipt.attempted_requests
+    if len(requests) > _RECENT_REQUEST_INDEX:
+        search_form = cheshire.parse_search_form(bodies[_SEARCH_FORM_REQUEST_INDEX])
+        expected_recent = _recorded_query(
+            requests[_RECENT_REQUEST_INDEX].key,
+            cheshire.valid_date_request(
+                search_form,
+                DiscoveryWindow(
+                    start=receipt.scope.start,
+                    end=receipt.scope.end,
+                    include_open=True,
+                ),
+            ),
+        )
+        if requests[_RECENT_REQUEST_INDEX] != expected_recent:
+            raise QualificationEvidenceError
+    if len(requests) > _WEEKLY_REQUEST_INDEX:
+        weekly_form = cheshire.parse_weekly_form(bodies[_WEEKLY_FORM_REQUEST_INDEX])
+        expected_weekly = _recorded_query(
+            requests[_WEEKLY_REQUEST_INDEX].key,
+            cheshire.weekly_received_request(weekly_form, _HISTORICAL_WEEK),
+        )
+        if requests[_WEEKLY_REQUEST_INDEX] != expected_weekly:
+            raise QualificationEvidenceError
+
+
 def _retain_evidence(
     store: EvidenceStore,
     captures: tuple[EvidenceCapture, ...],
@@ -733,6 +871,7 @@ def _verify_receipt(
     if receipt.scope != expected_scope:
         raise QualificationConfigError(_INVALID_WINDOW)
     evidence_root = (data_dir / "evidence").resolve(strict=True)
+    bodies = []
     for item in receipt.evidence:
         candidate = (evidence_root / item.relative_path).resolve(strict=True)
         if not candidate.is_relative_to(evidence_root):
@@ -740,6 +879,8 @@ def _verify_receipt(
         body = gzip.decompress(candidate.read_bytes())
         if len(body) != item.byte_count or sha256(body).hexdigest() != item.digest:
             raise QualificationEvidenceError
+        bodies.append(body)
+    _verify_request_evidence_contract(receipt, tuple(bodies))
     return receipt
 
 
@@ -782,6 +923,7 @@ def main(
         EOFError,
         OSError,
         ValidationError,
+        cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
         cheshire.CheshireEastReferenceMismatchError,
         CollectionAlreadyRunningError,
