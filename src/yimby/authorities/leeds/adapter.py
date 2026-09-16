@@ -445,11 +445,17 @@ def _parse_search_page(body: bytes) -> _SearchPage:
         references.append(
             SourceReference(
                 source_id=SOURCE,
-                reference=_labelled_value(row, "reference"),
+                reference=_labelled_value_any(row, "reference", "ref. no", "ref no"),
                 locator=locators[0],
             )
         )
-    return _SearchPage(references=tuple(references), reported=_reported_count(soup))
+    try:
+        reported = _reported_count(soup)
+    except LeedsParseError:
+        if not _is_uncounted_terminal_first_page(soup, row_count=len(references)):
+            raise
+        reported = len(references)
+    return _SearchPage(references=tuple(references), reported=reported)
 
 
 def _reported_count(soup: BeautifulSoup) -> int:
@@ -467,6 +473,39 @@ def _reported_count(soup: BeautifulSoup) -> int:
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _is_uncounted_terminal_first_page(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+) -> bool:
+    page_inputs = soup.select('input[name="searchCriteria.page"][value]')
+    if (
+        row_count == 0
+        or len(page_inputs) != 1
+        or str(page_inputs[0].get("value", "")).strip() != "1"
+    ):
+        return False
+    selected_capacities = soup.select(
+        'select[name="searchCriteria.resultsPerPage"] option[selected]'
+    )
+    if len(selected_capacities) != 1:
+        return False
+    try:
+        capacity = int(str(selected_capacities[0].get("value", "")).strip())
+    except ValueError:
+        return False
+    if capacity <= 0 or row_count >= capacity:
+        return False
+    queries = tuple(
+        parse_qs(urlsplit(str(link.get("href", ""))).query)
+        for link in soup.select('a[href*="pagedSearchResults.do"]')
+    )
+    return not any(
+        query.get("searchCriteria.page") or "page" in query.get("action", [])
+        for query in queries
+    )
 
 
 def _detail_request(locator: str, tab: str, intent: RequestIntent) -> PortalRequest:
@@ -489,6 +528,15 @@ def _labelled_value(container: Tag, label: str) -> str:
         if value.casefold().startswith(f"{target}:"):
             return value[len(target) + 1 :].strip()
     return _raise_parse(f"labelled {label}")
+
+
+def _labelled_value_any(container: Tag, *labels: str) -> str:
+    for label in labels:
+        try:
+            return _labelled_value(container, label)
+        except LeedsParseError:
+            continue
+    return _raise_parse(f"labelled {'/'.join(labels)}")
 
 
 def _parse_date(value: str | None) -> date | None:

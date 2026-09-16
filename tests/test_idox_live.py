@@ -56,6 +56,17 @@ class _Case:
     locators: tuple[str, str, str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class _UncountedPageShape:
+    name: str
+    rows: tuple[tuple[str, str], ...]
+    capacity: str | None = "10"
+    current_page: str | None = "1"
+    numbered_page: int | None = None
+    unnumbered_page: bool = False
+    repeated_page_action: bool = False
+
+
 CASES = (
     _Case(
         authority_id=AuthorityId("cornwall"),
@@ -159,6 +170,8 @@ def _uncounted_result_page(
     capacity: str | None = "10",
     current_page: str | None = "1",
     numbered_page: int | None = None,
+    unnumbered_page: bool = False,
+    repeated_page_action: bool = False,
 ) -> bytes:
     rendered = "".join(
         (
@@ -185,15 +198,25 @@ def _uncounted_result_page(
         )
     )
     pagination = (
-        ""
-        if numbered_page is None
-        else (
+        (
             '<a href="pagedSearchResults.do?action=page&amp;searchCriteria.page='
             f'{numbered_page}">{numbered_page}</a>'
+        )
+        if numbered_page is not None
+        else (
+            '<a href="pagedSearchResults.do?action=page&amp;action=printPreview">'
+            "Next</a>"
+            if repeated_page_action
+            else (
+                '<a href="pagedSearchResults.do?action=page">Next</a>'
+                if unnumbered_page
+                else ""
+            )
         )
     )
     return (
         f'<form id="searchResults">{page_control}{capacity_control}</form>'
+        '<a href="pagedSearchResults.do?action=printPreview">Print</a>'
         f"<ul>{rendered}</ul>{pagination}"
     ).encode()
 
@@ -477,25 +500,24 @@ def test_authority_accepts_live_shaped_uncounted_terminal_page(
     label: str,
 ) -> None:
     """A non-empty under-capacity first page without pagination is complete."""
-    session = _session(_IdoxMock(case, uncounted_terminal=True, uncounted_label=label))
+    mock = _IdoxMock(case, uncounted_terminal=True, uncounted_label=label)
+    session = _session(mock)
     package = pilot_registry().get(case.authority_id)
 
-    async def discover_first_page() -> DurableDiscoveryBatch:
-        batches = cast(
-            "AsyncGenerator[DurableDiscoveryBatch]",
-            package.discover(session, WEEK, None),
-        )
-        batch = await anext(batches)
-        await batches.aclose()
+    async def discover_all() -> list[DurableDiscoveryBatch]:
+        batches = [batch async for batch in package.discover(session, WEEK, None)]
         await session.aclose()
-        return batch
+        return batches
 
-    batch = asyncio.run(discover_first_page())
+    batch = asyncio.run(discover_all())[0]
     assert [reference.reference for reference in batch.references] == list(
         case.references[:3]
     )
     assert [reference.locator for reference in batch.references] == list(
         case.locators[:3]
+    )
+    assert not any(
+        path.endswith("/pagedSearchResults.do") for _, path, _ in mock.requests
     )
 
 
@@ -797,44 +819,44 @@ def test_authority_search_result_reference_labels(case: _Case, label: str) -> No
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
 @pytest.mark.parametrize(
-    ("rows", "capacity", "current_page", "numbered_page"),
+    "shape",
     [
-        ((), "10", "1", None),
-        ((("A", "KEY"),), "1", "1", None),
-        ((("A", "KEY"),), None, "1", None),
-        ((("A", "KEY"),), "many", "1", None),
-        ((("A", "KEY"),), "0", "1", None),
-        ((("A", "KEY"),), "10", "1", 2),
-        ((("A", "KEY"),), "10", "2", None),
-        ((("A", "KEY"),), "10", None, None),
+        _UncountedPageShape("empty", ()),
+        _UncountedPageShape("full-capacity", (("A", "KEY"),), capacity="1"),
+        _UncountedPageShape("missing-capacity", (("A", "KEY"),), capacity=None),
+        _UncountedPageShape("invalid-capacity", (("A", "KEY"),), capacity="many"),
+        _UncountedPageShape("zero-capacity", (("A", "KEY"),), capacity="0"),
+        _UncountedPageShape("numbered-pagination", (("A", "KEY"),), numbered_page=2),
+        _UncountedPageShape(
+            "unnumbered-pagination",
+            (("A", "KEY"),),
+            unnumbered_page=True,
+        ),
+        _UncountedPageShape(
+            "repeated-page-action",
+            (("A", "KEY"),),
+            repeated_page_action=True,
+        ),
+        _UncountedPageShape("later-page", (("A", "KEY"),), current_page="2"),
+        _UncountedPageShape("missing-page", (("A", "KEY"),), current_page=None),
     ],
-    ids=[
-        "empty",
-        "full-capacity",
-        "missing-capacity",
-        "invalid-capacity",
-        "zero-capacity",
-        "numbered-pagination",
-        "later-page",
-        "missing-page",
-    ],
+    ids=lambda shape: shape.name,
 )
 def test_authority_rejects_ambiguous_uncounted_result_pages(
     case: _Case,
-    rows: tuple[tuple[str, str], ...],
-    capacity: str | None,
-    current_page: str | None,
-    numbered_page: int | None,
+    shape: _UncountedPageShape,
 ) -> None:
     """Missing totals never imply completeness for ambiguous page shapes."""
     parse_error = _member(case, "ParseError")
     with pytest.raises(parse_error, match="reported result count"):
         getattr(case.module, "_parse_search_page")(
             _uncounted_result_page(
-                rows,
-                capacity=capacity,
-                current_page=current_page,
-                numbered_page=numbered_page,
+                shape.rows,
+                capacity=shape.capacity,
+                current_page=shape.current_page,
+                numbered_page=shape.numbered_page,
+                unnumbered_page=shape.unnumbered_page,
+                repeated_page_action=shape.repeated_page_action,
             )
         )
 
