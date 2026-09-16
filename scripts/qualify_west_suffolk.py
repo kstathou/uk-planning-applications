@@ -11,7 +11,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -45,6 +45,17 @@ _INVALID_DATE = "invalid-date"
 _INVALID_WINDOW = "invalid-window"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
+_WEEKLY_DATE_TYPES = ("DC_Validated", "DC_Decided")
+_ADVANCED_QUERY_KEYS = (
+    "advanced|searchCriteria.caseStatus|Pending Consideration",
+    "advanced|searchCriteria.caseStatus|Pending Decision",
+    "advanced|searchCriteria.caseStatus|Received Awaiting Registration",
+    "advanced|searchCriteria.caseStatus|Pending Appeal Decision",
+    "advanced|searchCriteria.appealStatus|Appeal lodged",
+    "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State",
+    "advanced|searchCriteria.appealStatus|High Court Appeal Lodged",
+    "advanced|searchCriteria.appealStatus|Pending Appeal Decision",
+)
 
 
 SessionFactory = Callable[[], PortalSession]
@@ -188,7 +199,8 @@ def _terminal_checkpoint(
     store: SqliteStore,
     scope: QualificationScope,
 ) -> bool:
-    stored = store.discovery_state(_AUTHORITY_ID).checkpoint
+    state = store.discovery_state(_AUTHORITY_ID)
+    stored = state.checkpoint
     if stored is None or stored.schema_version != 1:
         return False
     try:
@@ -200,7 +212,32 @@ def _terminal_checkpoint(
         end=scope.end,
         include_open=scope.include_open,
     )
-    return checkpoint.live_scope == expected and checkpoint.live_complete
+    expected_queries = _expected_query_keys(scope)
+    seen = checkpoint.seen_references
+    durable = state.references
+    return (
+        checkpoint.result_page == "live"
+        and checkpoint.live_scope == expected
+        and checkpoint.live_complete
+        and checkpoint.completed_queries == expected_queries
+        and checkpoint.active_query is None
+        and checkpoint.next_page == 1
+        and checkpoint.query_row_count == 0
+        and bool(durable)
+        and len(seen) == len(set(seen))
+        and set(seen) == set(durable)
+    )
+
+
+def _expected_query_keys(scope: QualificationScope) -> tuple[str, ...]:
+    monday = scope.start - timedelta(days=scope.start.weekday())
+    weekly = []
+    while monday <= scope.end:
+        if monday + timedelta(days=6) >= scope.start:
+            week = monday.strftime("%d/%m/%Y")
+            weekly.extend(f"{week}|{date_type}" for date_type in _WEEKLY_DATE_TYPES)
+        monday += timedelta(days=7)
+    return (*weekly, *_ADVANCED_QUERY_KEYS)
 
 
 def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
@@ -242,7 +279,10 @@ def _base_checks(
         ),
         QualificationCheck(
             name="application-count",
-            ok=snapshot.applications == snapshot.discovered_references,
+            ok=(
+                snapshot.applications > 0
+                and snapshot.applications == snapshot.discovered_references
+            ),
         ),
         QualificationCheck(
             name="unmapped-records",

@@ -2404,7 +2404,7 @@ def test_west_suffolk_qualification_rejects_incoherent_terminal_checkpoints(
             ),
         )
         store.close()
-        receipt_path.unlink()
+        receipt_path.unlink(missing_ok=True)
         sessions.clear()
 
         assert module.main(args, session_factory=session_factory) == 1
