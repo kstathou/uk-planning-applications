@@ -26,7 +26,7 @@ requirement.
 | Camden | Verified | Detail and 16-row document index recorded; comments open | Exact-reference JSF, Northgate detail, and document-index adapter; bounded discovery explicitly unavailable | Open | Open |
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
-| Peak District National Park Authority | Verified | Migrated discovery and detail routes recorded; child sections partial | Rolling-week legacy adapter; client-loaded child sections explicitly failed | Open | Open |
+| Peak District National Park Authority | Verified | AssureLive form, five-query discovery, detail, and windowed search and document pagination recorded | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED; complete detail and document metadata; public comments unavailable | Verified on 16 September 2026 with 377 references and applications | Pending for 23 and 30 September 2026 |
 | Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
 | Old Oak and Park Royal Development Corporation | Verified | Official Registered/Determined searches, client-side pagination, detail, 643-row sampled document index, and public responses recorded | Exact three-query HTTP adapter with complete detail, document-metadata, and response collection | Verified on 16 September 2026: 55 applications, zero failed sections/retries/attachment bodies, and zero-network rerun | Open; approximately 23 and 30 September 2026 |
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
@@ -40,7 +40,7 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, West Suffolk and OPDC have completed verified live
+As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed verified live
 bootstraps. West Suffolk's versioned receipt proves 730 discovered references,
 730 persisted applications, terminal checkpoint coherence, no pending retries,
 no failed current sections, database integrity, retained evidence-path
@@ -52,7 +52,11 @@ sections, local database and evidence integrity, 103 distinct retained content
 digests, 165 ordered application-to-capture associations, and an immediate
 zero-network rerun. Its SHA-256 commitment covers each application's source
 identity and ordered capture URL, media type, and content digest without
-publishing the identity inventory. The other thirteen authorities still
+publishing the identity inventory. Peak District's receipt records 377
+applications, zero failed sections, zero retries, zero attachment-body requests,
+complete database and evidence integrity, and an immediate zero-network rerun.
+Its two later weekly cycles remain pending, so it is not operationally qualified
+or `LIVE_READY`. The other twelve authorities still
 require verified live bootstraps. All fifteen still require two successful
 later weekly cycles, so operational qualification remains zero of fifteen.
 

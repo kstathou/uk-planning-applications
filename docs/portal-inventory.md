@@ -8,7 +8,7 @@ This reference records the browser census taken on 15–16 September 2026. A suc
 | Camden | Current JSF search, Northgate record pages, and CMWebDrawer documents | Three linked services | An exact-reference search and one decided record were verified. See `authorities/camden.md`. |
 | Haringey | `londonboroughofharingey.my.site.com/pr/s/` | Salesforce public register | Seven-day discovery, one detail record, one explicit empty comment section, and its six-row file index were verified. See `authorities/haringey.md`. |
 | Devon County Council | `planning.devon.gov.uk/` | Custom register | A 90-day discovery query, explicit zero-result query, and one detail record were verified. See `authorities/devon.md`. |
-| Peak District National Park Authority | Legacy custom portal plus AssureLive replacement | Two linked services | A 33-record weekly query and one detail record were verified. JavaScript-loaded detail sections remained pending. See `authorities/peak-district.md`. |
+| Peak District National Park Authority | AssureLive current portal plus legacy information portal | Two linked services | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED were exhausted. All 377 unique details and document-metadata indexes were persisted without attachment bodies. See `authorities/peak-district.md`. |
 | Arun | `www1.arun.gov.uk/aplanning/OcellaWeb/` | Ocella | One decided detail record and its document index were verified without opening attachment bodies. See `authorities/arun.md`. |
 | Old Oak and Park Royal Development Corporation | Citizen Portal plus `planningapi.agileapplications.co.uk` | Agile Applications | Exact bounded Registered and Determined searches, the complete current Registered set, detail, document metadata, and public responses were verified and qualified. See `authorities/opdc.md`. |
 | Dorset | `gi.dorsetcouncil.gov.uk/dorsetexplorer/planning/public` | Dorset Explorer map client | The JavaScript map and planning search-provider configuration loaded, but no bounded application enumeration was exposed. See `authorities/dorset.md`. |
@@ -35,9 +35,9 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 ## Verification status
 
 Arun, Barnet, Blackburn with Darwen, Camden, Cornwall, Devon, Durham, Haringey,
-OPDC, Peak District, and West Suffolk have recorded detail paths. OPDC has also
-completed a persisted live bootstrap with complete bounded and current-open
-discovery. Cheshire East and Leeds have recorded discovery paths but
+OPDC, Peak District, and West Suffolk have recorded detail paths. Peak District,
+OPDC, and West Suffolk have completed persisted live bootstraps. Cheshire East
+and Leeds have recorded discovery paths but
 inconclusive detail retrieval. Dorset has a verified map-client boundary without
 bounded application discovery. Blackburn's adapter remains browser-only until
 its attended verification state supports a complete persisted run. Birmingham
