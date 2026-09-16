@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 import yimby.authorities.blackburn_with_darwen.page_object as blackburn_page
 from yimby.authorities.blackburn_with_darwen.adapter import (
@@ -277,9 +278,7 @@ def test_blackburn_page_object_accepts_valueless_empty_hidden_controls() -> None
 
 def test_blackburn_page_object_accepts_live_hidden_search_discriminators() -> None:
     page = _search_page()
-    page.controls['input[name="fa"]'].get_attribute = AsyncMock(
-        return_value="search"
-    )
+    page.controls['input[name="fa"]'].get_attribute = AsyncMock(return_value="search")
     page.controls['input[name="submitted"]'].get_attribute = AsyncMock(
         return_value="true"
     )
@@ -314,6 +313,34 @@ def test_blackburn_page_object_rejects_ambiguous_detail_routes() -> None:
         pause=AsyncMock(),
     )
     with pytest.raises(blackburn_page.BlackburnPageObjectRouteError):
+        asyncio.run(
+            session.application(
+                BlackburnLocatorV1(
+                    record_id="178041",
+                    public_reference="10/26/0747",
+                )
+            )
+        )
+
+
+def test_blackburn_page_object_names_human_verification_blocker() -> None:
+    page = _detail_page()
+    page.application.wait_for = AsyncMock(
+        side_effect=PlaywrightTimeoutError("sanitised timeout")
+    )
+    body = MagicMock()
+    body.inner_text = AsyncMock(
+        return_value="Let's confirm you are human Complete the security check"
+    )
+    page.locator.side_effect = lambda selector: (
+        body if selector == "body" else page.application
+    )
+    session = BlackburnPlaywrightSession(
+        _InteractiveBoundary(cast("Page", page)),
+        pause=AsyncMock(),
+    )
+
+    with pytest.raises(blackburn_page.BlackburnHumanVerificationRequiredError):
         asyncio.run(
             session.application(
                 BlackburnLocatorV1(
