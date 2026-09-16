@@ -66,8 +66,9 @@ OUTSTANDING = (
 def _disclaimer_form(return_url: str = "%2f") -> bytes:
     return f"""
     <form method="post" action="./disclaimer.aspx?returnURL={return_url}">
-      <input type="hidden" name="__EVENTTARGET" value="">
       <input type="hidden" name="__VIEWSTATE" value="disclaimer-state">
+      <input type="hidden" name="__VIEWSTATEGENERATOR" value="758A299B">
+      <input type="hidden" name="__EVENTVALIDATION" value="validation-state">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="ctl00$ContentPlaceHolder1$btnAccept" value="Accept">
@@ -215,8 +216,9 @@ class _DorsetMock:
             )
         if request.method == "POST" and request.url.path == DISCLAIMER_PATH:
             assert fields == (
-                ("__EVENTTARGET", ""),
                 ("__VIEWSTATE", "disclaimer-state"),
+                ("__VIEWSTATEGENERATOR", "758A299B"),
+                ("__EVENTVALIDATION", "validation-state"),
                 ("tag", "one"),
                 ("tag", "two"),
                 ("ctl00$ContentPlaceHolder1$btnAccept", "Accept"),
@@ -326,8 +328,9 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
     ] == [(row.reference, str(row.recno)) for row in (*RECEIVED, *OUTSTANDING[1:])]
     assert _pairs(mock, DISCLAIMER_PATH) == [
         (
-            ("__EVENTTARGET", ""),
             ("__VIEWSTATE", "disclaimer-state"),
+            ("__VIEWSTATEGENERATOR", "758A299B"),
+            ("__EVENTVALIDATION", "validation-state"),
             ("tag", "one"),
             ("tag", "two"),
             ("ctl00$ContentPlaceHolder1$btnAccept", "Accept"),
