@@ -480,6 +480,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert failure["error"] == "source-unavailable"
     assert "HTTP 429" in failure["detail"]
     assert not receipt_path.exists()
+    anchor_path.unlink()
 
     refresh_mock.rate_limited_summary = False
     refresh_sessions.clear()
@@ -641,6 +642,62 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert captured.out == ""
     assert json.loads(captured.err) == {"error": "receipt-anchor-required"}
     assert sessions == []
+
+
+def test_barnet_qualification_recovers_after_receipt_write_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "receipt-write-failure"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_BarnetQualificationMock())
+        sessions.append(session)
+        return session
+
+    original_write_receipt = module._write_receipt
+
+    def fail_receipt_write(*_args: object) -> None:
+        raise OSError
+
+    monkeypatch.setattr(module, "_write_receipt", fail_receipt_write)
+    now = datetime(2026, 9, 16, 12, tzinfo=UTC)
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=session_factory,
+            now=lambda: now,
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "runtime-failure",
+        "exception": "OSError",
+    }
+    assert not (data_dir / "barnet-qualification-v1.json").exists()
+    (data_dir / ".barnet-qualification-anchor-v1.json").unlink()
+
+    monkeypatch.setattr(module, "_write_receipt", original_write_receipt)
+    sessions.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=session_factory,
+            now=lambda: now + timedelta(days=1),
+        )
+        == 0
+    )
+    recovered = json.loads(capsys.readouterr().out)
+    assert recovered["created_at"] == "2026-09-16T12:00:00Z"
+    assert recovered["weekly_refreshes"] == [
+        {"ordinal": 1, "due_on": "2026-09-23", "status": "pending"},
+        {"ordinal": 2, "due_on": "2026-09-30", "status": "pending"},
+    ]
+    assert len(sessions) == 2
+    assert all(session.requested_urls == () for session in sessions)
 
 
 def test_barnet_qualification_rejects_failed_current_sections(
