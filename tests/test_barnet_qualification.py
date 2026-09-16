@@ -414,6 +414,26 @@ def test_barnet_qualification_persists_complete_typed_receipt(
                 ],
             }
         ),
+        json.dumps(
+            {
+                **receipt,
+                "scope": {
+                    "start": "2026-08-17",
+                    "end": END,
+                    "include_open": True,
+                },
+            }
+        ),
+        json.dumps({**receipt, "created_at": "2026-09-16T12:00:00"}),
+        json.dumps(
+            {
+                **receipt,
+                "weekly_refreshes": [
+                    {"ordinal": 1, "due_on": "2026-09-24", "status": "pending"},
+                    {"ordinal": 2, "due_on": "2026-09-30", "status": "pending"},
+                ],
+            }
+        ),
     )
     for invalid_receipt in invalid_receipts:
         if invalid_receipt is None:

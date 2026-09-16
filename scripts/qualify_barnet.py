@@ -58,6 +58,7 @@ _INVALID_WINDOW = "invalid-window"
 _THIRTY_DAY_WINDOW_REQUIRED = "thirty-day-window-required"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
+_RECEIPT_ANCHOR_REQUIRED = "receipt-anchor-required"
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
 _BARNET_MINIMUM_GAP_SECONDS = 10.0
 _BARNET_MAX_ATTEMPTS = 1
@@ -127,6 +128,10 @@ class QualificationFailedError(RuntimeError):
     def __init__(self, failed_checks: tuple[str, ...]) -> None:
         super().__init__("qualification checks failed")
         self.failed_checks = failed_checks
+
+
+class QualificationAnchorError(RuntimeError):
+    pass
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -368,6 +373,27 @@ def _require(checks: tuple[QualificationCheck, ...]) -> None:
         raise QualificationFailedError(failed)
 
 
+def _receipt_anchor(
+    receipt: BarnetQualificationReceiptV1 | None,
+    scope: BarnetDiscoveryScope,
+    current_time: datetime,
+) -> datetime | None:
+    if receipt is None or receipt.scope != scope:
+        return None
+    created_at = receipt.created_at
+    if created_at.tzinfo is None or created_at > current_time:
+        return None
+    expected_due_dates = (
+        created_at.date() + timedelta(days=7),
+        created_at.date() + timedelta(days=14),
+    )
+    if tuple(
+        refresh.due_on for refresh in receipt.weekly_refreshes
+    ) != expected_due_dates:
+        return None
+    return created_at
+
+
 async def _qualify(
     store: SqliteStore,
     config: _Config,
@@ -394,6 +420,13 @@ async def _qualify(
         initial,
     )
     _require(initial_checks)
+    current_time = now()
+    created_at = current_time
+    if initial.request_count == 0:
+        anchor = _receipt_anchor(prior_receipt, config.scope, current_time)
+        if anchor is None:
+            raise QualificationAnchorError
+        created_at = anchor
 
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
@@ -418,13 +451,6 @@ async def _qualify(
         ),
     )
     _require(final_checks)
-    created_at = (
-        prior_receipt.created_at
-        if prior_receipt is not None
-        and prior_receipt.scope == config.scope
-        and initial.request_count == 0
-        else now()
-    )
     return BarnetQualificationReceiptV1(
         created_at=created_at,
         scope=config.scope,
@@ -539,6 +565,8 @@ def main(
             1,
             failed_checks=list(error.failed_checks),
         )
+    except QualificationAnchorError:
+        return _error(_RECEIPT_ANCHOR_REQUIRED, 1)
     except SourceUnavailableError as error:
         return _error("source-unavailable", 1, detail=str(error))
     except (

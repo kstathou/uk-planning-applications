@@ -113,7 +113,9 @@ same target. Other failed child sections remain queued for the next resume. Do
 not run parallel Barnet collectors or rotate clients to evade the source limit.
 Requalifying an already terminal target with zero live requests preserves the
 original receipt timestamp and the two follow-up due dates; it cannot postpone
-those cycles by repeatedly rewriting the receipt.
+those cycles by repeatedly rewriting the receipt. A terminal target whose
+receipt is missing, malformed, internally inconsistent, or future-dated fails
+with `receipt-anchor-required` instead of minting a later schedule.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 
