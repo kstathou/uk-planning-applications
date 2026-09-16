@@ -146,7 +146,8 @@ def _arun_results(
         else ""
     )
     count = (
-        f"<strong>First 20 results shown, there are {reported} in total</strong>"
+        f"<strong>First {len(references)} results shown, "
+        f"there are {reported} in total</strong>"
         if show_all or reported != len(references)
         else ""
     )
@@ -658,17 +659,27 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
         == 3
     )
 
-    with pytest.raises(arun.ArunCountMismatchError):
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
         asyncio.run(
             _batches(adapter, _Session(_ArunMock(first_reported=0)), window, None)
         )
-    with pytest.raises(arun.ArunCountMismatchError):
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
         asyncio.run(
             _batches(adapter, _Session(_ArunMock(first_show_all=False)), window, None)
         )
     with pytest.raises(arun.ArunCountMismatchError):
         asyncio.run(
-            _batches(adapter, _Session(_ArunMock(expanded_reported=3)), window, None)
+            _batches(
+                adapter,
+                _Session(
+                    _ArunMock(
+                        expanded_reported=1,
+                        expanded_rows=("BR/156/25/PL",),
+                    )
+                ),
+                window,
+                None,
+            )
         )
     open_batches = asyncio.run(
         _batches(
@@ -923,7 +934,7 @@ def test_arun_terminal_and_parser_boundaries() -> None:
             ),
         )
     )
-    with pytest.raises(arun.ArunQueryReplayError):
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
         asyncio.run(
             _batches(
                 adapter,

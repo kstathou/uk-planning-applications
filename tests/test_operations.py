@@ -70,7 +70,7 @@ from yimby.exporting import (
 )
 from yimby.geo import bng_to_wgs84
 from yimby.normalise import rebuild_normalised
-from yimby.store import SqliteStore
+from yimby.store import MissingEvidenceRecordError, SqliteStore
 from yimby.transport import (
     FixtureResponse,
     FixtureSession,
@@ -585,7 +585,7 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
         connection.execute("DELETE FROM evidence")
         connection.commit()
     reopened = _store(tmp_path)
-    with pytest.raises(KeyError):
+    with pytest.raises(MissingEvidenceRecordError):
         reopened.retained_native_records()
     reopened.close()
 

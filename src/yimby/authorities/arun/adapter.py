@@ -510,11 +510,6 @@ class ArunAdapter:
                 initial_capture,
             )
             pending_evidence = ()
-            if (
-                initial.reported is not None
-                and len(initial.references) > initial.reported
-            ):
-                raise ArunCountMismatchError(initial.reported, len(initial.references))
             if isinstance(progress, ArunAwaitingShowAll):
                 replay_changed = (
                     initial.reported != progress.reported_count
@@ -526,8 +521,6 @@ class ArunAdapter:
                         initial.reported is None
                         or len(initial.references) == initial.reported
                     ):
-                        if initial.has_show_all:
-                            raise ArunQueryReplayError
                         fresh, _ = _fresh(
                             initial.references,
                             progress.seen_references,
@@ -549,11 +542,6 @@ class ArunAdapter:
                             evidence=query_evidence,
                         )
                         continue
-                    if not initial.has_show_all:
-                        raise ArunCountMismatchError(
-                            initial.reported,
-                            len(initial.references),
-                        )
                     progress = ArunAwaitingShowAll(
                         next_query=progress.next_query,
                         completed=progress.completed,
@@ -586,8 +574,6 @@ class ArunAdapter:
                     initial.reported is None
                     or len(initial.references) == initial.reported
                 ):
-                    if initial.has_show_all:
-                        raise ArunQueryReplayError
                     fresh, _ = _fresh(
                         initial.references,
                         progress.seen_references,
@@ -609,11 +595,6 @@ class ArunAdapter:
                         evidence=query_evidence,
                     )
                     continue
-                if not initial.has_show_all:
-                    raise ArunCountMismatchError(
-                        initial.reported,
-                        len(initial.references),
-                    )
                 progress = ArunAwaitingShowAll(
                     next_query=progress.next_query,
                     completed=progress.completed,
@@ -1016,6 +997,7 @@ def _parse_search_results(
         soup,
         text,
         len(found),
+        has_show_all=show_all_form is not None,
     )
     return _SearchResults(
         references=found,
@@ -1107,6 +1089,8 @@ def _parse_reported_count(  # noqa: RET503
     soup: BeautifulSoup,
     text: str,
     reference_count: int,
+    *,
+    has_show_all: bool,
 ) -> int | None:
     if "retrieve more than 200 results" in text.casefold():
         raise ArunResultCapError
@@ -1115,7 +1099,7 @@ def _parse_reported_count(  # noqa: RET503
         for element in soup.select("strong")
         if (
             match := re.fullmatch(
-                r"First\s+\d+\s+results\s+shown,\s+there\s+are\s+(\d+)\s+in\s+total",
+                r"First\s+(\d+)\s+results\s+shown,\s+there\s+are\s+(\d+)\s+in\s+total",
                 element.get_text(" ", strip=True),
                 re.IGNORECASE,
             )
@@ -1124,10 +1108,20 @@ def _parse_reported_count(  # noqa: RET503
     if len(partial_counts) > 1:
         _raise_parse("reported result count")
     if partial_counts:
-        reported = int(partial_counts[0].group(1))
+        displayed = int(partial_counts[0].group(1))
+        reported = int(partial_counts[0].group(2))
         if reported >= _RESULT_CAP:
             raise ArunResultCapError
+        if (
+            not has_show_all
+            or displayed != reference_count
+            or displayed < 1
+            or displayed >= reported
+        ):
+            _raise_parse("partial result count")
         return reported
+    if has_show_all:
+        _raise_parse("reported result count")
     if _is_explicit_empty_result_page(soup, reference_count):
         return 0
     if _is_explicit_complete_result_page(soup, reference_count):

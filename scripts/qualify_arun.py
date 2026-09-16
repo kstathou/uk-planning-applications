@@ -10,6 +10,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -21,6 +22,8 @@ from pydantic import Field, ValidationError
 
 from yimby.authorities.arun import ARUN_PACKAGE
 from yimby.authorities.arun.adapter import (
+    _SEARCH_URL,
+    SOURCE,
     ArunApplicationV1,
     ArunCheckpointError,
     ArunCheckpointV1,
@@ -55,13 +58,15 @@ from yimby.domain import (
     LiveReadiness,
     QualificationSnapshot,
     RetainedNativeRecord,
+    RunRecord,
     RunStatus,
+    SourceReference,
 )
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
-from yimby.store import SqliteStore
+from yimby.store import MissingEvidenceRecordError, SqliteStore
 from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalSession,
@@ -80,6 +85,7 @@ _RESUME_REQUIRED = "resume-required"
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
 _EVIDENCE_PER_APPLICATION = 2
 _REQUIRED_SUCCESSFUL_RUNS = 2
+_GIT_SHA_LENGTH = 40
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -104,6 +110,7 @@ class QualificationQuery(FrozenModel):
     expanded_evidence_digest: EvidenceDigest | None = None
     initial_request: ArunRequestContract | None = None
     expanded_request: ArunRequestContract | None = None
+    source_references: tuple[SourceReference, ...] = ()
 
 
 class QualificationReferences(FrozenModel):
@@ -177,6 +184,23 @@ class WeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
+class QualificationRunProvenance(FrozenModel):
+    """One persisted collection run bound to its observed cost."""
+
+    run_id: str
+    started_at: datetime
+    finished_at: datetime
+    cost: QualificationCost
+
+
+class QualificationProvenance(FrozenModel):
+    """Code revision and collection runs underlying the published receipt."""
+
+    code_revision: str
+    publication: QualificationRunProvenance
+    immediate_follow_up: QualificationRunProvenance
+
+
 class ArunQualificationReceiptV3(FrozenModel):
     """Versioned result of a complete local Arun bootstrap qualification."""
 
@@ -196,6 +220,7 @@ class ArunQualificationReceiptV3(FrozenModel):
     semantic_fingerprint: str
     costs: QualificationCosts
     run_statuses: tuple[RunStatus, ...]
+    provenance: QualificationProvenance | None = None
     weekly_cycles: tuple[WeeklyCycle, ...]
     checks: tuple[QualificationCheck, ...]
 
@@ -219,6 +244,7 @@ class _QualificationState(FrozenModel):
     current_sections_complete: bool
     native_evidence_agreement: bool
     normalised_evidence_agreement: bool
+    source_identity_agreement: bool
     native_coverage: QualificationNativeCoverage
 
 
@@ -273,6 +299,7 @@ _EXPECTED_RUNTIME_ERRORS = (
     OSError,
     SourceUnavailableError,
     sqlite3.Error,
+    subprocess.CalledProcessError,
     ValidationError,
 )
 
@@ -354,8 +381,7 @@ def _terminal_inventory(  # noqa: PLR0911
         or cursor.plan != expected_plan
         or not isinstance(cursor.progress, ArunComplete)
         or cursor.search_form_evidence is None
-        or set(cursor.progress.seen_references) != set(state.references)
-        or len(cursor.progress.seen_references) != len(state.references)
+        or not set(cursor.progress.seen_references).issubset(state.references)
     ):
         return None
     try:
@@ -454,6 +480,7 @@ def _validate_query_evidence(  # noqa: PLR0911
                     _show_all_request(parsed_initial.show_all_form, query)
                 )
             ),
+            source_references=parsed_final.references,
         ),
         digests=tuple(digests),
     )
@@ -480,11 +507,63 @@ def _references(store: SqliteStore) -> QualificationReferences:
     )
 
 
+def _source_evidence_references(
+    store: SqliteStore,
+) -> dict[str, SourceReference] | None:
+    references: dict[str, SourceReference] = {}
+    try:
+        captures = store.evidence_captures()
+    except OSError:
+        return None
+    for capture in captures:
+        if str(capture.url).rstrip("/") != _SEARCH_URL:
+            continue
+        try:
+            parsed = _parse_search_results(capture.body)
+        except (ArunParseError, ArunResultCapError):
+            continue
+        for reference in parsed.references:
+            previous = references.get(reference.reference)
+            if previous is not None and previous != reference:
+                return None
+            references[reference.reference] = reference
+    return references or None
+
+
+def _source_identity_agrees(
+    store: SqliteStore,
+    retained: tuple[RetainedNativeRecord, ...],
+) -> bool:
+    source_references = _source_evidence_references(store)
+    if source_references is None:
+        return False
+    queued = store.discovery_state(_AUTHORITY_ID).queued
+    if not queued or any(
+        reference.source_id != SOURCE
+        or source_references.get(reference.reference) != reference
+        for reference in queued
+    ):
+        return False
+    for record in retained:
+        evidence_reference = source_references.get(record.reference.reference)
+        application = store.get_application(record.application_id)
+        if (
+            evidence_reference is None
+            or record.reference != evidence_reference
+            or application.source_id != SOURCE
+            or application.reference != evidence_reference.reference
+            or application.locator != evidence_reference.locator
+        ):
+            return False
+    return True
+
+
 def _evidence_and_sections(
     store: SqliteStore,
 ) -> tuple[
     int,
     tuple[EvidenceDigest, ...],
+    bool,
     bool,
     bool,
     bool,
@@ -503,6 +582,7 @@ def _evidence_and_sections(
     sections_complete = True
     native_evidence_agreement = True
     normalised_evidence_agreement = True
+    source_identity_agreement = _source_identity_agrees(store, retained)
     native_rows = []
     for record in retained:
         native = ArunApplicationV1.model_validate_json(record.native_json)
@@ -530,6 +610,7 @@ def _evidence_and_sections(
         sections_complete,
         native_evidence_agreement,
         normalised_evidence_agreement,
+        source_identity_agreement,
         QualificationNativeCoverage(
             applications=len(native_rows),
             appeal_references=sum(
@@ -671,6 +752,7 @@ def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState
         current_sections_complete,
         native_evidence_agreement,
         normalised_evidence_agreement,
+        source_identity_agreement,
         native_coverage,
     ) = _evidence_and_sections(store)
     search_digests = () if terminal is None else terminal.search_digests
@@ -699,8 +781,18 @@ def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState
         current_sections_complete=current_sections_complete,
         native_evidence_agreement=native_evidence_agreement,
         normalised_evidence_agreement=normalised_evidence_agreement,
+        source_identity_agreement=source_identity_agreement,
         native_coverage=native_coverage,
     )
+
+
+def _checked_state(
+    store: SqliteStore, scope: QualificationScope
+) -> _QualificationState:
+    try:
+        return _state(store, scope)
+    except MissingEvidenceRecordError as error:
+        raise QualificationFailedError(("application-evidence-digests",)) from error
 
 
 def _base_checks(
@@ -760,6 +852,10 @@ def _base_checks(
             ok=state.normalised_evidence_agreement,
         ),
         QualificationCheck(
+            name="source-evidence-identity",
+            ok=state.source_identity_agreement,
+        ),
+        QualificationCheck(
             name="application-count",
             ok=(
                 snapshot.applications > 0
@@ -802,6 +898,37 @@ def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
     )
 
 
+def _cost_from_run(record: RunRecord) -> QualificationCost:
+    return QualificationCost(
+        request_count=record.metrics.request_count,
+        transferred_bytes=record.metrics.transferred_bytes,
+        attachment_body_requests=record.metrics.attachment_body_requests,
+    )
+
+
+def _run_provenance(record: RunRecord) -> QualificationRunProvenance:
+    if record.finished_at is None:
+        raise QualificationFailedError(("run-provenance",))
+    return QualificationRunProvenance(
+        run_id=record.run_id,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        cost=_cost_from_run(record),
+    )
+
+
+def _code_revision() -> str:
+    revision = subprocess.check_output(
+        ("/usr/bin/git", "rev-parse", "HEAD"),
+        text=True,
+    ).strip()
+    if len(revision) != _GIT_SHA_LENGTH or any(
+        character not in "0123456789abcdef" for character in revision
+    ):
+        raise QualificationFailedError(("run-provenance",))
+    return revision
+
+
 async def _qualify(
     store: SqliteStore,
     config: _Config,
@@ -822,7 +949,7 @@ async def _qualify(
         transferred_bytes=totals.transferred_bytes,
         attachment_body_requests=totals.attachment_body_requests,
     )
-    initial_state = _state(store, config.scope)
+    initial_state = _checked_state(store, config.scope)
     initial_checks = _base_checks(
         store,
         initial_state,
@@ -833,8 +960,17 @@ async def _qualify(
     _require(initial_checks)
 
     rerun_cost = await _collect_once(collector, window, session_factory)
-    final_state = _state(store, config.scope)
+    final_state = _checked_state(store, config.scope)
     run_statuses = store.run_statuses(_AUTHORITY_ID)
+    run_records = store.run_records(_AUTHORITY_ID)
+    if len(run_records) < _REQUIRED_SUCCESSFUL_RUNS:
+        raise QualificationFailedError(("run-provenance",))
+    publication_record, follow_up_record = run_records[-2:]
+    provenance = QualificationProvenance(
+        code_revision=_code_revision(),
+        publication=_run_provenance(publication_record),
+        immediate_follow_up=_run_provenance(follow_up_record),
+    )
     final_checks = (
         *_base_checks(
             store,
@@ -868,6 +1004,17 @@ async def _qualify(
                 and RunStatus.RUNNING not in run_statuses
             ),
         ),
+        QualificationCheck(
+            name="run-provenance",
+            ok=(
+                publication_record.status == RunStatus.SUCCEEDED
+                and follow_up_record.status == RunStatus.SUCCEEDED
+                and provenance.publication.cost == initial_cost
+                and provenance.immediate_follow_up.cost == rerun_cost
+                and provenance.publication.finished_at
+                <= provenance.immediate_follow_up.started_at
+            ),
+        ),
     )
     _require(final_checks)
     if final_state.search_form_evidence_digest is None:
@@ -888,6 +1035,7 @@ async def _qualify(
             rerun=rerun_cost,
         ),
         run_statuses=run_statuses,
+        provenance=provenance,
         weekly_cycles=(
             WeeklyCycle(target_date=config.scope.end + timedelta(days=7)),
             WeeklyCycle(target_date=config.scope.end + timedelta(days=14)),

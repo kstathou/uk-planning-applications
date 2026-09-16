@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 from yimby.domain import (
     AuthorityId,
@@ -34,7 +36,7 @@ class _RunContext:
     started: float
     storage_before: int
     active_reference: SourceReference | None = None
-    attachment_urls: set[str] = field(default_factory=set)
+    attachment_urls: list[str] = field(default_factory=list)
 
 
 class Collector:
@@ -72,7 +74,7 @@ class Collector:
                 return
             context.active_reference = reference
             collected = await package.collect(session, reference)
-            context.attachment_urls.update(
+            context.attachment_urls.extend(
                 str(document.url) for document in collected.normalised.documents
             )
             application_ids.append(self._store.commit_observation(run_id, collected))
@@ -169,5 +171,14 @@ class Collector:
 
     @staticmethod
     def _attachment_body_requests(context: _RunContext) -> int:
-        retrieved = context.attachment_urls.intersection(context.session.requested_urls)
-        return context.session.attachment_body_requests + len(retrieved)
+        published = Counter(_transport_url(url) for url in context.attachment_urls)
+        requested = Counter(
+            _transport_url(url) for url in context.session.requested_urls
+        )
+        retrieved = sum(min(count, requested[url]) for url, count in published.items())
+        return context.session.attachment_body_requests + retrieved
+
+
+def _transport_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))

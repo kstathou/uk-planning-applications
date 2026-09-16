@@ -444,6 +444,17 @@ class RunOutcome(FrozenModel):
     failure_message: str | None = None
 
 
+class RunRecord(FrozenModel):
+    """Durable identity, timing, status, and cost of one collection run."""
+
+    run_id: str
+    authority_id: AuthorityId
+    started_at: datetime
+    finished_at: datetime | None
+    status: RunStatus
+    metrics: RunMetrics
+
+
 class RetryItem(FrozenModel):
     """A detail reference that remains retryable after a failed run."""
 

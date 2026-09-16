@@ -42,6 +42,7 @@ from yimby.domain import (
     RetryItem,
     RunMetrics,
     RunOutcome,
+    RunRecord,
     RunStatus,
     SourceId,
     SourceReference,
@@ -60,6 +61,10 @@ if TYPE_CHECKING:
 _DOCUMENTS = TypeAdapter(tuple[DocumentRecord, ...])
 _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
+
+
+class MissingEvidenceRecordError(KeyError):
+    """A durable native input names an evidence digest absent from SQLite."""
 
 
 class _ApplicationSection(FrozenModel):
@@ -271,6 +276,23 @@ class SqliteStore:
             row["media_type"],
         )
 
+    def evidence_captures(self) -> tuple[EvidenceCapture, ...]:
+        """Rehydrate every registered evidence capture in digest order."""
+        return tuple(
+            self._evidence.read_capture(
+                EvidenceDigest(row["digest"]),
+                row["path"],
+                row["source_url"],
+                row["media_type"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT digest, path, source_url, media_type
+                FROM evidence ORDER BY digest
+                """
+            )
+        )
+
     def commit_observation(
         self,
         run_id: str,
@@ -427,7 +449,7 @@ class SqliteStore:
                     (digest_value,),
                 ).fetchone()
                 if evidence is None:
-                    raise KeyError(digest_value)
+                    raise MissingEvidenceRecordError(digest_value)
                 captures.append(
                     self._evidence.read_capture(
                         EvidenceDigest(digest_value),
@@ -967,6 +989,43 @@ class SqliteStore:
                 (authority_id,),
             )
         return tuple(RunStatus(row["status"]) for row in rows)
+
+    def run_records(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[RunRecord, ...]:
+        """Return durable runs for one authority in creation order."""
+        return tuple(
+            RunRecord(
+                run_id=row["run_id"],
+                authority_id=authority_id,
+                started_at=datetime.fromisoformat(row["started_at"]),
+                finished_at=(
+                    None
+                    if row["finished_at"] is None
+                    else datetime.fromisoformat(row["finished_at"])
+                ),
+                status=RunStatus(row["status"]),
+                metrics=RunMetrics(
+                    request_count=row["request_count"],
+                    transferred_bytes=row["transferred_bytes"],
+                    duration_ms=row["duration_ms"],
+                    browser_time_ms=row["browser_time_ms"],
+                    attachment_body_requests=row["attachment_body_requests"],
+                    storage_growth_bytes=row["storage_growth_bytes"],
+                ),
+            )
+            for row in self._connection.execute(
+                """
+                SELECT run.id AS run_id, run.started_at, details.*
+                FROM runs AS run
+                JOIN run_details AS details ON details.run_id = run.id
+                WHERE run.authority_id = ?
+                ORDER BY run.rowid
+                """,
+                (authority_id,),
+            )
+        )
 
     def qualification_snapshot(
         self,

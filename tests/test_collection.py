@@ -67,7 +67,14 @@ WINDOW = DiscoveryWindow(
     include_open=True,
 )
 EXPECTED_SOURCE_COUNT = 2
-ATTACHMENT_METRIC_DOCUMENT_URL = "https://example.test/view?document=1"
+ATTACHMENT_METRIC_DOCUMENT_URL = "https://example.test/view"
+EXPECTED_ATTACHMENT_BODY_REQUESTS = 2
+
+
+class _QueryStrippingFixtureSession(FixtureSession):
+    @property
+    def requested_urls(self) -> tuple[str, ...]:
+        return tuple(url.partition("?")[0] for url in super().requested_urls)
 
 
 class _AttachmentThenFailurePackage:
@@ -80,6 +87,10 @@ class _AttachmentThenFailurePackage:
         source_id=SourceId("barnet-idox-current"),
         reference="SECOND/2",
     )
+    _third = SourceReference(
+        source_id=SourceId("barnet-idox-current"),
+        reference="THIRD/3",
+    )
 
     async def discover(
         self,
@@ -89,7 +100,7 @@ class _AttachmentThenFailurePackage:
     ) -> AsyncIterator[DurableDiscoveryBatch]:
         del session, window, checkpoint
         yield DurableDiscoveryBatch(
-            references=(self._first, self._second),
+            references=(self._first, self._second, self._third),
             next_checkpoint=StoredCheckpoint(schema_version=1, payload_json="{}"),
             complete=True,
         )
@@ -99,12 +110,15 @@ class _AttachmentThenFailurePackage:
         session: PortalSession,
         reference: SourceReference,
     ) -> CollectedObservation:
-        if reference == self._second:
+        if reference == self._third:
             failure = "later reference failed"
             raise SourceUnavailableError(failure)
+        document_url = (
+            f"{ATTACHMENT_METRIC_DOCUMENT_URL}?document={reference.reference}"
+        )
         await session.fetch(
             PortalRequest(
-                url=HttpUrl(ATTACHMENT_METRIC_DOCUMENT_URL),
+                url=HttpUrl(document_url),
                 intent=RequestIntent.SEARCH,
             )
         )
@@ -119,7 +133,7 @@ class _AttachmentThenFailurePackage:
                 documents=(
                     DocumentRecord(
                         title="Retrieved attachment",
-                        url=HttpUrl(ATTACHMENT_METRIC_DOCUMENT_URL),
+                        url=HttpUrl(document_url),
                     ),
                 ),
                 comments=(),
@@ -273,10 +287,13 @@ def test_failed_run_counts_attachments_retrieved_before_a_later_failure(  # noqa
     store = _store(tmp_path)
     package = _AttachmentThenFailurePackage()
     collector = Collector(AuthorityRegistry((package,)), store)
-    session = FixtureSession(
+    session = _QueryStrippingFixtureSession(
         {
-            ATTACHMENT_METRIC_DOCUMENT_URL: FixtureResponse(
-                body=b"retrieved attachment"
+            f"{ATTACHMENT_METRIC_DOCUMENT_URL}?document=FIRST/1": FixtureResponse(
+                body=b"first attachment"
+            ),
+            f"{ATTACHMENT_METRIC_DOCUMENT_URL}?document=SECOND/2": FixtureResponse(
+                body=b"second attachment"
             ),
         }
     )
@@ -285,7 +302,10 @@ def test_failed_run_counts_attachments_retrieved_before_a_later_failure(  # noqa
         asyncio.run(collector.collect(AuthorityId("barnet"), WINDOW, session))
 
     assert store.run_statuses(AuthorityId("barnet")) == (RunStatus.FAILED,)
-    assert store.metrics_totals(AuthorityId("barnet")).attachment_body_requests == 1
+    assert (
+        store.metrics_totals(AuthorityId("barnet")).attachment_body_requests
+        == EXPECTED_ATTACHMENT_BODY_REQUESTS
+    )
     store.close()
 
 

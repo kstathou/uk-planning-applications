@@ -39,8 +39,10 @@ A completed terminal checkpoint rolls forward to a fresh canonical plan when a
 later weekly scope is supplied; scope changes remain rejected while a plan is
 in progress.
 
-The result parser reconciles a source-reported partial total with the exact
-expanded references, rejects duplicates within a response, and de-duplicates
+The result parser requires the partial marker's displayed count to equal the
+enumerated first-page rows, requires that count to be below the reported total,
+and requires the portal-owned Show All form. It reconciles that total with the
+exact expanded references, rejects duplicates within a response, and de-duplicates
 overlaps across received, decided, and older-open searches by application
 reference. Some complete portal responses publish no numeric total. Those are
 accepted only when the page has the exact four-column result table and its
@@ -117,12 +119,14 @@ normalised as 4 appeal relationships, 2 `appeal-lodged` events, and 3
 the Unicode whitespace in the 253 `Undecided (On Hold)` source statuses is
 collapsed to the stable `undecided-(on-hold)` value. The receipt records 73 search captures and 1,296 application
 captures with their exact digests. It reparses every result capture, checks its
-exact query membership, and also verifies SQLite
+exact query membership and source-published identity and locator, and also verifies SQLite
 integrity, evidence paths, terminal checkpoint state, exact reference-set
 equality, current section completeness, the source cap, and the durable
-discovery-only registry status before publication. The 23 checks include exact
+discovery-only registry status before publication. The 25 checks include exact
 agreement between the complete reparsed native and normalised persisted models
-and their retained detail and document-index evidence. The immediate terminal
+and their retained detail and document-index evidence. They also bind the
+published receipt to the code revision and the persisted run identifiers,
+timestamps, and costs for its publication pass and immediate follow-up. The immediate terminal
 rerun made zero requests,
 transferred zero bytes, requested zero attachment bodies, and produced the same
 durable snapshot and semantic fingerprint. Zero-request successes do not advance
@@ -134,8 +138,9 @@ The canonical local receipt is
 the typed full query inventory, the optional source-reported count, exact
 enumerated count and references for every query, exact durable reference sets,
 separate search and application evidence digest inventories, Arun-scoped costs
-and run outcomes, reconstructed expected request contracts for every result
-capture, check results, and pending weekly-cycle dates. The superseded
+and run outcomes, code and run provenance for the publication and immediate
+follow-up, reconstructed expected request contracts for every result capture,
+check results, and pending weekly-cycle dates. The superseded
 v2 receipt remains beside it for audit history, and the pre-v2 snapshot is preserved at
 `.yimby/qualification-arun-2026-09-16-pre-v2` for diagnosis only.
 

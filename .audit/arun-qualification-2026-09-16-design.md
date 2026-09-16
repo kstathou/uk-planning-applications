@@ -76,12 +76,14 @@ its exact query fields and `showall=showall` control.
 
 Result parsing accepts exactly one same-host planning-result link from each
 validated four-cell result row and rejects matching links outside that table.
-It recognizes the portal's explicit empty structure, its `First 20
-results shown, there are N in total` partial count, and the source-owned complete
+It recognizes the portal's explicit empty structure, its `First N results
+shown, there are M in total` partial count, and the source-owned complete
 page whose exact four-column result table is paired with its `Back to Search
 page` control. A complete page may contain multiple rows and no numeric total;
 the receipt keeps its source-reported count null while retaining the exact
-enumerated membership. It never manufactures a reported count from link count.
+enumerated membership. A partial page is valid only when `N` equals the parsed
+row count, `N < M`, and the exact Show All form is present. It never manufactures
+a reported count from link count.
 Counts or enumerations at or above 200 fail closed.
 
 ## Application and document boundary
@@ -111,8 +113,8 @@ The command writes only after all checks pass and replaces its typed,
 schema-version-3 receipt atomically. The receipt proves:
 
 - the exact inclusive scope and exact 60-query inventory;
-- a terminal checkpoint whose seen-reference set equals the durable discovery
-  set;
+- a terminal checkpoint whose scope-local seen-reference set is a subset of the
+  cumulative durable discovery set;
 - exact equality among discovered, retained-native, and materialized application
   reference sets;
 - zero retries, failed current sections, unmapped records, and attachment-body
@@ -124,17 +126,21 @@ schema-version-3 receipt atomically. The receipt proves:
   agreement with each reconstructed expected request contract, plus exact
   agreement between the complete native and normalised persisted models and
   their retained detail and document-index evidence, including persisted source
-  identity and locator;
+  identity and locator, with source identity and locator derived independently
+  from retained search-result evidence;
 - complete current application and document sections for every retained record;
 - a successful completed run plus an immediate successful rerun with a
   byte-for-byte semantic fingerprint match; all historical run outcomes and
   aggregate bootstrap costs remain visible; and
 - zero requests, zero transferred bytes, and zero attachment-body requests on
-  the immediate terminal rerun.
+  the immediate terminal rerun; and
+- the exact code revision plus persisted run identifiers, timestamps, and costs
+  for the receipt publication pass and immediate follow-up.
 
-The native coverage summary is an optional additive schema-version-3 field:
-older v3 receipts still decode, while newly published receipts always populate
-it and validate it against retained source evidence.
+The native coverage summary and run provenance are optional additive
+schema-version-3 fields: older v3 receipts still decode, while newly published
+receipts always populate them and validate them against retained evidence and
+SQLite run records.
 
 The exact 648-record portal population includes the source-published test/dummy
 references `DUMMY_P`, `H/1/18/PL`, and `H/5/26/PL`. They remain in the source
@@ -156,6 +162,10 @@ agreement, complete native and normalised application evidence, duplicate
 detail labels, exact document-filter ownership, legacy checkpoint qualification,
 search-evidence tampering, pending cycles, atomic replacement, and rerun
 semantic stability.
+The regression matrix also covers a second qualification scope over cumulative
+SQLite state, coherent persisted source/locator tampering, missing registered
+evidence rows, strict partial-count contradictions, and failed-run attachment
+accounting when the transport strips query strings and a URL repeats.
 
 ## Architecture arena
 

@@ -78,7 +78,7 @@ def _partial_results(query_fields: str) -> bytes:
       <tr><td><a href="planningDetails?reference=BR/1/26/PL&amp;from=planningSearch">
         BR/1/26/PL</a></td><td>Site</td><td>Proposal</td><td>Undecided</td></tr>
     </table>
-    <strong>First 20 results shown, there are 2 in total</strong>
+    <strong>First 1 results shown, there are 2 in total</strong>
     <form method="post" action="planningSearch">
       <input type="hidden" name="action" value="Search">
       <input type="hidden" name="showall" value="showall">
@@ -773,7 +773,7 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
         )
         return _partial_results(fields).replace(b"there are 2", b"there are 1")
 
-    with pytest.raises(arun.ArunQueryReplayError):
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
         asyncio.run(
             _batches(
                 adapter,
@@ -787,11 +787,11 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
         if request.method == RequestMethod.GET:
             return _search_form()
         return (
-            b"<strong>First 20 results shown, there are 3 in total</strong>"
+            b"<strong>First 1 results shown, there are 3 in total</strong>"
             + _complete_results(("NEW/1",))
         )
 
-    with pytest.raises(arun.ArunCountMismatchError):
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
         asyncio.run(
             _batches(
                 adapter,
@@ -1063,6 +1063,27 @@ def test_arun_form_and_show_all_structure_fail_closed() -> None:
         arun._parse_search_results(
             b"<strong>First 20 results shown, there are 200 in total</strong>"
         )
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
+        arun._parse_search_results(
+            _partial_results(fields).replace(b"First 1", b"First 2")
+        )
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
+        arun._parse_search_results(
+            _partial_results(fields).replace(b"there are 2", b"there are 1")
+        )
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
+        arun._parse_search_results(
+            _partial_results(fields).replace(b'name="showall"', b'name="other"')
+        )
+    with pytest.raises(arun.ArunParseError, match="reported result count"):
+        arun._parse_search_results(
+            _partial_results(fields).replace(
+                b"<strong>First 1 results shown, there are 2 in total</strong>",
+                b"",
+            )
+        )
+    with pytest.raises(arun.ArunQueryReplayError):
+        arun._show_all_request(None, query)
     with pytest.raises(arun.ArunParseError):
         arun._parse_search_results(
             _partial_results(fields)
@@ -1100,7 +1121,7 @@ def test_arun_active_query_replay_and_ambiguous_exact_results_fail_closed() -> N
         )
         return _partial_results(fields).replace(b"there are 2", b"there are 1")
 
-    with pytest.raises(arun.ArunQueryReplayError):
+    with pytest.raises(arun.ArunParseError, match="partial result count"):
         asyncio.run(_batches(adapter, _Session(ambiguous), window, None))
 
     terminal = arun.ArunLiveCursor(
@@ -1711,7 +1732,7 @@ def test_arun_qualification_does_not_hide_programmer_defects(tmp_path: "Path") -
         )
 
 
-def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
+def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(  # noqa: PLR0915
     tmp_path: "Path",
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1820,10 +1841,96 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
         {"target_date": "2026-09-30", "status": "pending"},
     ]
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    provenance = receipt["provenance"]
+    assert len(provenance["code_revision"]) == 40
+    assert (
+        provenance["publication"]["run_id"]
+        != provenance["immediate_follow_up"]["run_id"]
+    )
+    assert provenance["publication"]["cost"] == receipt["costs"]["final_resume_attempt"]
+    assert provenance["immediate_follow_up"]["cost"] == receipt["costs"]["rerun"]
+    assert (
+        provenance["publication"]["started_at"]
+        <= provenance["publication"]["finished_at"]
+    )
+    assert (
+        provenance["immediate_follow_up"]["started_at"]
+        <= provenance["immediate_follow_up"]["finished_at"]
+    )
     assert all(check["ok"] for check in receipt["checks"])
     receipt_path = data_dir / "arun-qualification-v3.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert not (data_dir / ".arun-qualification-v3.json.tmp").exists()
+
+
+def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "two-scopes"
+    first_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert (
+        module.main(
+            first_args,
+            session_factory=lambda: _Session(_QualificationResponder()),
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    second_responder = _QualificationResponder()
+    second_responder.references = ("BR/3/26/PL", "BR/4/26/PL")
+    second_sessions: list[_Session] = []
+
+    def second_factory() -> _Session:
+        session = _Session(second_responder)
+        second_sessions.append(session)
+        return session
+
+    second_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-25",
+        "--end",
+        "2026-09-23",
+        "--include-open",
+        "--resume",
+    ]
+    assert module.main(second_args, session_factory=second_factory) == 0
+    receipt = json.loads(capsys.readouterr().out)
+
+    assert len(second_sessions) == 2
+    assert second_sessions[0].requested_urls
+    assert second_sessions[1].requested_urls == ()
+    assert receipt["scope"] == {
+        "start": "2026-08-25",
+        "end": "2026-09-23",
+        "include_open": True,
+    }
+    assert receipt["references"] == {
+        "discovered": ["BR/1/26/PL", "BR/2/26/PL", "BR/3/26/PL"],
+        "retained_native": ["BR/1/26/PL", "BR/2/26/PL", "BR/3/26/PL"],
+        "applications": ["BR/1/26/PL", "BR/2/26/PL", "BR/3/26/PL"],
+    }
+    assert {
+        reference
+        for query in receipt["query_inventory"]
+        for reference in query["references"]
+    } == {"BR/3/26/PL"}
+    assert receipt["counts"]["applications"] == 3
+    assert all(check["ok"] for check in receipt["checks"])
 
 
 def test_arun_qualification_rejects_checkpoint_source_count_tampering(
@@ -1911,6 +2018,51 @@ def test_arun_qualification_fails_cleanly_on_missing_application_captures(
     assert error["error"] == "qualification-failed"
     assert "native-evidence-agreement" in error["failed_checks"]
     assert "normalised-evidence-agreement" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
+
+
+def test_arun_qualification_fails_cleanly_on_a_missing_evidence_row(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "missing-evidence-row"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    factory = lambda: _Session(_QualificationResponder())  # noqa: E731
+
+    assert module.main(args, session_factory=factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(
+            """
+            DELETE FROM evidence
+            WHERE digest = (
+                SELECT json_extract(evidence_digests_json, '$[0]')
+                FROM native_rebuild_inputs
+                ORDER BY application_id
+                LIMIT 1
+            )
+            """
+        )
+        connection.commit()
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error == {
+        "error": "qualification-failed",
+        "failed_checks": ["application-evidence-digests"],
+    }
     assert receipt_path.read_text(encoding="utf-8") == original
 
 
@@ -2008,71 +2160,108 @@ def test_arun_qualification_accepts_legacy_terminal_request_contracts(
 
 
 @pytest.mark.parametrize(
-    "tamper_sql",
+    ("tamper_sql", "failed_check"),
     [
-        """
-        UPDATE semantic_versions
-        SET payload_json = json_set(payload_json, '$.proposal', 'tampered')
-        WHERE id = (
-            SELECT current.version_id
-            FROM section_current AS current
-            JOIN applications AS application
-                ON application.id = current.application_id
-            WHERE application.authority_id = 'arun'
-                AND current.section = 'application'
-            ORDER BY application.reference
-            LIMIT 1
-        )
-        """,
-        """
-        INSERT INTO suppression_corrections (
-            application_id,
-            suppressed,
-            reason,
-            corrected_at
-        )
-        SELECT id, 1, 'tampered', '2026-09-16T00:00:00+00:00'
-        FROM applications
-        WHERE authority_id = 'arun'
-        ORDER BY reference
-        LIMIT 1
-        """,
-        """
-        UPDATE applications
-        SET source_id = 'tampered-source'
-        WHERE id = (
-            SELECT id
+        (
+            """
+            UPDATE semantic_versions
+            SET payload_json = json_set(payload_json, '$.proposal', 'tampered')
+            WHERE id = (
+                SELECT current.version_id
+                FROM section_current AS current
+                JOIN applications AS application
+                    ON application.id = current.application_id
+                WHERE application.authority_id = 'arun'
+                    AND current.section = 'application'
+                ORDER BY application.reference
+                LIMIT 1
+            )
+            """,
+            "normalised-evidence-agreement",
+        ),
+        (
+            """
+            INSERT INTO suppression_corrections (
+                application_id,
+                suppressed,
+                reason,
+                corrected_at
+            )
+            SELECT id, 1, 'tampered', '2026-09-16T00:00:00+00:00'
             FROM applications
             WHERE authority_id = 'arun'
             ORDER BY reference
             LIMIT 1
-        );
-        UPDATE discovery_queue
-        SET source_id = 'tampered-source'
-        WHERE reference = (
-            SELECT reference
-            FROM applications
-            WHERE source_id = 'tampered-source'
-            LIMIT 1
-        )
-        """,
-        """
-        UPDATE applications
-        SET locator = 'https://example.test/tampered'
-        WHERE id = (
-            SELECT id
-            FROM applications
-            WHERE authority_id = 'arun'
-            ORDER BY reference
-            LIMIT 1
-        )
-        """,
+            """,
+            "normalised-evidence-agreement",
+        ),
+        (
+            """
+            UPDATE applications
+            SET source_id = 'tampered-source'
+            WHERE id = (
+                SELECT id
+                FROM applications
+                WHERE authority_id = 'arun'
+                ORDER BY reference
+                LIMIT 1
+            );
+            UPDATE discovery_queue
+            SET source_id = 'tampered-source'
+            WHERE reference = (
+                SELECT reference
+                FROM applications
+                WHERE source_id = 'tampered-source'
+                LIMIT 1
+            );
+            UPDATE native_rebuild_inputs
+            SET source_id = 'tampered-source'
+            WHERE reference = (
+                SELECT reference
+                FROM applications
+                WHERE source_id = 'tampered-source'
+                LIMIT 1
+            )
+            """,
+            "source-evidence-identity",
+        ),
+        (
+            """
+            UPDATE applications
+            SET locator = 'https://example.test/tampered'
+            WHERE id = (
+                SELECT id
+                FROM applications
+                WHERE authority_id = 'arun'
+                ORDER BY reference
+                LIMIT 1
+            );
+            UPDATE discovery_queue
+            SET locator = 'https://example.test/tampered'
+            WHERE reference = (
+                SELECT reference
+                FROM applications
+                WHERE locator = 'https://example.test/tampered'
+                LIMIT 1
+            );
+            UPDATE native_rebuild_inputs
+            SET locator = 'https://example.test/tampered'
+            WHERE reference = (
+                SELECT reference
+                FROM applications
+                WHERE locator = 'https://example.test/tampered'
+                LIMIT 1
+            )
+            """,
+            "source-evidence-identity",
+        ),
     ],
 )
 def test_arun_qualification_rejects_normalised_state_tampering(
     tmp_path: "Path",
     capsys: pytest.CaptureFixture[str],
     tamper_sql: str,
+    failed_check: str,
 ) -> None:
     module = _qualification_module()
     data_dir = tmp_path / "normalised-tampering"
@@ -2101,7 +2290,7 @@ def test_arun_qualification_rejects_normalised_state_tampering(
     assert module.main([*args, "--resume"], session_factory=factory) == 1
     error = json.loads(capsys.readouterr().err)
     assert error["error"] == "qualification-failed", error
-    assert "normalised-evidence-agreement" in error["failed_checks"]
+    assert failed_check in error["failed_checks"]
     assert receipt_path.read_text(encoding="utf-8") == original
 
 
