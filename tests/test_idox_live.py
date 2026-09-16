@@ -336,6 +336,7 @@ def _result_page_with_showing_markers(
     current_page: str = "1",
     numbered_page: int = 2,
     visible_page: str | None = None,
+    capacity: str | None = "10",
 ) -> bytes:
     visible = "" if visible_page is None else f"<strong>{visible_page}</strong>"
     markers = "".join(
@@ -344,7 +345,7 @@ def _result_page_with_showing_markers(
     )
     page = _uncounted_result_page(
         rows,
-        capacity="10",
+        capacity=capacity,
         current_page=current_page,
         numbered_page=numbered_page,
     ).decode()
@@ -1449,6 +1450,26 @@ def test_west_suffolk_count_rejects_visible_page_outside_displayed_range() -> No
         current_page="1",
         numbered_page=2,
         visible_page="999",
+    )
+
+    with pytest.raises(
+        west_suffolk_adapter.WestSuffolkParseError,
+        match="reported result count",
+    ):
+        getattr(west_suffolk_adapter, "_parse_search_page")(page)
+
+
+@pytest.mark.parametrize("capacity", [None, "many", "0"])
+def test_west_suffolk_count_requires_capacity_for_visible_page(
+    capacity: str | None,
+) -> None:
+    """A visible page number needs a positive selected page capacity."""
+    page = _result_page_with_showing_markers(
+        (("DC/26/0001/FUL", "KEY1"),),
+        ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+        visible_page="1",
+        numbered_page=1,
+        capacity=capacity,
     )
 
     with pytest.raises(
