@@ -55,3 +55,10 @@ their live-bootstrap cells because the smokes checkpoint discovery but do not
 persist every discovered application through the operational collection store.
 West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
 unverified detail surface.
+
+A later Durham qualification attempt on 16 September 2026 resolved the official
+portal host to `217.23.233.121`, but both port 80 and port 443 timed out before
+an HTTP response. The council's main planning page remained healthy. The
+advanced form and current-case list could not be captured, so the exact 30-day
+received-date route and complete older-open query inventory remain unproved.
+No qualification receipt was emitted, and Durham remains discovery-only.

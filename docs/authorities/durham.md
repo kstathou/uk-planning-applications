@@ -50,3 +50,27 @@ second result page. Each summary link carried the portal key in
 the human reference, proposal, address, received date, validated date, status,
 and comment-open marker. This confirms the current weekly request and row
 contract, not the open decided, pagination, and incremental checks above.
+
+## Qualification attempt on 16 September 2026
+
+The official council planning page remained available with HTTP 200, but the
+linked Public Access host did not accept a connection from the qualification
+host. `publicaccess.durham.gov.uk` resolved to `217.23.233.121`. Bounded HTTP
+and HTTPS probes to the portal root timed out after 10 seconds. A bounded HTTPS
+probe to `search.do?action=advanced` also timed out after 10 seconds. Chrome and
+the in-app browser timed out before either page returned an HTTP response.
+
+The council's Public Access user guide documents advanced received, validated,
+and decided date searches. It also documents status filters and paged results.
+The guide does not provide the current form field names, option values, request
+method, result cap, or wire-level pagination controls. The prior walkthrough
+did not retain the target or completeness rules for the separate current-case
+list.
+
+The live qualification therefore stopped before implementation. Durham's exact
+30-day received-date query and complete older-open inventory remain unproved.
+West Suffolk's status values are portal-owned and were not copied. The adapter
+still fails closed with `DurhamOpenEnumerationUnsupportedError`, registry
+readiness remains `discovery-only`, and both later weekly refresh cycles remain
+pending. The local blocker record is
+`.yimby/qualification-durham-2026-09-16/durham-qualification-blocker-v1.json`.
