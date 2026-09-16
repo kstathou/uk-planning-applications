@@ -164,6 +164,10 @@ def _weekly_form(search_type: str = "Application") -> bytes:
       <select name="week">
         <option value="bad">Bad</option>
         <option value="13/09/2026">Sunday</option>
+        <option value="17/08/2026">August Monday</option>
+        <option value="24/08/2026">August Monday</option>
+        <option value="31/08/2026">August Monday</option>
+        <option value="07/09/2026">September Monday</option>
         <option value="14/09/2026">Monday</option>
         <option value="21/09/2026">Following Monday</option>
       </select>
@@ -713,16 +717,27 @@ class _IdoxMock:
             )
         if path.endswith("/weeklyListResults.do"):
             assert request.headers.get("cookie") == "JSESSIONID=sanitised"
+            requested_week = dict(fields)["week"]
             assert fields[:5] == (
                 ("_csrf", "sanitised-token"),
                 ("searchCriteria.parish", ""),
                 ("searchCriteria.ward", ""),
-                ("week", self.expected_week),
+                ("week", requested_week),
                 ("dateType", dict(fields)["dateType"]),
             )
+            assert requested_week in {
+                "17/08/2026",
+                "24/08/2026",
+                "31/08/2026",
+                "07/09/2026",
+                "14/09/2026",
+                "21/09/2026",
+            }
             assert fields[5][0] == "searchType"
             assert fields[-2:] == (("tag", "one"), ("tag", "two"))
             self.current_date_type = dict(fields)["dateType"]
+            if requested_week != self.expected_week:
+                return httpx.Response(200, content=b"<p>No results found.</p>")
             if self.uncounted_terminal and self.current_date_type == "DC_Validated":
                 return httpx.Response(
                     200,
@@ -987,6 +1002,18 @@ def _store(root: Path) -> SqliteStore:
 def _qualification_module() -> ModuleType:
     path = Path(__file__).parents[1] / "scripts" / "qualify_west_suffolk.py"
     name = "_test_qualify_west_suffolk"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _durham_qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_durham.py"
+    name = "_test_qualify_durham"
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None
     assert spec.loader is not None
@@ -2606,6 +2633,203 @@ def test_live_detail_failure_states_and_reference_agreement(case: _Case) -> None
         assert malformed_comments.completeness.comments.kind == "failed"
         nonzero = asyncio.run(fetch(_IdoxMock(case, comments_nonzero=True)))
         assert nonzero.completeness.comments.kind == "unavailable"
+
+
+def test_durham_qualification_requires_exact_safe_scope(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject implicit access, non-open scope, non-30-day windows, and reuse."""
+    module = _durham_qualification_module()
+    created = 0
+
+    def session_factory() -> _QualificationSession:
+        nonlocal created
+        created += 1
+        return _QualificationSession(_IdoxMock(_DURHAM_CASE))
+
+    base = [
+        "--data-dir",
+        str(tmp_path / "missing-confirmation"),
+        "--start",
+        "2026-08-22",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(base, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "confirmation-required"
+
+    without_open = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "missing-open"),
+        "--start",
+        "2026-08-22",
+        "--end",
+        "2026-09-20",
+    ]
+    assert module.main(without_open, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "include-open-required"
+
+    wrong_window = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "wrong-window"),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(wrong_window, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "invalid-window"
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "existing").write_text("preserve", encoding="utf-8")
+    occupied_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(occupied),
+        "--start",
+        "2026-08-22",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(occupied_args, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
+    assert (occupied / "existing").read_text(encoding="utf-8") == "preserve"
+    assert created == 0
+
+
+def test_durham_qualification_persists_inventory_and_zero_io_rerun(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Qualify Durham durably and prove the immediate rerun performs no I/O."""
+    module = _durham_qualification_module()
+    data_dir = tmp_path / "qualification"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_DURHAM_CASE))
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-22",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    result = module.main(
+        args,
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 20, 12, tzinfo=UTC),
+    )
+
+    assert result == 0
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "durham"
+    assert receipt["scope"] == {
+        "start": "2026-08-22",
+        "end": "2026-09-20",
+        "include_open": True,
+    }
+    assert len(receipt["inventory"]["weekly_query_keys"]) == 10
+    assert len(receipt["inventory"]["older_open_query_keys"]) == 80
+    assert len(receipt["inventory"]["completed_query_keys"]) == 90
+    assert receipt["inventory"]["reference_count"] == 8
+    assert len(receipt["inventory"]["reference_sha256"]) == 64
+    assert receipt["counts"] == {
+        "applications": 8,
+        "discovered_references": 8,
+        "native_versions": 8,
+        "application_versions": 8,
+        "document_versions": 8,
+        "comment_versions": 0,
+        "pending_retries": 0,
+        "failed_sections": 0,
+        "unmapped_records": 0,
+    }
+    assert receipt["costs"]["initial"]["request_count"] == 118
+    assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
+    assert receipt["costs"]["rerun"] == {
+        "request_count": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert all(check["ok"] for check in receipt["checks"])
+    assert receipt["future_weekly_cycles"] == [
+        {"scheduled_for": "2026-09-27", "status": "pending"},
+        {"scheduled_for": "2026-10-04", "status": "pending"},
+    ]
+    receipt_path = data_dir / "durham-qualification-v1.json"
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+    assert not (data_dir / ".durham-qualification-v1.json.tmp").exists()
+
+    sessions.clear()
+    assert (
+        module.main(
+            [*args, "--resume"],
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 20, 13, tzinfo=UTC),
+        )
+        == 0
+    )
+    resumed = json.loads(capsys.readouterr().out)
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    assert all(session.requested_urls == () for session in sessions)
+    assert resumed["costs"]["initial"]["request_count"] == 0
+    assert resumed["costs"]["rerun"]["request_count"] == 0
+
+
+def test_durham_qualification_rejects_failed_current_sections(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Do not emit a Durham receipt while current sections remain failed."""
+    module = _durham_qualification_module()
+    data_dir = tmp_path / "failed-sections"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_DURHAM_CASE, documents_fail=True))
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-22",
+            "--end",
+            "2026-09-20",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+    )
+
+    assert result == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "failed-sections" in error["failed_checks"]
+    assert len(sessions) == 1
+    assert sessions[0].closed is True
+    assert not (data_dir / "durham-qualification-v1.json").exists()
 
 
 def test_west_suffolk_qualification_requires_explicit_safe_options(
