@@ -87,9 +87,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("arun"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "bounded received-date discovery and visible detail are implemented; "
-        "older-open and document actions are unresolved",
-        "captured Arun Ocella received search, show-all, and detail contracts",
+        "live bootstrap is proved for received, decided, and older-open searches; "
+        "two later weekly refresh cycles remain pending",
+        "captured Arun Ocella search, show-all, detail, and document-index contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("opdc"): _status(

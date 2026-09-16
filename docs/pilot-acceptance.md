@@ -27,7 +27,7 @@ requirement.
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
 | Peak District National Park Authority | Verified | Migrated discovery and detail routes recorded; child sections partial | Rolling-week legacy adapter; client-loaded child sections explicitly failed | Open | Open |
-| Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
+| Arun | Verified | Exact received/decided/open searches, Show All, detail, document index, and empty documents recorded | Resumable 60-query adapter; exact counts, metadata-only documents, and completeness checks | Proved 2026-09-16: 648 applications | Pending: 2026-09-23 and 2026-09-30 |
 | Old Oak and Park Royal Development Corporation | Verified | Source blocked | Blocked | Open | Open |
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
@@ -40,13 +40,16 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, no authority has completed a verified live bootstrap.
-The Barnet smoke is incomplete because the source returned HTTP 429 during
-pagination; its saved checkpoint permits a later bounded resume without
-repeating completed pages. All fifteen authorities still require a live
-bootstrap and two successful weekly cycles. Blocked and partial authorities
-remain in coverage denominators and failure reporting until those checks
-succeed.
+As of 16 September 2026, Arun has completed a verified live bootstrap. Its
+versioned receipt reconciles 648 unique references and applications, 1,296
+evidence captures, zero pending retries, zero failed current sections, zero
+unmapped records, and a zero-I/O immediate rerun. It remains discovery-only
+because the two later weekly cycles are pending. The Barnet smoke is incomplete
+because the source returned HTTP 429 during pagination; its saved checkpoint
+permits a later bounded resume without repeating completed pages. The other
+fourteen authorities still require a live bootstrap, and all fifteen still
+require two successful weekly cycles. Blocked and partial authorities remain
+in coverage denominators and failure reporting until those checks succeed.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds

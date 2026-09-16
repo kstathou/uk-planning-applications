@@ -46,6 +46,13 @@ Implement in three waves of five. All 15 belong to the pilot; national rollout b
 
 The additions include confirmed distinct implementations: [Arun's Ocella interface](https://www.arun.gov.uk/planning-application-search/), [OPDC's Agile/APAS system](https://www.london.gov.uk/adhs13-apas-back-office-planning-system-fee-2025-26), and [Blackburn's Planning Explorer](https://planning.blackburn.gov.uk/Northgate/PlanningExplorer/ApplicationSearch.aspx). Confirm each authority's current portal and supporting services during its walkthrough.
 
+Arun completed a persisted live bootstrap on 16 September 2026 for the
+inclusive 30-day window plus older open applications: 60 exact date queries
+reconciled to 648 unique applications, with document metadata and source
+evidence retained and an immediate zero-network rerun. This is bootstrap
+evidence only. The approximately 7- and 14-day refresh cycles remain pending,
+so Arun stays discovery-only and is not operationally qualified.
+
 ### Required investigation for every authority
 
 Before writing its scraper:

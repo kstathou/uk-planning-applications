@@ -1,60 +1,90 @@
 # Arun portal walkthrough
 
-Walkthrough date: 15 September 2026.
+Walkthrough dates: 15 and 16 September 2026.
 
-## Source
+## Official source and request contract
 
-- OcellaWeb: `https://www1.arun.gov.uk/aplanning/OcellaWeb/`
+The collector uses only Arun District Council's OcellaWeb planning search at
+`https://www1.arun.gov.uk/aplanning/OcellaWeb/planningSearch`. The bare
+`/OcellaWeb/` path returned 404 and is not a collection route.
 
-The planning search posts reference, location, postcode, parish, applicant, agent, undecided status, application type, received dates, and decided dates.
+The search form posts to the same route. Its controls are `reference`,
+`location`, `OcellaPlanningSearch.postcode`, `area`, `applicant`, `agent`,
+`undecided`, `type`, `receivedFrom`, `receivedTo`, `decidedFrom`, and
+`decidedTo`; dates use `DD-MM-YY`. A capped first response offers a
+portal-owned `Show all results` POST containing the exact active search fields
+plus `showall`. The adapter rejects missing, duplicated, cross-host, or
+query-changing Show All forms, and rejects any reported count of 200 or more
+rather than claiming completeness.
 
-## Application record
+## Discovery boundary
 
-The observed record was `BR/156/25/PL`. The detail page exposed status, proposal, location, parish, case officer, received date, validated date, target date, comment deadline, decision date, applicant, and agent.
+The canonical live plan contains exactly 60 searches:
 
-The page posted to separate routes for documents, other applications on the site, and comments. The comments action was disabled for the decided record.
+- one received-date search and one decided-date search for the inclusive
+  30-day window;
+- one older-open received-date search for 1948 through 1999;
+- one older-open received-date search per year from 2000 through 2023; and
+- one older-open received-date search per month from January 2024 through the
+  clipped end month.
 
-## Documents
+Older-open searches set the portal's undecided control and use received dates.
+This avoids assuming that the optional parish field covers the whole council.
+The large 1948--1999 partition returned the portal's explicit empty result;
+every other partition must remain below the 200-result cap. Completed queries
+are immutable in the versioned checkpoint. An interrupted active query is
+replayed before Show All so that a newly arrived first-page record is included
+without repeating completed partitions.
 
-The document index exposed the type, date, optional description, and attachment URL. The observed types included decision, officer report, application, CIL form, plans, statement, consultation, representation letters, and system correspondence.
+The result parser reconciles the reported total with the exact enumerated
+references, rejects duplicates within a response, and de-duplicates overlaps
+across received, decided, and older-open searches by application reference.
 
-The walkthrough read the index and did not open any attachment. Representation text was available only through a PDF link, so the normalised comment must use the `pdf-only-unavailable` state.
+## Application and document records
 
-## Completeness rules
+The detail page exposes the reference, native status, proposal, location,
+optional parish, officer, received and validated dates, target and comment
+dates, decision, applicant, and agent. The application reference contains
+slashes and is URL encoded when routed.
 
-The document index has a type filter but displayed every row in one table for the observed record. The scraper must enumerate the unfiltered table and retain the native type.
+The exact document action posts to
+`showDocuments?reference=...&module=pl`. The index is an official headerless
+five-column table and exposes document type, optional date, optional
+description, and a `viewDocument` source link. The collector retains that
+metadata and link but never requests an attachment body. The exact phrase
+`There are no documents for this section` is recorded as an empty document
+section; unknown or ambiguous shapes fail closed.
 
-The application reference contains slashes and must be URL encoded. The detail page, document route, site-history route, and comment route do not use one shared parameter shape.
+Public comment text was not available through a proven route during this
+qualification, so comments remain explicitly unavailable. No PDF or other
+attachment was opened to infer comment text.
 
-## Known limits
+## Live bootstrap qualification
 
-This walkthrough used a known decided reference. It did not run a bounded date search, inspect result pagination, enumerate an undecided comment flow, or test incremental changes.
+The persisted qualification on 16 September 2026 used the inclusive window
+18 August through 16 September and the exact 60-query plan. It reconciled 89
+received rows, 118 decided rows, and 529 rows across the overlapping older-open
+partitions into 648 unique references. All 648 applications were materialised
+with two evidence captures each (detail and document index), for 1,296 verified
+content digests.
 
-## Request contract capture
+The first pass made 1,329 official-page requests and transferred 11,248,979
+bytes. It recorded zero pending retries, failed current sections, unmapped
+records, and attachment-body requests. SQLite integrity, evidence paths and
+digests, terminal checkpoint state, exact reference-set equality, current
+section completeness, and the source cap were checked before the versioned
+receipt was atomically published. The immediate terminal rerun made zero
+requests, transferred zero bytes, and produced the same durable snapshot and
+semantic fingerprint.
 
-The planning search was rechecked on 16 September 2026 at
-`/aplanning/OcellaWeb/planningSearch`; the bare `/OcellaWeb/` path returned 404
-and is not a collection route. The form posts to the current search URL. Its
-fields are `reference`, `location`, `OcellaPlanningSearch.postcode`, `area`,
-`applicant`, `agent`, `undecided`, `type`, `receivedFrom`, `receivedTo`,
-`decidedFrom`, and `decidedTo`. Dates use `DD-MM-YY`.
+The local receipt is
+`.yimby/qualification-arun-2026-09-16/arun-qualification-v1.json`. It contains
+the full query inventory, exact reference sets, counts, evidence digest
+inventory, costs, checks, and pending weekly-cycle dates.
 
-A received-date search from 16 August through 16 September 2026 reported 92
-records. The first response deliberately displayed only 20 and offered a
-separate `Show all results` POST containing the prior search fields plus
-`showall`. Submitting it exposed all 92 detail links. Each result row contained
-the reference, location, proposal, and native status, and detail links used
-`planningDetails?reference=...&from=planningSearch`.
+## Remaining operational limit
 
-This closes the previously open bounded-search and result-cap investigation for
-the observed received-date path. Decided searches, window splitting at larger
-caps, comment flows, and incremental changes remain open.
-
-## Implemented boundary
-
-The authority adapter now reproduces the captured received-date POST and its
-source-provided Show All expansion. It de-duplicates references, stores the
-detail locator, and rejects older-open or unsupported window shapes before
-claiming completeness. The visible detail fields are parsed from the recorded
-route. The document action remains unavailable because its exact POST
-parameters were not captured, and no attachment body is requested.
+This proves the live bootstrap only. Refreshes targeted for 23 and 30
+September 2026 have not happened, so Arun remains `discovery-only` and must not
+be described as operationally qualified or `LIVE_READY`. Same-day reruns do
+not substitute for those two later weekly cycles.
