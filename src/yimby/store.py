@@ -994,10 +994,12 @@ class SqliteStore:
                 status=RunStatus(row["status"]),
                 request_count=row["request_count"],
                 transferred_bytes=row["transferred_bytes"],
+                browser_time_ms=row["browser_time_ms"],
             )
             for row in self._connection.execute(
                 """
-                SELECT detail.status, detail.request_count, detail.transferred_bytes
+                SELECT detail.status, detail.request_count, detail.transferred_bytes,
+                       detail.browser_time_ms
                 FROM run_details AS detail
                 JOIN runs AS run ON run.id = detail.run_id
                 WHERE run.authority_id = ?

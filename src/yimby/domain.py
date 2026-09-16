@@ -436,6 +436,7 @@ class RunCostSnapshot(FrozenModel):
     status: RunStatus
     request_count: int = Field(ge=0)
     transferred_bytes: int = Field(ge=0)
+    browser_time_ms: int = Field(ge=0)
 
 
 class RunOutcome(FrozenModel):

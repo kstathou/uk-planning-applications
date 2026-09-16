@@ -47,6 +47,7 @@ _AUTHORITY_ID = AuthorityId("blackburn-with-darwen")
 _RECEIPT_NAME = "blackburn-with-darwen-qualification-v1.json"
 _HISTORICAL_START = date(1977, 1, 1)
 _WINDOW_DAYS = 30
+_MINIMUM_QUALIFICATION_RUNS = 2
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -82,7 +83,7 @@ class QualificationCounts(FrozenModel):
 
 
 class QualificationCost(FrozenModel):
-    """Observable transport cost for one qualification pass."""
+    """Observable transport cost for a bootstrap or its replay."""
 
     request_count: int = Field(ge=0)
     transferred_bytes: int = Field(ge=0)
@@ -91,7 +92,7 @@ class QualificationCost(FrozenModel):
 
 
 class QualificationCosts(FrozenModel):
-    """Initial collection and immediate replay costs."""
+    """Cumulative bootstrap and immediate replay costs."""
 
     initial: QualificationCost
     rerun: QualificationCost
@@ -338,6 +339,23 @@ def _terminal_checkpoint(store: SqliteStore, scope: QualificationScope) -> bool:
     )
 
 
+def _scope_compatible(store: SqliteStore, scope: QualificationScope) -> bool:
+    state = store.discovery_state(_AUTHORITY_ID)
+    if state.checkpoint is None:
+        return True
+    checkpoint = _checkpoint(store)
+    expected = BlackburnDiscoveryScope(
+        start=scope.start,
+        end=scope.end,
+        include_open=scope.include_open,
+    )
+    return (
+        checkpoint is not None
+        and checkpoint.result_page == "live"
+        and checkpoint.live_scope == expected
+    )
+
+
 def _query_inventory(
     checkpoint: BlackburnWithDarwenCheckpointV2,
     scope: QualificationScope,
@@ -352,6 +370,17 @@ def _query_inventory(
 def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
     return QualificationCounts.model_validate(
         snapshot.model_dump(exclude={"authority_id"})
+    )
+
+
+def _durable_bootstrap_cost(store: SqliteStore) -> QualificationCost:
+    runs = store.run_costs(_AUTHORITY_ID)
+    bootstrap_runs = runs[:-1]
+    return QualificationCost(
+        request_count=sum(run.request_count for run in bootstrap_runs),
+        transferred_bytes=sum(run.transferred_bytes for run in bootstrap_runs),
+        browser_time_ms=sum(run.browser_time_ms for run in bootstrap_runs),
+        attachment_body_requests=0,
     )
 
 
@@ -388,6 +417,10 @@ def _base_checks(
             ok=not store.missing_evidence_paths(),
         ),
         QualificationCheck(
+            name="evidence-integrity",
+            ok=not store.invalid_evidence_paths(),
+        ),
+        QualificationCheck(
             name="application-count",
             ok=(
                 snapshot.applications > 0
@@ -420,6 +453,8 @@ async def _qualify(
     session_factory: SessionFactory,
     now: Clock,
 ) -> BlackburnQualifiedReceiptV1:
+    if not _scope_compatible(store, config.scope):
+        raise QualificationFailedError(("scope-mismatch",))
     registry = AuthorityRegistry(
         (BLACKBURN_WITH_DARWEN_PACKAGE,),
         PILOT_LIVE_STATUS,
@@ -431,16 +466,31 @@ async def _qualify(
         include_open=config.scope.include_open,
     )
     prior_status_count = len(store.run_statuses())
-    initial = await _collect_once(collector, window, session_factory)
+    initial_pass = await _collect_once(collector, window, session_factory)
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
-    initial_checks = _base_checks(store, first_snapshot, config.scope, initial)
+    initial_checks = _base_checks(store, first_snapshot, config.scope, initial_pass)
     _require(initial_checks)
 
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     run_statuses = store.run_statuses()[prior_status_count:]
+    durable_runs = store.run_costs(_AUTHORITY_ID)
+    bootstrap_cost = _durable_bootstrap_cost(store)
     final_checks = (
-        *_base_checks(store, final_snapshot, config.scope, initial),
+        *_base_checks(store, final_snapshot, config.scope, bootstrap_cost),
+        QualificationCheck(
+            name="bootstrap-provenance",
+            ok=(
+                len(durable_runs) >= _MINIMUM_QUALIFICATION_RUNS
+                and durable_runs[-1].status == RunStatus.SUCCEEDED
+                and durable_runs[-1].request_count == 0
+                and durable_runs[-1].transferred_bytes == 0
+                and durable_runs[-1].browser_time_ms == 0
+                and all(run.status != RunStatus.RUNNING for run in durable_runs)
+                and bootstrap_cost.request_count > 0
+                and bootstrap_cost.transferred_bytes > 0
+            ),
+        ),
         QualificationCheck(
             name="idempotent-rerun",
             ok=first_snapshot == final_snapshot,
@@ -467,7 +517,7 @@ async def _qualify(
         created_at=now(),
         scope=config.scope,
         counts=_counts(final_snapshot),
-        costs=QualificationCosts(initial=initial, rerun=rerun),
+        costs=QualificationCosts(initial=bootstrap_cost, rerun=rerun),
         query_inventory=_query_inventory(checkpoint, config.scope),
         run_statuses=run_statuses,
         checks=final_checks,

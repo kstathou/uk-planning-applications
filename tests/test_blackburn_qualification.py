@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib.util
 import json
 import sqlite3
@@ -110,8 +111,14 @@ def _detail_html(reference: str, record_id: str) -> bytes:
 
 
 class _QualificationSession:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        fail_after_searches: int | None = None,
+    ) -> None:
         self.fail = fail
+        self.fail_after_searches = fail_after_searches
         self.searches: list[blackburn.BlackburnQueryV1] = []
         self.applications: list[blackburn.BlackburnLocatorV1] = []
         self.closed = False
@@ -134,6 +141,12 @@ class _QualificationSession:
         url = "https://online.blackburn.gov.uk/planning/index.html"
         self._requested.append(url)
         self._bytes += len(body)
+        if (
+            self.fail_after_searches is not None
+            and len(self.searches) >= self.fail_after_searches
+        ):
+            message = "sanitised interrupted search"
+            raise RuntimeError(message)
         return _capture(url, body)
 
     async def application(
@@ -405,3 +418,109 @@ def test_blackburn_qualification_requires_exact_safe_scope(
     assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
     assert (occupied / "preserve").read_text(encoding="utf-8") == "yes"
     assert created == 0
+
+
+def test_blackburn_qualification_rejects_digest_mismatched_evidence(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "corrupt-evidence"
+    sessions: list[_QualificationSession] = []
+
+    async def session_factory() -> _QualificationSession:
+        session = _QualificationSession()
+        sessions.append(session)
+        return session
+
+    assert module.main(_args(data_dir), session_factory=session_factory) == 0
+    capsys.readouterr()
+    evidence_path = next((data_dir / "evidence").rglob("*.gz"))
+    evidence_path.write_bytes(gzip.compress(b"altered but readable", mtime=0))
+    sessions.clear()
+
+    assert (
+        module.main(
+            _args(data_dir, resume=True),
+            session_factory=session_factory,
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["evidence-integrity"],
+    }
+    assert len(sessions) == 1
+    assert sessions[0].requested_urls == ()
+
+
+def test_blackburn_qualification_refuses_changed_scope_before_network(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "scope"
+    sessions: list[_QualificationSession] = []
+
+    async def session_factory() -> _QualificationSession:
+        session = _QualificationSession()
+        sessions.append(session)
+        return session
+
+    assert module.main(_args(data_dir), session_factory=session_factory) == 0
+    capsys.readouterr()
+    sessions.clear()
+    changed = _args(data_dir, resume=True)
+    changed[changed.index("2026-08-18")] = "2026-08-19"
+    changed[changed.index("2026-09-16")] = "2026-09-17"
+
+    assert module.main(changed, session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["scope-mismatch"],
+    }
+    assert sessions == []
+
+
+def test_blackburn_qualification_preserves_interrupted_bootstrap_cost(
+    tmp_path: Path,
+    capsys: Any,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "interrupted-bootstrap"
+    sessions: list[_QualificationSession] = []
+
+    async def session_factory() -> _QualificationSession:
+        session = _QualificationSession(fail_after_searches=1 if not sessions else None)
+        sessions.append(session)
+        return session
+
+    assert module.main(_args(data_dir), session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "runtime-failure",
+        "exception": "RuntimeError",
+    }
+    assert len(sessions) == 1
+    assert len(sessions[0].requested_urls) == 1
+
+    assert (
+        module.main(
+            _args(data_dir, resume=True),
+            session_factory=session_factory,
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    bootstrap_sessions = sessions[:-1]
+    assert receipt["costs"]["initial"] == {
+        "request_count": sum(
+            len(session.requested_urls) for session in bootstrap_sessions
+        ),
+        "transferred_bytes": sum(session._bytes for session in bootstrap_sessions),
+        "browser_time_ms": sum(
+            session.browser_time_ms for session in bootstrap_sessions
+        ),
+        "attachment_body_requests": 0,
+    }
+    assert receipt["costs"]["initial"]["request_count"] == 7
+    assert receipt["costs"]["rerun"]["request_count"] == 0

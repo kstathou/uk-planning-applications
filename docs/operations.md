@@ -195,6 +195,8 @@ or `blocked` result. Qualification requires a terminal coherent query tree,
 zero pending retries, zero failed sections, database and evidence integrity,
 one persisted application per discovered reference, zero attachment-body
 requests, and an immediate rerun with zero requests, bytes, and browser time.
+The initial receipt cost aggregates every durable run in the fixed scope before
+that immediate rerun, including interrupted attempts.
 The receipt keeps the later 23 and 30 September cycles pending. Same-day replay
 does not satisfy them.
 
