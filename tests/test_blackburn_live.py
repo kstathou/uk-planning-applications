@@ -364,13 +364,35 @@ def test_blackburn_detail_requires_locator_agreement_and_document_shape() -> Non
     with pytest.raises(blackburn.BlackburnWithDarwenParseError):
         asyncio.run(adapter.fetch(malformed, reference))
 
+    record_mismatch = _BlackburnSession(lambda _query: _search_html())
+    record_mismatch.application_body = _detail_html().replace(
+        b'data-application-id="178041"',
+        b'data-application-id="178042"',
+    )
+    with pytest.raises(blackburn.BlackburnRecordIdMismatchError):
+        asyncio.run(adapter.fetch(record_mismatch, reference))
+
     for bad_reference in (
         reference.model_copy(update={"source_id": "wrong"}),
         reference.model_copy(update={"locator": None}),
         reference.model_copy(update={"locator": "not-json"}),
+        reference.model_copy(
+            update={
+                "locator": locator.model_copy(
+                    update={"public_reference": "10/26/9999"}
+                ).model_dump_json()
+            }
+        ),
     ):
         with pytest.raises(blackburn.BlackburnRoutingError):
             asyncio.run(adapter.fetch(malformed, bad_reference))
+
+    no_browser = cast(
+        "PortalSession",
+        SimpleNamespace(mode=TransportMode.BROWSER),
+    )
+    with pytest.raises(blackburn.BlackburnBrowserSessionRequiredError):
+        asyncio.run(adapter.fetch(no_browser, reference))
 
 
 def test_blackburn_detail_confirms_an_empty_document_table() -> None:
@@ -392,6 +414,63 @@ def test_blackburn_detail_confirms_an_empty_document_table() -> None:
 
     assert snapshot.payload.documents == ()
     assert snapshot.completeness.documents.kind == "empty"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"<html></html>",
+        _detail_html().replace(
+            b'data-application-id="178041"', b'data-application-id="bad"'
+        ),
+        _detail_html().replace(
+            b'<div class="col-md-7">Full Planning Application</div>', b""
+        ),
+        _detail_html().replace(
+            b"    </div>\n    <table",
+            _detail_row("Proposal", "Duplicate").encode() + b"    </div>\n    <table",
+        ),
+    ],
+)
+def test_blackburn_application_detail_shape_failures(body: bytes) -> None:
+    with pytest.raises(blackburn.BlackburnWithDarwenParseError):
+        blackburn._parse_application_details(body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _detail_html().replace(b'id="application_documents"', b'id="wrong"'),
+        _detail_html().replace(b"id=227502", b"id=227501"),
+        _detail_html().replace(
+            b'<td data-field-name="thumbnail"><img src="https://cdn.test/thumb.png"></td>',
+            b"",
+            1,
+        ),
+        _detail_html().replace(
+            b'<td data-field-name="document_type">Plan</td>',
+            b'<td data-field-name="wrong">Plan</td>',
+            1,
+        ),
+        _detail_html().replace(
+            b'<a\n            href="/planning/?fa=downloadDocument&amp;id=227501"\n'
+            b"            >Download</a>",
+            b"No link",
+        ),
+        _detail_html().replace(b"fa=downloadDocument", b"fa=wrong", 1),
+        _detail_html().replace(
+            b'data-date-value="2026-09-11"', b'data-date-value="bad"'
+        ),
+    ],
+)
+def test_blackburn_document_shape_failures(body: bytes) -> None:
+    with pytest.raises(blackburn.BlackburnWithDarwenParseError):
+        blackburn._parse_documents(body)
+
+
+def test_blackburn_optional_date_rejects_invalid_public_value() -> None:
+    with pytest.raises(blackburn.BlackburnWithDarwenParseError):
+        blackburn._optional_date({"received date": "bad"}, "received date")
 
 
 def test_blackburn_single_day_at_result_cap_fails_closed() -> None:
