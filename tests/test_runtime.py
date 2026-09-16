@@ -66,6 +66,7 @@ from yimby.transport import (
     AttachmentBodyBlockedError,
     FixtureSession,
     PortalRequest,
+    RequestHeader,
     RequestIntent,
     SourceUnavailableError,
 )
@@ -250,6 +251,52 @@ def test_http_session_cookies_accounting_and_secret_redaction() -> None:
     assert session.mode == TransportMode.LIVE
 
 
+def test_http_session_sends_only_typed_public_routing_headers() -> None:
+    """Authority routing values reach HTTP without widening to credentials."""
+    received: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(dict(request.headers))
+        return httpx.Response(200, content=b"{}")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    request = PortalRequest(
+        url=HttpUrl("https://planningapi.agileapplications.co.uk/api/application/1"),
+        intent=RequestIntent.DETAIL,
+        headers=(
+            RequestHeader(name="x-client", value="OPDC"),
+            RequestHeader(name="x-product", value="CITIZENPORTAL"),
+            RequestHeader(name="x-service", value="PA"),
+        ),
+    )
+
+    async def exercise() -> None:
+        await session.fetch(request)
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert {
+        name: received[0][name]
+        for name in ("x-client", "x-product", "x-service")
+    } == {
+        "x-client": "OPDC",
+        "x-product": "CITIZENPORTAL",
+        "x-service": "PA",
+    }
+    with pytest.raises(ValueError, match="duplicate request header"):
+        PortalRequest(
+            url=HttpUrl("https://example.test"),
+            intent=RequestIntent.SEARCH,
+            headers=(
+                RequestHeader(name="x-client", value="OPDC"),
+                RequestHeader(name="x-client", value="OTHER"),
+            ),
+        )
+
+
 def test_shared_host_limiter_covers_stream_consumption() -> None:
     """A second session cannot enter a host while the first body is streaming."""
 
@@ -366,6 +413,7 @@ def test_http_session_default_client_identifies_the_collector() -> None:
         ("https://example.test/file.pdf", {}, 0),
         ("https://example.test/file.png", {}, 0),
         ("https://example.test/Document/Download?id=1", {}, 0),
+        ("https://example.test/api/application/document/OPDC/123", {}, 0),
         ("https://example.test/view", {"content-disposition": "attachment"}, 1),
         ("https://example.test/view", {"content-disposition": "filename=x.txt"}, 1),
         ("https://example.test/view", {"content-type": "application/pdf"}, 1),
@@ -399,6 +447,23 @@ def test_http_session_blocks_attachment_bodies(
     assert calls == network_calls
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
+
+
+def test_browser_session_rejects_request_headers_it_cannot_apply() -> None:
+    """A browser session cannot silently discard authority routing headers."""
+    session = PlaywrightPortalSession(_FakeBoundary())
+
+    async def exercise() -> None:
+        with pytest.raises(ValueError, match="request headers"):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl("https://browser.test/page"),
+                    intent=RequestIntent.DETAIL,
+                    headers=(RequestHeader(name="x-client", value="OPDC"),),
+                )
+            )
+
+    asyncio.run(exercise())
 
 
 def test_http_session_blocks_redirect_to_attachment_path() -> None:
