@@ -150,8 +150,8 @@ class DorsetLiveApplicationV1(FrozenModel):
     decision: str | None
     authority: str | None
     address: str
-    easting: float
-    northing: float
+    easting: float | None
+    northing: float | None
     ward: str | None
     parish: str | None
     documents: tuple[DorsetDocumentV1, ...]
@@ -430,7 +430,12 @@ class DorsetAdapter:
                     decision=payload.decision,
                     address=payload.address,
                     validated_date=payload.validated_date,
-                    location=bng_to_wgs84(payload.easting, payload.northing),
+                    location=(
+                        bng_to_wgs84(payload.easting, payload.northing)
+                        if payload.easting is not None
+                        and payload.northing is not None
+                        else None
+                    ),
                     source_url=payload.source_url,
                 ),
             )
@@ -744,6 +749,10 @@ def _parse_live_detail(
     authority = details["Authority"] or None
     if authority not in {None, "Dorset Council"}:
         _raise_parse("detail authority")
+    easting_value = location["Easting"]
+    northing_value = location["Northing"]
+    if bool(easting_value) != bool(northing_value):
+        _raise_parse("detail coordinates")
     return DorsetLiveApplicationV1(
         application_reference=details["Application No"],
         recno=locator,
@@ -754,8 +763,12 @@ def _parse_live_detail(
         decision=details["Decision"] or None,
         authority=authority,
         address=_nonempty_value(location, "Address"),
-        easting=_parse_coordinate(_nonempty_value(location, "Easting"), "Easting"),
-        northing=_parse_coordinate(_nonempty_value(location, "Northing"), "Northing"),
+        easting=(
+            _parse_coordinate(easting_value, "Easting") if easting_value else None
+        ),
+        northing=(
+            _parse_coordinate(northing_value, "Northing") if northing_value else None
+        ),
         ward=location["Ward"] or None,
         parish=location["Parish"] or None,
         documents=_parse_documents_grid(soup, source_url),
