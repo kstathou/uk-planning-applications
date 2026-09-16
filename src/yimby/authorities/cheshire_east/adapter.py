@@ -85,6 +85,13 @@ class CheshireEastWeeklyRowV1(FrozenModel):
     detail_locator: str
 
 
+class CheshireEastSearchBoundaryV1(FrozenModel):
+    """Visible search rows or one exact source-published zero marker."""
+
+    results: tuple[CheshireEastSearchResultV1, ...]
+    explicit_zero: bool
+
+
 class CheshireEastWeeklyBoundaryV1(FrozenModel):
     """Observed weekly rows plus only source-published terminal signals."""
 
@@ -237,7 +244,8 @@ class CheshireEastAdapter:
         )
 
 
-def _parse_search_form(body: bytes) -> Tag:
+def parse_search_form(body: bytes) -> Tag:
+    """Validate the exact official general-search form boundary."""
     soup = BeautifulSoup(body, "html.parser")
     form = soup.select_one("form#form")
     if not isinstance(form, Tag):
@@ -267,7 +275,8 @@ def _unique_named_control(form: Tag, name: str) -> Tag:
     return controls[0]
 
 
-def _valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
+def valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
+    """Replay successful controls with both requested valid-date bounds."""
     values = {
         "valid_date_from": window.start.strftime("%d-%m-%Y"),
         "valid_date_to": window.end.strftime("%d-%m-%Y"),
@@ -278,6 +287,11 @@ def _valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
         method=RequestMethod.POST,
         form=_successful_form_fields(form, values),
     )
+
+
+def search_form_request() -> PortalRequest:
+    """Build the official general-search form request."""
+    return PortalRequest(url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH)
 
 
 def _successful_form_fields(
@@ -308,7 +322,8 @@ def _successful_form_fields(
     return tuple(fields)
 
 
-def _parse_weekly_form(body: bytes) -> Tag:
+def parse_weekly_form(body: bytes) -> Tag:
+    """Validate the official weekly-received form boundary."""
     soup = BeautifulSoup(body, "html.parser")
     forms = tuple(form for form in soup.select("form") if form.select('[name="week"]'))
     if len(forms) != 1:
@@ -324,7 +339,8 @@ def _parse_weekly_form(body: bytes) -> Tag:
     return form
 
 
-def _weekly_received_request(form: Tag, week: date) -> PortalRequest:
+def weekly_received_request(form: Tag, week: date) -> PortalRequest:
+    """Replay the weekly-received form for one exact Monday."""
     return PortalRequest(
         url=HttpUrl(_WEEKLY_RECEIVED_URL),
         intent=RequestIntent.SEARCH,
@@ -333,7 +349,44 @@ def _weekly_received_request(form: Tag, week: date) -> PortalRequest:
     )
 
 
-def _parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
+def weekly_received_form_request() -> PortalRequest:
+    """Build the official weekly-received form request."""
+    return PortalRequest(
+        url=HttpUrl(_WEEKLY_RECEIVED_URL),
+        intent=RequestIntent.SEARCH,
+    )
+
+
+def detail_request(locator: str) -> PortalRequest:
+    """Build a direct official detail request from a numeric locator."""
+    if not locator.isdigit():
+        _raise_parse("application detail locator")
+    return PortalRequest(
+        url=HttpUrl(_DETAIL_URL.format(locator=locator)),
+        intent=RequestIntent.DETAIL,
+    )
+
+
+def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
+    """Parse visible search rows or one exact no-results marker."""
+    soup = BeautifulSoup(body, "html.parser")
+    if soup.select_one("table#application_results_table") is not None:
+        return CheshireEastSearchBoundaryV1(
+            results=_parse_result_table(body),
+            explicit_zero=False,
+        )
+    zero_markers = tuple(
+        element
+        for element in soup.find_all(string=True)
+        if _normalise_label(str(element)) == "no results found"
+    )
+    if len(zero_markers) != 1:
+        _raise_parse("search result boundary")
+    return CheshireEastSearchBoundaryV1(results=(), explicit_zero=True)
+
+
+def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
+    """Record weekly rows without inferring a missing terminal signal."""
     soup = BeautifulSoup(body, "html.parser")
     expected_headers = (
         "application",
@@ -416,12 +469,13 @@ def _reported_total(soup: BeautifulSoup) -> int | None:
     return int(str(nodes[0]["data-result-count"]))
 
 
-def _parse_detail_contract(
+def parse_detail_contract(
     body: bytes,
     *,
     expected_reference: str,
     expected_locator: str,
 ) -> CheshireEastDetailContractV1:
+    """Validate one direct detail and its complete metadata-only documents."""
     soup = BeautifulSoup(body, "html.parser")
     containers = soup.select("#application_details[data-application-id]")
     if (

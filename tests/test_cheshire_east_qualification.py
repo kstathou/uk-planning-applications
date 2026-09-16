@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import gzip
 import importlib.util
+import sys
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from types import ModuleType
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 import yimby.authorities.cheshire_east.adapter as cheshire
 from yimby.domain import (
@@ -23,7 +23,7 @@ from yimby.domain import (
 from yimby.transport import PortalRequest, RequestMethod
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from types import ModuleType
 
 
 _ROOT = Path(__file__).parents[1]
@@ -119,13 +119,15 @@ def _detail() -> bytes:
 
 def _qualification_module() -> ModuleType:
     path = _ROOT / "scripts" / "qualify_cheshire_east.py"
+    name = "_test_qualify_cheshire_east"
     spec = importlib.util.spec_from_file_location(
-        "_test_qualify_cheshire_east",
+        name,
         path,
     )
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -143,8 +145,7 @@ class _QualificationSession:
         elif url == cheshire._SEARCH_POST_URL:
             body = b"<main><p>No Results Found</p></main>"
         elif (
-            url == cheshire._WEEKLY_RECEIVED_URL
-            and request.method == RequestMethod.GET
+            url == cheshire._WEEKLY_RECEIVED_URL and request.method == RequestMethod.GET
         ):
             body = _weekly_form()
         elif url == cheshire._WEEKLY_RECEIVED_URL:
@@ -186,8 +187,8 @@ class _QualificationSession:
 
 
 def test_cheshire_replays_exact_successful_search_controls() -> None:
-    form = cheshire._parse_search_form(_search_form())
-    request = cheshire._valid_date_request(
+    form = cheshire.parse_search_form(_search_form())
+    request = cheshire.valid_date_request(
         form,
         DiscoveryWindow(
             start=date(2026, 8, 18),
@@ -209,9 +210,9 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
 
 
 def test_cheshire_weekly_boundary_records_an_unproved_fifty_row_cap() -> None:
-    form = cheshire._parse_weekly_form(_weekly_form())
-    request = cheshire._weekly_received_request(form, date(2024, 1, 1))
-    boundary = cheshire._parse_weekly_boundary(_weekly_results())
+    form = cheshire.parse_weekly_form(_weekly_form())
+    request = cheshire.weekly_received_request(form, date(2024, 1, 1))
+    boundary = cheshire.parse_weekly_boundary(_weekly_results())
 
     assert tuple((field.name, field.value) for field in request.form) == (
         ("week", "01-01-2024"),
@@ -226,7 +227,7 @@ def test_cheshire_weekly_boundary_records_an_unproved_fifty_row_cap() -> None:
 
 
 def test_cheshire_detail_contract_includes_only_document_metadata() -> None:
-    detail = cheshire._parse_detail_contract(
+    detail = cheshire.parse_detail_contract(
         _detail(),
         expected_reference="26/3335/PRIOR-1A",
         expected_locator="406569",
@@ -270,7 +271,7 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
     ]
     result = module.main(
         arguments,
-        session_factory=cast("Callable[[], Any]", session_factory),
+        session_factory=session_factory,
         now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
     )
 
@@ -312,11 +313,14 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
     assert not (data_dir / "yimby.sqlite3").exists()
     assert len(receipt.evidence) == 5
     for item in receipt.evidence:
-        body = gzip.decompress((data_dir / "evidence" / item.relative_path).read_bytes())
+        body = gzip.decompress(
+            (data_dir / "evidence" / item.relative_path).read_bytes()
+        )
         assert sha256(body).hexdigest() == item.digest
 
-    def forbidden_factory() -> Any:
-        raise AssertionError("offline resume constructed a portal session")
+    def forbidden_factory() -> _QualificationSession:
+        message = "offline resume constructed a portal session"
+        raise AssertionError(message)
 
     resumed = module.main(
         [*arguments, "--resume"],

@@ -188,7 +188,7 @@ def test_cheshire_live_discovery_stops_before_source_io() -> None:
 )
 def test_cheshire_form_boundary_failures(body: bytes, error: type[Exception]) -> None:
     with pytest.raises(error):
-        cheshire._parse_search_form(body)
+        cheshire.parse_search_form(body)
 
 
 def test_cheshire_result_and_checkpoint_boundaries() -> None:
