@@ -370,6 +370,7 @@ class _PeakAssureMock:
         if url == peak._PAGINATION_URL:
             assert fields["IsPaginationClicked"] == "true"
             assert self.active_query is not None
+            assert self._query(fields) == self.active_query
             page = int(fields["PagingParameters.CurrentPageIndex"])
             return self._page(self.active_query, page)
         raise AssertionError(url)
