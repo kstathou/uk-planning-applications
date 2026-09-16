@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib.util
 import json
+import sqlite3
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -18,6 +20,7 @@ from urllib.parse import parse_qsl
 import httpx
 import pytest
 from bs4 import BeautifulSoup
+from pydantic import HttpUrl
 
 import yimby.authorities.cornwall.adapter as cornwall_adapter
 import yimby.authorities.durham.adapter as durham_adapter
@@ -27,6 +30,8 @@ from yimby import AuthorityId, Collector, DiscoveryWindow, pilot_registry
 from yimby.domain import (
     ApplicationId,
     DurableDiscoveryBatch,
+    EvidenceCapture,
+    EvidenceDigest,
     RunMetrics,
     RunOutcome,
     RunStatus,
@@ -43,7 +48,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from types import ModuleType
 
-    from yimby.domain import EvidenceCapture
     from yimby.transport import PortalRequest
 
 WEEK = DiscoveryWindow(
@@ -148,7 +152,10 @@ def _member(case: _Case, suffix: str) -> Any:
     return getattr(case.module, f"{_PREFIXES[case.authority_id]}{suffix}")
 
 
-def _weekly_form(search_type: str = "Application") -> bytes:
+def _weekly_form(
+    search_type: str = "Application",
+    monday_value: str = "14/09/2026",
+) -> bytes:
     return f"""
     <form action="weeklyListResults.do?action=firstPage" method="post">
       <input type="hidden" name="_csrf" value="sanitised-token">
@@ -157,7 +164,7 @@ def _weekly_form(search_type: str = "Application") -> bytes:
       <select name="week">
         <option value="bad">Bad</option>
         <option value="13/09/2026">Sunday</option>
-        <option value="14/09/2026">Monday</option>
+        <option value="{monday_value}">Monday</option>
         <option value="21/09/2026">Following Monday</option>
       </select>
       <input type="hidden" name="dateType" value="DC_Validated">
@@ -557,6 +564,7 @@ class _IdoxMock:
         validated_showing_markers: tuple[str, ...] | None = None,
         validated_legacy_count: str | None = None,
         expected_week: str = "14/09/2026",
+        weekly_form_monday: str = "14/09/2026",
         validated_current_page: str = "1",
         west_suffolk_open_fault: str | None = None,
     ) -> None:
@@ -577,6 +585,7 @@ class _IdoxMock:
         self.validated_showing_markers = validated_showing_markers
         self.validated_legacy_count = validated_legacy_count
         self.expected_week = expected_week
+        self.weekly_form_monday = weekly_form_monday
         self.validated_current_page = validated_current_page
         self.west_suffolk_open_fault = west_suffolk_open_fault
         self.current_date_type = ""
@@ -593,7 +602,7 @@ class _IdoxMock:
             return httpx.Response(
                 200,
                 headers={"set-cookie": "JSESSIONID=sanitised; Path=/"},
-                content=_weekly_form(self.search_type),
+                content=_weekly_form(self.search_type, self.weekly_form_monday),
             )
         if path.endswith("/search.do") and action == "advanced":
             assert self.case.authority_id == AuthorityId("west-suffolk")
@@ -738,10 +747,20 @@ class _IdoxMock:
             return httpx.Response(200, content=content)
         if path.endswith("/applicationDetails.do"):
             locator = request.url.params["keyVal"]
-            known = dict(zip(self.case.locators, self.case.references, strict=True)) | {
-                open_locator: open_reference
-                for open_reference, open_locator in _WEST_SUFFOLK_OPEN_REFERENCES
-            }
+            known = (
+                dict(
+                    zip(
+                        _WEST_SUFFOLK_CASE.locators,
+                        _WEST_SUFFOLK_CASE.references,
+                        strict=True,
+                    )
+                )
+                | dict(zip(self.case.locators, self.case.references, strict=True))
+                | {
+                    open_locator: open_reference
+                    for open_reference, open_locator in _WEST_SUFFOLK_OPEN_REFERENCES
+                }
+            )
             reference = known[locator]
             tab = request.url.params["activeTab"]
             if tab == "summary":
@@ -1591,7 +1610,136 @@ def test_west_suffolk_live_collection_never_opens_representations(
     assert store.get_application(application_id).completeness.comments.kind == (
         "unavailable"
     )
+    view = store.application_view(application_id)
+    assert [
+        (document.title, document.category, document.published_date)
+        for document in view.application.documents
+    ] == [
+        ("Report", "Report", date(2026, 9, 16)),
+        ("Site plan", "Plan", date(2026, 9, 15)),
+    ]
+    assert view.normaliser_version == "west-suffolk-v3"
     store.close()
+
+
+@pytest.mark.parametrize(
+    ("proof_updates", "capture_digest"),
+    [
+        ({}, "capture-digest"),
+        ({"query_key": "bad"}, "proof-digest"),
+        (
+            {"request_url": "https://example.test/wrong"},
+            "proof-digest",
+        ),
+        (
+            {"query_key": "advanced|bad|bad"},
+            "proof-digest",
+        ),
+        (
+            {
+                "query_key": ("advanced|searchCriteria.caseStatus|Pending Decision"),
+                "request_url": "https://example.test/wrong",
+                "request_form": (
+                    ("searchCriteria.caseStatus", "Pending Decision"),
+                    ("searchCriteria.appealStatus", ""),
+                ),
+            },
+            "proof-digest",
+        ),
+        (
+            {"page": 2, "request_method": "GET", "request_form": ()},
+            "proof-digest",
+        ),
+        (
+            {"request_form": (("_csrf", "secret"),)},
+            "proof-digest",
+        ),
+    ],
+    ids=(
+        "evidence-identity",
+        "weekly-query",
+        "weekly-request",
+        "advanced-query",
+        "advanced-request",
+        "paged-request",
+        "request-secret",
+    ),
+)
+def test_west_suffolk_discovery_proof_rejects_invalid_subjects(
+    proof_updates: dict[str, object],
+    capture_digest: str,
+) -> None:
+    """Reject invalid request subjects before accepting a retained page."""
+    weekly_url = HttpUrl(
+        "https://planning.westsuffolk.gov.uk/online-applications/"
+        "weeklyListResults.do?action=firstPage"
+    )
+    proof = west_suffolk_adapter.WestSuffolkDiscoveryProofV1(
+        query_key="14/09/2026|DC_Validated",
+        page=1,
+        digest=EvidenceDigest("proof-digest"),
+        response_url=weekly_url,
+        request_url=weekly_url,
+        request_method="POST",
+        request_form=(
+            ("searchCriteria.parish", ""),
+            ("searchCriteria.ward", ""),
+            ("week", "14/09/2026"),
+            ("dateType", "DC_Validated"),
+            ("searchType", "Application"),
+        ),
+    ).model_copy(update=proof_updates)
+    capture = EvidenceCapture(
+        url=proof.response_url,
+        media_type="text/html",
+        body=b"",
+        digest=EvidenceDigest(capture_digest),
+    )
+
+    with pytest.raises(west_suffolk_adapter.WestSuffolkParseError):
+        west_suffolk_adapter.validate_west_suffolk_discovery_proof(proof, capture)
+
+
+def test_west_suffolk_checkpoint_rejects_duplicate_discovery_proofs() -> None:
+    """Reject a checkpoint that already claims the page being collected."""
+    query_key = "14/09/2026|DC_Validated"
+    proof = west_suffolk_adapter.WestSuffolkDiscoveryProofV1(
+        query_key=query_key,
+        page=1,
+        digest=EvidenceDigest("proof-digest"),
+        response_url=HttpUrl("https://example.test/results"),
+        request_url=HttpUrl("https://example.test/results"),
+        request_method="POST",
+    )
+    progress = west_suffolk_adapter.WestSuffolkCheckpointV1(
+        result_page="live",
+        live_scope=west_suffolk_adapter.WestSuffolkDiscoveryScope(
+            start=WEEK.start,
+            end=WEEK.end,
+            include_open=False,
+        ),
+        active_query=query_key,
+        discovery_proofs=(proof,),
+    )
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    session = _session(_IdoxMock(_WEST_SUFFOLK_CASE))
+
+    async def discover_all() -> None:
+        try:
+            with pytest.raises(west_suffolk_adapter.WestSuffolkCheckpointError):
+                async for _batch in package.discover(
+                    session,
+                    WEEK,
+                    StoredCheckpoint(
+                        schema_version=1,
+                        payload_json=progress.model_dump_json(),
+                    ),
+                ):
+                    pass
+        finally:
+            await session.aclose()
+
+    asyncio.run(discover_all())
 
 
 def test_leeds_detail_boundary_preserves_remote_and_unverified_failures() -> None:
@@ -2250,7 +2398,7 @@ def test_west_suffolk_qualification_persists_and_proves_idempotence(
     assert len(sessions[0].requested_urls) == 39
     assert sessions[1].requested_urls == ()
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["schema_version"] == 1
+    assert receipt["schema_version"] == 2
     assert receipt["authority_id"] == "west-suffolk"
     assert receipt["created_at"] == "2026-09-16T12:00:00Z"
     assert receipt["scope"] == {
@@ -2281,6 +2429,9 @@ def test_west_suffolk_qualification_persists_and_proves_idempotence(
         "application-count": True,
         "attachment-policy": True,
         "database-integrity": True,
+        "discovery-evidence": True,
+        "application-evidence": True,
+        "evidence-integrity": True,
         "evidence-paths": True,
         "failed-sections": True,
         "idempotent-rerun": True,
@@ -2290,9 +2441,70 @@ def test_west_suffolk_qualification_persists_and_proves_idempotence(
         "terminal-rerun-requests": True,
         "unmapped-records": True,
     }
-    receipt_path = data_dir / "west-suffolk-qualification-v1.json"
+    commitment = receipt["evidence_commitment"]
+    assert commitment["applications"] == 12
+    assert commitment["application_capture_associations"] == 24
+    assert commitment["discovery_capture_associations"] == 13
+    assert commitment["content_digests"] > 0
+    assert commitment["missing_paths"] == 0
+    assert commitment["invalid_paths"] == 0
+    assert commitment["application_capture_sha256"].startswith("sha256:")
+    assert commitment["discovery_capture_sha256"].startswith("sha256:")
+    assert commitment["content_digest_set_sha256"].startswith("sha256:")
+    receipt_path = data_dir / "west-suffolk-qualification-v2.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
-    assert not (data_dir / ".west-suffolk-qualification-v1.json.tmp").exists()
+    original_receipt_bytes = receipt_path.read_bytes()
+    assert not (data_dir / ".west-suffolk-qualification-v2.json.tmp").exists()
+
+    store = _store(data_dir)
+    registrations = store.evidence_registration_audit(
+        AuthorityId("west-suffolk")
+    ).discovery_registrations
+    store.close()
+    assert len(registrations) == 13
+    assert {
+        (registration.query_key, registration.page) for registration in registrations
+    } == {
+        ("14/09/2026|DC_Validated", 1),
+        ("14/09/2026|DC_Validated", 2),
+        ("14/09/2026|DC_Decided", 1),
+        *{
+            (query_key, page)
+            for query_key, page_count in (
+                (
+                    "advanced|searchCriteria.caseStatus|Pending Consideration",
+                    2,
+                ),
+                ("advanced|searchCriteria.caseStatus|Pending Decision", 1),
+                (
+                    "advanced|searchCriteria.caseStatus|Received Awaiting Registration",
+                    1,
+                ),
+                (
+                    "advanced|searchCriteria.caseStatus|Pending Appeal Decision",
+                    1,
+                ),
+                ("advanced|searchCriteria.appealStatus|Appeal lodged", 1),
+                (
+                    "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State ",
+                    1,
+                ),
+                (
+                    "advanced|searchCriteria.appealStatus|High Court Appeal Lodged",
+                    1,
+                ),
+                (
+                    "advanced|searchCriteria.appealStatus|Pending Appeal Decision",
+                    2,
+                ),
+            )
+            for page in range(1, page_count + 1)
+        },
+    }
+    assert all(
+        all(name != "_csrf" for name, _value in registration.request_form or ())
+        for registration in registrations
+    )
 
     sessions.clear()
     assert (
@@ -2307,8 +2519,242 @@ def test_west_suffolk_qualification_persists_and_proves_idempotence(
     assert len(sessions) == 2
     assert all(session.closed for session in sessions)
     assert all(session.requested_urls == () for session in sessions)
-    assert resumed_receipt["costs"]["initial"]["request_count"] == 0
+    assert resumed_receipt == receipt
+    assert receipt_path.read_bytes() == original_receipt_bytes
     assert resumed_receipt["costs"]["rerun"]["request_count"] == 0
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "request-url",
+        "request-method",
+        "request-form",
+        "query-key",
+        "page",
+        "response-url",
+        "deleted-registration",
+    ],
+)
+def test_west_suffolk_qualification_rejects_discovery_evidence_tampering(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    """Reject altered discovery subjects without replacing the last receipt."""
+    module = _qualification_module()
+    data_dir = tmp_path / mutation
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "west-suffolk-qualification-v2.json"
+    original_receipt = receipt_path.read_bytes()
+
+    connection = sqlite3.connect(data_dir / "yimby.sqlite3")
+    try:
+        rowid = connection.execute(
+            "SELECT rowid FROM discovery_evidence ORDER BY rowid LIMIT 1"
+        ).fetchone()[0]
+        if mutation == "request-url":
+            connection.execute(
+                "UPDATE discovery_evidence SET request_url = ? WHERE rowid = ?",
+                ("https://example.test/wrong", rowid),
+            )
+        elif mutation == "request-method":
+            connection.execute(
+                "UPDATE discovery_evidence SET request_method = ? WHERE rowid = ?",
+                ("DELETE", rowid),
+            )
+        elif mutation == "request-form":
+            connection.execute(
+                "UPDATE discovery_evidence SET request_form_json = ? WHERE rowid = ?",
+                ("[]", rowid),
+            )
+        elif mutation == "query-key":
+            connection.execute(
+                "UPDATE discovery_evidence SET query_key = ? WHERE rowid = ?",
+                ("tampered", rowid),
+            )
+        elif mutation == "page":
+            connection.execute(
+                "UPDATE discovery_evidence SET page = ? WHERE rowid = ?",
+                (99, rowid),
+            )
+        elif mutation == "response-url":
+            connection.execute(
+                "UPDATE discovery_evidence SET response_url = ? WHERE rowid = ?",
+                ("https://example.test/wrong", rowid),
+            )
+        else:
+            connection.execute(
+                "DELETE FROM discovery_evidence WHERE rowid = ?",
+                (rowid,),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    sessions.clear()
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "discovery-evidence" in error["failed_checks"]
+    assert len(sessions) == 1
+    assert sessions[0].requested_urls == ()
+    assert sessions[0].closed
+    assert receipt_path.read_bytes() == original_receipt
+
+
+def test_west_suffolk_qualification_rejects_application_evidence_tampering(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject a changed application evidence body on a zero-network resume."""
+    module = _qualification_module()
+    data_dir = tmp_path / "application-evidence"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "west-suffolk-qualification-v2.json"
+    original_receipt = receipt_path.read_bytes()
+    connection = sqlite3.connect(data_dir / "yimby.sqlite3")
+    try:
+        relative_path = connection.execute(
+            "SELECT evidence.path FROM observation_evidence AS linked "
+            "JOIN evidence ON evidence.digest = linked.digest "
+            "ORDER BY linked.observation_id, linked.digest LIMIT 1"
+        ).fetchone()[0]
+    finally:
+        connection.close()
+    (data_dir / "evidence" / relative_path).write_bytes(
+        gzip.compress(b"tampered", mtime=0)
+    )
+
+    sessions.clear()
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert {"application-evidence", "evidence-integrity"}.intersection(
+        error["failed_checks"]
+    )
+    assert len(sessions) == 1
+    assert sessions[0].requested_urls == ()
+    assert sessions[0].closed
+    assert receipt_path.read_bytes() == original_receipt
+
+
+def test_west_suffolk_qualification_accepts_shifted_weekly_scope(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Qualify a later scope while retaining cumulative applications and cost."""
+    module = _qualification_module()
+    data_dir = tmp_path / "shifted-scope"
+    first_sessions: list[_QualificationSession] = []
+
+    def first_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        first_sessions.append(session)
+        return session
+
+    initial_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(initial_args, session_factory=first_factory) == 0
+    initial_receipt = json.loads(capsys.readouterr().out)
+
+    later_case = replace(
+        _WEST_SUFFOLK_CASE,
+        references=(
+            "DC/26/3001/FUL",
+            "DC/26/3002/FUL",
+            "DC/26/3003/FUL",
+            "DC/26/3004/FUL",
+        ),
+        locators=("WEST-LATER-A", "WEST-LATER-B", "WEST-LATER-C", "WEST-LATER-D"),
+    )
+    later_sessions: list[_QualificationSession] = []
+
+    def later_factory() -> _QualificationSession:
+        session = _QualificationSession(
+            _IdoxMock(later_case, expected_week="21/09/2026")
+        )
+        later_sessions.append(session)
+        return session
+
+    later_args = [
+        "--confirm-live",
+        "--resume",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-21",
+        "--end",
+        "2026-09-27",
+        "--include-open",
+    ]
+    assert module.main(later_args, session_factory=later_factory) == 0
+    later_receipt = json.loads(capsys.readouterr().out)
+    assert later_receipt["scope"] == {
+        "start": "2026-09-21",
+        "end": "2026-09-27",
+        "include_open": True,
+    }
+    assert later_receipt["counts"]["applications"] == 16
+    assert later_receipt["counts"]["discovered_references"] == 16
+    assert (
+        later_receipt["costs"]["initial"]["request_count"]
+        > (initial_receipt["costs"]["initial"]["request_count"])
+    )
+    assert later_sessions[0].requested_urls
+    assert later_sessions[1].requested_urls == ()
+
+    receipt_path = data_dir / "west-suffolk-qualification-v2.json"
+    shifted_receipt = receipt_path.read_bytes()
+    later_sessions.clear()
+    assert module.main(later_args, session_factory=later_factory) == 0
+    assert json.loads(capsys.readouterr().out) == later_receipt
+    assert all(session.requested_urls == () for session in later_sessions)
+    assert receipt_path.read_bytes() == shifted_receipt
 
 
 def test_west_suffolk_qualification_restarts_a_wrong_scope_checkpoint(
@@ -2424,7 +2870,7 @@ def test_west_suffolk_qualification_rejects_failed_current_sections(
     assert "failed-sections" in error["failed_checks"]
     assert len(sessions) == 1
     assert sessions[0].closed is True
-    assert not (data_dir / "west-suffolk-qualification-v1.json").exists()
+    assert not (data_dir / "west-suffolk-qualification-v2.json").exists()
 
 
 def test_west_suffolk_qualification_rejects_incoherent_terminal_checkpoints(
@@ -2483,7 +2929,7 @@ def test_west_suffolk_qualification_rejects_incoherent_terminal_checkpoints(
         ),
         baseline.model_copy(update={"seen_references": baseline.seen_references[:-1]}),
     )
-    receipt_path = data_dir / "west-suffolk-qualification-v1.json"
+    receipt_path = data_dir / "west-suffolk-qualification-v2.json"
     for checkpoint in corruptions:
         store = _store(data_dir)
         run_id = store.begin_run(AuthorityId("west-suffolk"))
@@ -2519,7 +2965,9 @@ def test_west_suffolk_qualification_rejects_incoherent_terminal_checkpoints(
 
         assert module.main(args, session_factory=session_factory) == 1
         error = json.loads(capsys.readouterr().err)
-        assert "terminal-checkpoint" in error["failed_checks"]
+        assert {"terminal-checkpoint", "discovery-evidence"}.intersection(
+            error["failed_checks"]
+        )
         assert len(sessions) == 1
         assert sessions[0].requested_urls == ()
         assert sessions[0].closed is True
@@ -2583,7 +3031,13 @@ def test_west_suffolk_qualification_accepts_live_week_key_rendering(
     sessions: list[_QualificationSession] = []
 
     def session_factory() -> _QualificationSession:
-        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        session = _QualificationSession(
+            _IdoxMock(
+                _WEST_SUFFOLK_CASE,
+                expected_week="14 Sep 2026",
+                weekly_form_monday="14 Sep 2026",
+            )
+        )
         sessions.append(session)
         return session
 
@@ -2599,50 +3053,9 @@ def test_west_suffolk_qualification_accepts_live_week_key_rendering(
         "--include-open",
     ]
     assert module.main(args, session_factory=session_factory) == 0
-    capsys.readouterr()
-    store = _store(data_dir)
-    stored = store.discovery_state(AuthorityId("west-suffolk")).checkpoint
-    assert stored is not None
-    checkpoint = west_suffolk_adapter.WestSuffolkCheckpointV1.model_validate_json(
-        stored.payload_json
-    )
-    live_keys = tuple(
-        key.replace("14/09/2026", "14 Sep 2026") for key in checkpoint.completed_queries
-    )
-    run_id = store.begin_run(AuthorityId("west-suffolk"))
-    store.commit_discovery(
-        run_id,
-        AuthorityId("west-suffolk"),
-        DurableDiscoveryBatch(
-            references=(),
-            next_checkpoint=StoredCheckpoint(
-                schema_version=1,
-                payload_json=checkpoint.model_copy(
-                    update={"completed_queries": live_keys}
-                ).model_dump_json(),
-            ),
-            complete=True,
-        ),
-    )
-    store.finish_run(
-        run_id,
-        AuthorityId("west-suffolk"),
-        RunOutcome(
-            status=RunStatus.SUCCEEDED,
-            metrics=RunMetrics(
-                request_count=0,
-                transferred_bytes=0,
-                duration_ms=0,
-                storage_growth_bytes=0,
-            ),
-            transport_mode=TransportMode.LIVE,
-        ),
-    )
-    store.close()
-    (data_dir / "west-suffolk-qualification-v1.json").unlink()
-    sessions.clear()
-
-    assert module.main(args, session_factory=session_factory) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 2
     assert len(sessions) == 2
-    assert all(session.requested_urls == () for session in sessions)
+    assert sessions[0].requested_urls
+    assert sessions[1].requested_urls == ()
     assert all(session.closed for session in sessions)

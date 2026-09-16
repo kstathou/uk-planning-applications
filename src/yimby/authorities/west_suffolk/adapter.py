@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pydantic import HttpUrl
+from pydantic import Field, HttpUrl
 
 from yimby.domain import (
     ApplicationMetadata,
@@ -22,9 +22,11 @@ from yimby.domain import (
     Completeness,
     CompleteSection,
     DiscoveryBatch,
+    DiscoveryEvidenceCapture,
     DiscoveryWindow,
     DocumentRecord,
     EmptySection,
+    EvidenceDigest,
     FailedSection,
     FrozenModel,
     NativeSnapshot,
@@ -72,6 +74,18 @@ class WestSuffolkDiscoveryScope(FrozenModel):
     include_open: bool
 
 
+class WestSuffolkDiscoveryProofV1(FrozenModel):
+    """One retained search page and its safe logical request subject."""
+
+    query_key: str
+    page: int = Field(ge=1)
+    digest: EvidenceDigest
+    response_url: HttpUrl
+    request_url: HttpUrl
+    request_method: Literal["GET", "POST"]
+    request_form: tuple[tuple[str, str], ...] = ()
+
+
 class WestSuffolkCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable West Suffolk discovery progress."""
 
@@ -82,6 +96,7 @@ class WestSuffolkCheckpointV1(FrozenModel):
     next_page: int = 1
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
+    discovery_proofs: tuple[WestSuffolkDiscoveryProofV1, ...] = ()
     live_complete: bool = False
 
 
@@ -265,33 +280,23 @@ class WestSuffolkAdapter:
             if query.key not in progress.completed_queries
         )
         for weekly_query in pending_weekly:
-            page = (
-                progress.next_page if progress.active_query == weekly_query.key else 1
-            )
-            row_count = (
-                progress.query_row_count
-                if progress.active_query == weekly_query.key
-                else 0
-            )
+            page, row_count = _query_progress(progress, weekly_query.key)
             if progress.active_query == weekly_query.key and page > 1:
-                await session.fetch(
-                    _weekly_request(
-                        form,
-                        weekly_query.week,
-                        weekly_query.date_type,
-                        1,
-                    )
+                replay_request = _weekly_request(
+                    form,
+                    weekly_query.week,
+                    weekly_query.date_type,
+                    1,
                 )
+                await session.fetch(replay_request)
             while True:
-                capture = await session.fetch(
-                    _weekly_request(
-                        form,
-                        weekly_query.week,
-                        weekly_query.date_type,
-                        page,
-                    )
+                request = _weekly_request(
+                    form,
+                    weekly_query.week,
+                    weekly_query.date_type,
+                    page,
                 )
-                search_page = _parse_search_page(capture.body)
+                capture = await session.fetch(request)
                 next_checkpoint, fresh, last_page = _advance_checkpoint(
                     progress,
                     active_page=_ActivePage(
@@ -299,13 +304,22 @@ class WestSuffolkAdapter:
                         page=page,
                         row_count=row_count,
                     ),
-                    search_page=search_page,
+                    search_page=_parse_search_page(capture.body),
                     all_query_keys=query_keys,
+                    proof=_discovery_proof(
+                        weekly_query.key,
+                        page,
+                        request,
+                        capture,
+                    ),
                 )
                 yield DiscoveryBatch(
                     references=fresh,
                     next_checkpoint=next_checkpoint,
                     complete=next_checkpoint.live_complete,
+                    evidence=(_discovery_evidence(request, capture),),
+                    evidence_key=weekly_query.key,
+                    evidence_page=page,
                 )
                 progress = next_checkpoint
                 if last_page:
@@ -337,19 +351,12 @@ class WestSuffolkAdapter:
             if query.key not in progress.completed_queries
         )
         for open_query in pending_open:
-            page = progress.next_page if progress.active_query == open_query.key else 1
-            row_count = (
-                progress.query_row_count
-                if progress.active_query == open_query.key
-                else 0
-            )
+            page, row_count = _query_progress(progress, open_query.key)
             if progress.active_query == open_query.key and page > 1:
                 await session.fetch(_advanced_request(advanced_form, open_query, 1))
             while True:
-                capture = await session.fetch(
-                    _advanced_request(advanced_form, open_query, page)
-                )
-                search_page = _parse_advanced_search_page(capture.body, page=page)
+                request = _advanced_request(advanced_form, open_query, page)
+                capture = await session.fetch(request)
                 next_checkpoint, fresh, last_page = _advance_checkpoint(
                     progress,
                     active_page=_ActivePage(
@@ -357,13 +364,22 @@ class WestSuffolkAdapter:
                         page=page,
                         row_count=row_count,
                     ),
-                    search_page=search_page,
+                    search_page=_parse_advanced_search_page(capture.body, page=page),
                     all_query_keys=query_keys,
+                    proof=_discovery_proof(
+                        open_query.key,
+                        page,
+                        request,
+                        capture,
+                    ),
                 )
                 yield DiscoveryBatch(
                     references=fresh,
                     next_checkpoint=next_checkpoint,
                     complete=next_checkpoint.live_complete,
+                    evidence=(_discovery_evidence(request, capture),),
+                    evidence_key=open_query.key,
+                    evidence_page=page,
                 )
                 progress = next_checkpoint
                 if last_page:
@@ -505,7 +521,12 @@ class WestSuffolkAdapter:
             proposal=payload.proposal_text,
             status=payload.case_status.casefold().replace(" ", "-"),
             documents=tuple(
-                DocumentRecord(title=item.title, url=item.url)
+                DocumentRecord(
+                    title=item.title,
+                    url=item.url,
+                    category=item.document_type,
+                    published_date=item.published_date,
+                )
                 for item in payload.documents
             ),
             comments=(),
@@ -514,7 +535,7 @@ class WestSuffolkAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="west-suffolk-v2",
+            normaliser_version="west-suffolk-v3",
             metadata=ApplicationMetadata(
                 aliases=(
                     ()
@@ -541,12 +562,22 @@ class _ActivePage(FrozenModel):
     row_count: int
 
 
+def _query_progress(
+    progress: WestSuffolkCheckpointV1,
+    query_key: str,
+) -> tuple[int, int]:
+    if progress.active_query == query_key:
+        return progress.next_page, progress.query_row_count
+    return 1, 0
+
+
 def _advance_checkpoint(
     progress: WestSuffolkCheckpointV1,
     *,
     active_page: _ActivePage,
     search_page: _SearchPage,
     all_query_keys: tuple[str, ...],
+    proof: WestSuffolkDiscoveryProofV1,
 ) -> tuple[WestSuffolkCheckpointV1, tuple[SourceReference, ...], bool]:
     next_row_count = active_page.row_count + len(search_page.references)
     if next_row_count > search_page.reported or (
@@ -563,6 +594,12 @@ def _advance_checkpoint(
         if reference.reference not in seen:
             seen.add(reference.reference)
             fresh.append(reference)
+    if any(
+        (retained.query_key, retained.page) == (proof.query_key, proof.page)
+        for retained in progress.discovery_proofs
+    ):
+        raise WestSuffolkCheckpointError(active_page.query_key)
+    discovery_proofs = (*progress.discovery_proofs, proof)
     last_page = next_row_count == search_page.reported
     if last_page:
         completed_queries = (*progress.completed_queries, active_page.query_key)
@@ -573,6 +610,7 @@ def _advance_checkpoint(
                 "next_page": 1,
                 "query_row_count": 0,
                 "seen_references": tuple(seen),
+                "discovery_proofs": discovery_proofs,
                 "live_complete": len(completed_queries) == len(all_query_keys),
             }
         )
@@ -583,6 +621,7 @@ def _advance_checkpoint(
                 "next_page": active_page.page + 1,
                 "query_row_count": next_row_count,
                 "seen_references": tuple(seen),
+                "discovery_proofs": discovery_proofs,
             }
         )
     return checkpoint, tuple(fresh), last_page
@@ -740,6 +779,41 @@ def _advanced_request(
     )
 
 
+def _safe_request_form(request: PortalRequest) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (field.name, field.value) for field in request.form if field.name != "_csrf"
+    )
+
+
+def _discovery_evidence(
+    request: PortalRequest,
+    capture: EvidenceCapture,
+) -> DiscoveryEvidenceCapture:
+    return DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=request.url,
+        request_method=request.method.value,
+        request_form=_safe_request_form(request),
+    )
+
+
+def _discovery_proof(
+    query_key: str,
+    page: int,
+    request: PortalRequest,
+    capture: EvidenceCapture,
+) -> WestSuffolkDiscoveryProofV1:
+    return WestSuffolkDiscoveryProofV1(
+        query_key=query_key,
+        page=page,
+        digest=capture.digest,
+        response_url=capture.url,
+        request_url=request.url,
+        request_method=request.method.value,
+        request_form=_safe_request_form(request),
+    )
+
+
 def _parse_search_page(body: bytes) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
     return _parse_result_list(soup, terminal_first_page_markers=("1",))
@@ -756,6 +830,87 @@ def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
         soup,
         terminal_first_page_markers=("", "1") if page == 1 else (),
     )
+
+
+def validate_west_suffolk_discovery_proof(
+    proof: WestSuffolkDiscoveryProofV1,
+    capture: EvidenceCapture,
+) -> _SearchPage:
+    """Parse one retained page only when its logical request still matches."""
+    if capture.digest != proof.digest or capture.url != proof.response_url:
+        _raise_parse("discovery evidence identity")
+    advanced = proof.query_key.startswith("advanced|")
+    if advanced:
+        _validate_advanced_proof_request(proof)
+        return _parse_advanced_search_page(capture.body, page=proof.page)
+    _validate_weekly_proof_request(proof)
+    return _parse_search_page(capture.body)
+
+
+def _validate_weekly_proof_request(proof: WestSuffolkDiscoveryProofV1) -> None:
+    week, separator, date_type = proof.query_key.rpartition("|")
+    if separator != "|" or date_type not in _DATE_TYPES:
+        _raise_parse("discovery weekly query")
+    if proof.page == 1:
+        values = _request_form_values(proof.request_form)
+        if (
+            str(proof.request_url) != _WEEKLY_RESULTS_URL
+            or proof.request_method != RequestMethod.POST.value
+            or values.get("searchCriteria.parish") != ("",)
+            or values.get("searchCriteria.ward") != ("",)
+            or values.get("week") != (week,)
+            or values.get("dateType") != (date_type,)
+            or len(values.get("searchType", ())) != 1
+        ):
+            _raise_parse("discovery weekly request")
+        return
+    _validate_paged_proof_request(proof)
+
+
+def _validate_advanced_proof_request(proof: WestSuffolkDiscoveryProofV1) -> None:
+    query = next(
+        (item for item in _ADVANCED_QUERIES if item.key == proof.query_key),
+        None,
+    )
+    if query is None:
+        _raise_parse("discovery advanced query")
+    if proof.page == 1:
+        values = _request_form_values(proof.request_form)
+        other_field = (
+            "searchCriteria.appealStatus"
+            if query.field == "searchCriteria.caseStatus"
+            else "searchCriteria.caseStatus"
+        )
+        if (
+            str(proof.request_url) != _ADVANCED_RESULTS_URL
+            or proof.request_method != RequestMethod.POST.value
+            or values.get(query.field) != (query.value,)
+            or values.get(other_field) != ("",)
+        ):
+            _raise_parse("discovery advanced request")
+        return
+    _validate_paged_proof_request(proof)
+
+
+def _validate_paged_proof_request(proof: WestSuffolkDiscoveryProofV1) -> None:
+    expected = f"{_PAGED_RESULTS_URL}?action=page&searchCriteria.page={proof.page}"
+    if (
+        str(proof.request_url) != expected
+        or proof.request_method != RequestMethod.GET.value
+        or proof.request_form
+    ):
+        _raise_parse("discovery page request")
+
+
+def _request_form_values(
+    fields: tuple[tuple[str, str], ...],
+) -> dict[str, tuple[str, ...]]:
+    values: dict[str, list[str]] = {}
+    for name, value in fields:
+        if name == "_csrf":
+            _raise_parse("discovery request secret")
+        values.setdefault(name, []).append(value)
+    return {name: tuple(items) for name, items in values.items()}
 
 
 def _parse_result_list(

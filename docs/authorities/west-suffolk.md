@@ -8,6 +8,12 @@ Walkthrough date: 15 September 2026.
 
 The portal also exposes building-control searches. Those records are outside this pilot.
 
+The recorded investigation does not contain a complete survey of official APIs,
+open-data feeds, or data dumps. The current implementation therefore retains the
+verified IDOX route, but the next live qualification must record that source
+survey. If an official machine-readable source covers the same inventory and
+fields, it takes priority under the project plan.
+
 ## Discovery
 
 The weekly-list form uses the standard IDOX session flow. The observed week beginning 14 September 2026 returned three validated applications. The result page exposed each proposal, address, reference, received date, validated date, and comment status.
@@ -35,6 +41,10 @@ visible evidence.
 The record exposed summary, further information, contacts, important dates, comments, constraints, documents, related cases, and map tabs. The document index reported six records and displayed six rows.
 
 Document rows contained a published date, document type, drawing number when present, description, media URL, and measurement URL when supported. The walkthrough read only the index. It did not open any attachment body.
+
+Normaliser version `west-suffolk-v3` retains the published date and document
+type in the common document record. Drawing number and description remain in
+the authority-native record.
 
 The portal says that representations may take two working days to appear. It publishes representations as documents. The scraper must report comment text as unavailable unless the record exposes it outside the attachment body.
 
@@ -90,3 +100,28 @@ The immediate rerun made zero requests, transferred zero bytes, and left the
 qualification counts and version state unchanged. Both recorded runs succeeded.
 This satisfies live bootstrap acceptance. The two genuinely later weekly
 refreshes remain open.
+
+## Qualification contract revision
+
+The committed 16 September receipt is historical schema version 1 evidence. It
+predates request-bound discovery capture and does not satisfy the current
+schema version 2 qualifier by itself. A fresh live version 2 receipt remains
+required before claiming that the strengthened evidence contract passed on the
+real portal.
+
+The version 2 qualifier retains every weekly and advanced result page together
+with its query key, page number, response URL, safe request URL, method, and
+form values. Session secrets such as `_csrf` are excluded. Qualification
+rehydrates each retained response, reruns the production parser, reconciles its
+reported count and reference membership, and verifies the exact database
+registration. It also verifies every current application-to-capture
+association, checks compressed evidence bodies against their content digests,
+and commits the application, discovery, and content-digest inventories with
+SHA-256 hashes.
+
+An unchanged terminal resume makes no network requests and preserves the
+receipt bytes, creation time, and cumulative acquisition cost. A later weekly
+window can replace the current-scope checkpoint while retaining the cumulative
+application and discovery queue. Its immediate second pass must again make zero
+requests. Missing, altered, or unbound application or discovery evidence fails
+closed and leaves the last receipt untouched.
