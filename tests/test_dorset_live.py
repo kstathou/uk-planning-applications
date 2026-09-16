@@ -787,6 +787,34 @@ def test_dorset_qualification_fails_closed_on_corrupt_evidence(tmp_path: Path) -
     assert not receipt_path.exists()
 
 
+def test_dorset_qualification_restarts_stale_partial_discovery(tmp_path: Path) -> None:
+    """An explicit restart replaces only stale query progress and requalifies."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+
+    assert module.main(
+        arguments,
+        session_factory=lambda: _session(_DorsetMock(fault="document-count")),
+    ) == 1
+    assert module.main(
+        [*arguments, "--resume", "--restart-discovery"],
+        session_factory=lambda: _session(_DorsetMock()),
+    ) == 0
+
+    receipt = module.DorsetQualificationReceiptV1.model_validate_json(
+        (tmp_path / "dorset-qualification-v1.json").read_text()
+    )
+    assert receipt.terminal_checkpoint.live_complete
+    assert receipt.reference_agreement.count == 21
+    assert receipt.counts.pending_retries == 0
+    assert receipt.run_statuses == ("succeeded", "succeeded")
+
+
 @pytest.mark.parametrize(
     ("arguments", "error"),
     [
