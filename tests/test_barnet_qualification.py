@@ -18,7 +18,10 @@ import httpx
 import pytest
 
 import yimby.authorities.barnet.adapter as barnet_adapter
+from yimby.domain import AuthorityId
+from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+from yimby.store import SqliteStore
 from yimby.transport import SourceUnavailableError
 
 if TYPE_CHECKING:
@@ -400,6 +403,38 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert resumed["costs"]["rerun"]["request_count"] == 0
     assert resumed["created_at"] == "2026-09-16T12:00:00Z"
     assert resumed["weekly_refreshes"] == receipt["weekly_refreshes"]
+
+    store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    refresh_reference = store.discovery_state(AuthorityId("barnet")).queued[0]
+    store.enqueue_retry(AuthorityId("barnet"), refresh_reference, "scheduled-refresh")
+    store.close()
+    refresh_mock = _BarnetQualificationMock()
+    assert refresh_reference.locator is not None
+    refresh_mock.references[refresh_reference.locator] = refresh_reference.reference
+    refresh_sessions: list[_QualificationSession] = []
+
+    def refresh_session_factory() -> _QualificationSession:
+        session = _QualificationSession(refresh_mock)
+        refresh_sessions.append(session)
+        return session
+
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=refresh_session_factory,
+            now=lambda: now + timedelta(days=7),
+        )
+        == 0
+    )
+    refreshed = json.loads(capsys.readouterr().out)
+    assert len(refresh_sessions) == 2
+    assert len(refresh_sessions[0].requested_urls) == 4
+    assert refresh_sessions[1].requested_urls == ()
+    assert refreshed["created_at"] == "2026-09-16T12:00:00Z"
+    assert refreshed["weekly_refreshes"] == receipt["weekly_refreshes"]
 
     invalid_receipts = (
         None,
