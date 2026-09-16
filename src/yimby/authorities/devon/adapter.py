@@ -1251,7 +1251,7 @@ def _parse_documents(
     if len(markers) != 1 or len(tables) != 1:
         _raise_parse("document section")
     headers = tuple(
-        _normalise_label(item.get_text(" ", strip=True))
+        _normalise_label(_leading_text(item))
         for item in tables[0].select("thead th")
     )
     if len(headers) < _DOCUMENT_COLUMN_COUNT or headers[-2:] != (
