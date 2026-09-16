@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from hashlib import sha256
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from time import monotonic
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from urllib.parse import urlsplit, urlunsplit
@@ -30,7 +30,6 @@ from yimby.transport import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-    from pathlib import Path
 
 _ATTACHMENT_SUFFIXES = {
     ".bmp",
@@ -117,11 +116,13 @@ class PlaywrightBoundary:
         playwright: Playwright,
         browser: Browser,
         context: BrowserContext,
+        storage_state: Path | None = None,
     ) -> None:
         """Retain the Playwright resources as one owned lifecycle."""
         self._playwright = playwright
         self._browser = browser
         self._context = context
+        self._storage_state = storage_state
 
     @classmethod
     async def create(
@@ -150,7 +151,7 @@ class PlaywrightBoundary:
                 await route.continue_()
 
         await context.route("**/*", route_request)
-        return cls(playwright, browser, context)
+        return cls(playwright, browser, context, storage_state)
 
     async def open(self, url: str) -> BrowserPayload:
         """Render one page while the context blocks download resources."""
@@ -179,9 +180,13 @@ class PlaywrightBoundary:
 
     async def aclose(self) -> None:
         """Close context, browser, and Playwright driver."""
-        await self._context.close()
-        await self._browser.close()
-        await self._playwright.stop()
+        try:
+            if self._storage_state is not None:
+                await self._context.storage_state(path=str(self._storage_state))
+        finally:
+            await self._context.close()
+            await self._browser.close()
+            await self._playwright.stop()
 
 
 class PlaywrightPortalSession:
