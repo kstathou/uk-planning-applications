@@ -102,3 +102,11 @@ PKIDs. The council's decided layer is therefore internally complete but cannot
 provide the missing cutover crosswalk. A Salesforce `FULL` guest layout also
 exposed only system fields, and the public object-info endpoint rejected guest
 access, so no hidden migrated identifier is available through that route.
+
+The authority-specific Haringey qualifier was then run against the requested
+30-day-plus-older-open scope. It persisted a failed collection run and returned
+the structured failed checks `bounded-30-day-discovery` and
+`complete-older-open-inventory` with `HaringeyWindowUnavailableError`. It
+created neither a final nor temporary receipt. This gives the blocker a
+repeatable operational test without converting partial discovery evidence into
+bootstrap or weekly-cycle credit.

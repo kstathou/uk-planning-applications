@@ -67,6 +67,7 @@ class HaringeyCheckpointV1(FrozenModel):
     observed_result_count: int = Field(default=0, ge=0)
     seen_references: tuple[str, ...] = ()
     quick_link_complete: bool = False
+    older_open_complete: bool = False
 
 
 class HaringeySearchHitV1(FrozenModel):

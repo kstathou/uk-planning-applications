@@ -238,3 +238,33 @@ sample happens to be unique, and the independently reconciled decided layer
 has zero PKID overlap to exploit. Qualification therefore remains fail-closed,
 the adapter stays `BROWSER_ONLY`, and no receipt or weekly-cycle credit is
 emitted.
+
+## Authority qualification command
+
+Haringey now has the same explicit, resumable qualification boundary as the
+live-ready pilot tooling:
+
+```sh
+uv run python scripts/qualify_haringey.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-haringey-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open \
+  --resume
+```
+
+The command requires explicit live confirmation, an all-open scope, and
+`--resume` before reusing a non-empty target. It persists collection state and
+can write only the typed, atomic `haringey-qualification-v1.json` receipt after
+terminal-checkpoint coherence, count agreement, zero pending or failed work,
+SQLite and evidence integrity, the attachment policy, and an immediate
+zero-request idempotence rerun all pass.
+
+The production command was run at 10:56 UTC on 16 September 2026. It persisted
+one failed run and returned `qualification-failed` with failed checks
+`bounded-30-day-discovery` and `complete-older-open-inventory`, sourced from
+`HaringeyWindowUnavailableError`. The adapter rejected the unsupported scope
+before opening a browser. Neither the final receipt nor its temporary path was
+created. The tool therefore makes the current source boundary reproducible; it
+does not relax it.

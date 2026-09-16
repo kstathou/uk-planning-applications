@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, E501, PLR2004, SLF001
+# ruff: noqa: ANN401, D103, E501, PLR0913, PLR0917, PLR2004, SLF001
 
 """Live boundaries for Cheshire East and Haringey's browser register."""
 
@@ -9,10 +9,9 @@ import asyncio
 import importlib.util
 import json
 import sys
-from datetime import date
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -53,7 +52,8 @@ from yimby.transport import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncIterator, Callable
+    from types import ModuleType
 
     from playwright.async_api import Page
 
@@ -427,6 +427,37 @@ def _haringey_package() -> AuthorityPackage[
     )
 
 
+class _CompleteHaringeyAdapter(haringey.HaringeyAdapter):
+    """Test seam representing a future evidenced older-open implementation."""
+
+    async def discover(
+        self,
+        session: Any,
+        window: DiscoveryWindow,
+        checkpoint: haringey.HaringeyCheckpointV1 | None,
+    ) -> AsyncIterator[DiscoveryBatch[haringey.HaringeyCheckpointV1]]:
+        bounded = window.model_copy(update={"include_open": False})
+        async for batch in super().discover(session, bounded, checkpoint):
+            yield batch.model_copy(
+                update={
+                    "next_checkpoint": batch.next_checkpoint.model_copy(
+                        update={"older_open_complete": True}
+                    ),
+                    "complete": batch.complete,
+                }
+            )
+
+
+def _complete_haringey_package() -> AuthorityPackage[
+    haringey.HaringeyApplicationV1, haringey.HaringeyCheckpointV1
+]:
+    return AuthorityPackage(
+        _CompleteHaringeyAdapter(today=lambda: TODAY),
+        haringey.HaringeyApplicationV1,
+        haringey.HaringeyCheckpointV1,
+    )
+
+
 def test_haringey_qualification_requires_explicit_safe_options(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -481,6 +512,64 @@ def test_haringey_qualification_requires_explicit_safe_options(
     assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
     assert (occupied / "existing").read_text(encoding="utf-8") == "preserve"
     assert created == 0
+
+
+def test_haringey_qualification_writes_receipt_only_after_all_checks(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Exercise the future success path through a fully evidenced test seam."""
+    module = _haringey_qualification_module()
+    data_dir = tmp_path / "qualified"
+    sessions: list[_QualificationBrowserSession] = []
+
+    async def session_factory() -> _QualificationBrowserSession:
+        pages = (
+            {1: _search_page(1, (_search_hit(2582),), pages=1, total=1)}
+            if not sessions
+            else {}
+        )
+        session = _QualificationBrowserSession(pages)
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-09-10",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 16, 13, tzinfo=UTC),
+        package=_complete_haringey_package(),
+    )
+
+    assert result == 0
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    receipt_path = data_dir / "haringey-qualification-v1.json"
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt == json.loads(captured.out)
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "haringey"
+    assert receipt["scope"] == {
+        "start": "2026-09-10",
+        "end": "2026-09-16",
+        "include_open": True,
+    }
+    assert receipt["counts"]["applications"] == 1
+    assert receipt["counts"]["discovered_references"] == 1
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert all(check["ok"] for check in receipt["checks"])
+    assert receipt["costs"]["rerun"]["request_count"] == 0
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    assert not (data_dir / ".haringey-qualification-v1.json.tmp").exists()
 
 
 @pytest.mark.parametrize(

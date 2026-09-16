@@ -129,6 +129,20 @@ the rolling seven-day quick link and reports the source-provided totals. It
 does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
+Haringey's full qualification boundary is separately available and remains
+fail-closed while arbitrary windows and older-open enumeration are unsupported:
+
+```sh
+uv run python scripts/qualify_haringey.py \
+  --confirm-live --data-dir .yimby/qualification-haringey-2026-09-16 \
+  --start 2026-08-18 --end 2026-09-16 --include-open --resume
+```
+
+The command persists the failed run for audit but writes no qualification
+receipt unless every completeness, integrity, count, attachment-policy, and
+idempotence check passes. Reusing any non-empty data directory requires
+`--resume`.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
