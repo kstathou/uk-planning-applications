@@ -31,6 +31,8 @@ from yimby.domain import (
     AuthorityId,
     DiscoveryWindow,
     FrozenModel,
+    LiveReadiness,
+    LiveTransportKind,
     QualificationSnapshot,
     RunStatus,
     SourceReference,
@@ -38,7 +40,7 @@ from yimby.domain import (
 from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
-from yimby.registry import AuthorityRegistry
+from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
 from yimby.store import SqliteStore
 from yimby.transport import PortalSession
 
@@ -343,6 +345,14 @@ def _base_checks(
     initial: QualificationCost,
 ) -> tuple[QualificationCheck, ...]:
     checkpoint = _terminal_checkpoint(store, scope)
+    authority = next(
+        (
+            state
+            for state in store.authority_states()
+            if state.manifest.id == _AUTHORITY_ID
+        ),
+        None,
+    )
     return (
         QualificationCheck(
             name="terminal-checkpoint",
@@ -370,6 +380,14 @@ def _base_checks(
         QualificationCheck(
             name="database-integrity",
             ok=store.database_integrity() == "ok",
+        ),
+        QualificationCheck(
+            name="authority-readiness",
+            ok=(
+                authority is not None
+                and authority.manifest.live_status.readiness == LiveReadiness.LIVE_READY
+                and authority.manifest.live_status.transport == LiveTransportKind.HTTP
+            ),
         ),
         QualificationCheck(
             name="evidence-paths",
@@ -409,7 +427,7 @@ async def _qualify(
     session_factory: SessionFactory,
     now: Clock,
 ) -> OpdcQualificationReceiptV1:
-    registry = AuthorityRegistry((OPDC_PACKAGE,))
+    registry = AuthorityRegistry((OPDC_PACKAGE,), PILOT_LIVE_STATUS)
     collector = Collector(registry, store)
     window = DiscoveryWindow(
         start=config.scope.start,
