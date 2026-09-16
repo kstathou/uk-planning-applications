@@ -121,7 +121,7 @@ def _advanced_form(*, include_appeal: bool = True) -> bytes:
     """.encode()
 
 
-def _result_page(
+def _result_page(  # noqa: PLR0913
     references: tuple[str, ...],
     *,
     reported: int,
@@ -142,9 +142,7 @@ def _result_page(
     pages = max(1, (reported + page_size - 1) // page_size)
     links = "".join(
         f'<a href="#" onclick="PagingClick(\'{index}\')">{index + 1}</a>'
-        for index in (
-            range(pages) if visible_pages is None else visible_pages
-        )
+        for index in (range(pages) if visible_pages is None else visible_pages)
     )
     hidden = reported if hidden_reported is None else hidden_reported
     return f"""

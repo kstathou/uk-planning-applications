@@ -696,13 +696,7 @@ def _parse_search_page(body: bytes, *, expected_page: int) -> _SearchPage:
     pages = max(1, (reported + page_size - 1) // page_size)
     if page_count != pages:
         raise PeakDistrictCountMismatchError(pages, page_count)
-    observed_pages = {
-        int(match.group(1))
-        for link in soup.select('a[onclick*="PagingClick"]')
-        if (match := _PAGE_PATTERN.search(str(link.get("onclick", "")))) is not None
-    }
-    if observed_pages != set(range(pages)):
-        _raise_parse("result pagination inventory")
+    _assert_pagination_inventory(soup, pages=pages, page_index=page_index)
     return _SearchPage(
         references=references,
         reported=reported,
@@ -710,6 +704,28 @@ def _parse_search_page(body: bytes, *, expected_page: int) -> _SearchPage:
         page_size=page_size,
         form=_successful_controls(soup),
     )
+
+
+def _assert_pagination_inventory(
+    soup: BeautifulSoup,
+    *,
+    pages: int,
+    page_index: int,
+) -> None:
+    observed_pages = {
+        int(match.group(1))
+        for link in soup.select('a[onclick*="PagingClick"]')
+        if (match := _PAGE_PATTERN.search(str(link.get("onclick", "")))) is not None
+    }
+    required_pages = {page_index}
+    if page_index > 0:
+        required_pages.add(page_index - 1)
+    if page_index + 1 < pages:
+        required_pages.add(page_index + 1)
+    if not required_pages.issubset(observed_pages) or any(
+        observed < 0 or observed >= pages for observed in observed_pages
+    ):
+        _raise_parse("result pagination inventory")
 
 
 def _required_control_int(soup: BeautifulSoup, name: str) -> int:
