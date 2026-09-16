@@ -315,7 +315,9 @@ def _reject_external_form_controls(soup: BeautifulSoup, form: Tag) -> None:
     form_id = str(form.get("id", ""))
     for control in form.select("button, input, select, textarea"):
         explicit_owner = str(control.get("form", ""))
-        if explicit_owner and explicit_owner != form_id:
+        if control.has_attr("form") and (
+            not explicit_owner or explicit_owner != form_id
+        ):
             _raise_parse("reassigned form control")
     if not form_id:
         return
