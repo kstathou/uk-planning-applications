@@ -64,7 +64,8 @@ _RESULTS_PER_PAGE = 10
 _MARKER_COUNT = 2
 _DOCUMENT_CELL_COUNT = 2
 _FORM_STATE_FIELDS = ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")
-_TELERIK_STATE_SUFFIXES = ("_ClientState", "_calendar_SD", "_calendar_AD")
+_DATE_INPUT_STATE_SUFFIX = "_dateInput_ClientState"
+_NUMERIC_STATE_SUFFIXES = ("_txtEasting_ClientState", "_txtNorthing_ClientState")
 
 
 class DorsetDiscoveryScope(FrozenModel):
@@ -622,7 +623,7 @@ def _parse_result_page(body: bytes) -> _ResultPage:  # noqa: C901
         or _form_action(form) != _RESULTS_URL
     ):
         _raise_parse("result form")
-    fields = _successful_controls(form)
+    fields = _successful_controls(form, frozenset({_NEXT_BUTTON}))
     _require_fields(fields, *_FORM_STATE_FIELDS)
     _require_hidden_inputs(form, *_FORM_STATE_FIELDS)
     if any(field.name in _FORM_STATE_FIELDS and not field.value for field in fields):
@@ -882,6 +883,10 @@ def _successful_controls(
         if control.name == "input":
             input_type = str(control.get("type", "text")).casefold()
             if input_type in {"button", "file", "image", "reset", "submit"}:
+                if input_type == "submit" and name in include_names:
+                    fields.append(
+                        FormField(name=name, value=str(control.get("value", "")))
+                    )
                 continue
             if (
                 input_type in {"checkbox", "radio"}
@@ -959,13 +964,12 @@ def _advanced_request(
         }
     else:
         overrides = {_OUTSTANDING: "on"}
-    controls = _successful_controls(form, frozenset(overrides))
-    client_state = {
-        field.name: ""
-        for field in controls
-        if field.name.endswith(_TELERIK_STATE_SUFFIXES)
-    }
-    fields = _override_fields(controls, {**client_state, **overrides})
+    controls = _successful_controls(
+        form,
+        frozenset((*overrides, query.submit_name)),
+    )
+    fields = _override_fields(controls, overrides)
+    fields = _override_fields(fields, _telerik_client_state(fields))
     return PortalRequest(
         url=HttpUrl(_ADVANCED_URL),
         intent=RequestIntent.SEARCH,
@@ -974,9 +978,59 @@ def _advanced_request(
             FormField(name="__EVENTTARGET", value=""),
             FormField(name="__EVENTARGUMENT", value=""),
             *fields,
-            FormField(name=query.submit_name, value="Search"),
         ),
     )
+
+
+def _telerik_client_state(fields: tuple[FormField, ...]) -> dict[str, str]:
+    values = {field.name: field.value for field in fields}
+    updates = {}
+    for field in fields:
+        if field.name.endswith(_NUMERIC_STATE_SUFFIXES):
+            updates[field.name] = json.dumps(
+                {
+                    "enabled": True,
+                    "emptyMessage": "",
+                    "validationText": "",
+                    "valueAsString": "",
+                    "minValue": -70_368_744_177_664,
+                    "maxValue": 70_368_744_177_664,
+                    "lastSetTextBoxValue": "",
+                },
+                separators=(",", ":"),
+            )
+            continue
+        if not field.name.endswith(_DATE_INPUT_STATE_SUFFIX):
+            continue
+        client_id = field.name.removesuffix(_DATE_INPUT_STATE_SUFFIX)
+        visible_name = f"{client_id.replace('_', '$')}$dateInput"
+        base_name = visible_name.removesuffix("$dateInput")
+        iso_value = values.get(base_name)
+        display_value = values.get(visible_name)
+        if (
+            iso_value is None
+            or display_value is None
+            or bool(iso_value) != bool(display_value)
+        ):
+            _raise_parse("advanced Telerik state")
+        validation = f"{iso_value}-00-00-00" if iso_value else ""
+        if iso_value and display_value != date.fromisoformat(iso_value).strftime(
+            "%d/%m/%Y"
+        ):
+            _raise_parse("advanced Telerik state")
+        updates[field.name] = json.dumps(
+            {
+                "enabled": True,
+                "emptyMessage": "",
+                "validationText": validation,
+                "valueAsString": validation,
+                "minDateStr": "1980-01-01-00-00-00",
+                "maxDateStr": "2099-12-31-00-00-00",
+                "lastSetTextBoxValue": display_value,
+            },
+            separators=(",", ":"),
+        )
+    return updates
 
 
 def _override_fields(
@@ -1032,7 +1086,6 @@ def _next_page_request(page: _ResultPage) -> PortalRequest:
             FormField(name="__EVENTTARGET", value=""),
             FormField(name="__EVENTARGUMENT", value=""),
             *page.form,
-            FormField(name=_NEXT_BUTTON, value=" "),
         ),
     )
 
