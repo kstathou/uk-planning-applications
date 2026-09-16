@@ -632,6 +632,45 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b"No Results Found.</strong></div></div></main>"
         ),
         (
+            b'<main style="display/**/:none"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
+        (
+            b'<main style="display:none/*comment*/"><div class="col-sm-12 '
+            b'col-md-12 animation-fadeIn application-list"><div '
+            b'class="push-30-t"><strong class="text-danger">'
+            b"No Results Found.</strong></div></div></main>"
+        ),
+        (
+            b'<main style="display:none ! important"><div class="col-sm-12 '
+            b'col-md-12 animation-fadeIn application-list"><div '
+            b'class="push-30-t"><strong class="text-danger">'
+            b"No Results Found.</strong></div></div></main>"
+        ),
+        (
+            b'<main style="d\\69 splay:none"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
+        (
+            b'<main popover><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></main>'
+        ),
+        (
+            b'<datalist><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></datalist>'
+        ),
+        (
+            b'<canvas><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></canvas>'
+        ),
+        (
             b'<head><div class="col-sm-12 col-md-12 animation-fadeIn '
             b'application-list"><div class="push-30-t"><strong '
             b'class="text-danger">No Results Found.</strong></div></div></head>'
