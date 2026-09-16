@@ -6,7 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import json
+import sys
+from datetime import UTC, datetime
 from hashlib import sha256
+from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -32,6 +38,7 @@ class _Session:
         self.responder = responder
         self.requests: list[PortalRequest] = []
         self._bytes = 0
+        self.closed = False
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
@@ -65,7 +72,7 @@ class _Session:
         return TransportMode.LIVE
 
     async def aclose(self) -> None:
-        return None
+        self.closed = True
 
 
 def _search_form() -> bytes:
@@ -286,6 +293,35 @@ class _PeakDetailMock:
                 page_size=2,
             )
         raise AssertionError(url)
+
+
+class _QualificationResponder:
+    def __init__(self, *, documents_fail: bool = False) -> None:
+        self.discovery = _PeakAssureMock()
+        self.documents_fail = documents_fail
+
+    def __call__(self, request: PortalRequest) -> bytes:
+        url = str(request.url)
+        if "OnlinePlanningOverview" in url:
+            reference = parse_qs(urlsplit(url).query)["applicationNumber"][0]
+            return _detail(reference)
+        if "GetOnlineDocuments" in url:
+            if self.documents_fail:
+                raise SourceUnavailableError(url)
+            return _documents_page((), reported=0)
+        return self.discovery(request)
+
+
+def _qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_peak_district.py"
+    name = "_test_qualify_peak_district"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 class _PeakAssureMock:
@@ -702,3 +738,217 @@ def test_peak_district_detail_identity_and_routing_fail_closed() -> None:
                 _reference().model_copy(update={"reference": "WRONG/1"}),
             )
         )
+
+
+def test_peak_district_qualification_requires_safe_exact_scope(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    created = 0
+
+    def session_factory() -> _Session:
+        nonlocal created
+        created += 1
+        return _Session(_QualificationResponder())
+
+    base = [
+        "--data-dir",
+        str(tmp_path / "missing-confirmation"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(base, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "confirmation-required"
+
+    without_open = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "missing-open"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+    ]
+    assert module.main(without_open, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "include-open-required"
+
+    wrong_days = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "wrong-days"),
+        "--start",
+        "2026-08-19",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(wrong_days, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "thirty-days-required"
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "preserve").write_text("value", encoding="utf-8")
+    occupied_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(occupied),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(occupied_args, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
+    assert (occupied / "preserve").read_text(encoding="utf-8") == "value"
+    assert created == 0
+
+
+def test_peak_district_qualification_persists_complete_receipt_and_zero_io_rerun(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification-peak-district-2026-09-16"
+    sessions: list[_Session] = []
+
+    def session_factory() -> _Session:
+        session = _Session(_QualificationResponder())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    result = module.main(
+        args,
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+    )
+
+    assert result == 0
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    assert len(sessions[0].requested_urls) == 18
+    assert sessions[1].requested_urls == ()
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "peak-district"
+    assert receipt["created_at"] == "2026-09-16T12:00:00Z"
+    assert receipt["scope"] == {
+        "start": "2026-08-18",
+        "end": "2026-09-16",
+        "include_open": True,
+    }
+    assert [query["value"] for query in receipt["query_inventory"]] == [
+        "18/08/2026..16/09/2026",
+        "18/08/2026..16/09/2026",
+        "18/08/2026..16/09/2026",
+        "REGISTERED",
+        "APPEAL LODGED",
+    ]
+    assert receipt["counts"] == {
+        "applications": 5,
+        "discovered_references": 5,
+        "native_versions": 5,
+        "application_versions": 5,
+        "document_versions": 5,
+        "comment_versions": 0,
+        "pending_retries": 0,
+        "failed_sections": 0,
+        "unmapped_records": 0,
+    }
+    assert receipt["costs"]["initial"]["request_count"] == 18
+    assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
+    assert receipt["costs"]["rerun"] == {
+        "request_count": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert receipt["weekly_cycles"] == [
+        {"cycle": 1, "eligible_on": "2026-09-23", "status": "pending"},
+        {"cycle": 2, "eligible_on": "2026-09-30", "status": "pending"},
+    ]
+    assert {check["name"]: check["ok"] for check in receipt["checks"]} == {
+        "application-count": True,
+        "attachment-policy": True,
+        "database-integrity": True,
+        "evidence-integrity": True,
+        "evidence-paths": True,
+        "exact-query-inventory": True,
+        "failed-sections": True,
+        "idempotent-rerun": True,
+        "pending-retries": True,
+        "reference-application-agreement": True,
+        "run-statuses": True,
+        "terminal-checkpoint": True,
+        "terminal-rerun-io": True,
+        "unmapped-records": True,
+    }
+    receipt_path = data_dir / "peak-district-qualification-v1.json"
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+    assert not (data_dir / ".peak-district-qualification-v1.json.tmp").exists()
+
+    sessions.clear()
+    assert (
+        module.main(
+            [*args, "--resume"],
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 16, 13, tzinfo=UTC),
+        )
+        == 0
+    )
+    resumed = json.loads(capsys.readouterr().out)
+    assert len(sessions) == 2
+    assert all(session.requested_urls == () for session in sessions)
+    assert resumed["costs"]["initial"]["request_count"] == 0
+    assert resumed["costs"]["rerun"]["request_count"] == 0
+
+
+def test_peak_district_qualification_rejects_failed_current_sections(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "failed-sections"
+    sessions: list[_Session] = []
+
+    def session_factory() -> _Session:
+        session = _Session(_QualificationResponder(documents_fail=True))
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+    )
+
+    assert result == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "failed-sections" in error["failed_checks"]
+    assert len(sessions) == 1
+    assert sessions[0].closed
+    assert not (data_dir / "peak-district-qualification-v1.json").exists()
