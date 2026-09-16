@@ -46,6 +46,7 @@ _INVALID_WINDOW = "invalid-window"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
 _WEEKLY_DATE_TYPES = ("DC_Validated", "DC_Decided")
+_WEEK_DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 _ADVANCED_QUERY_KEYS = (
     "advanced|searchCriteria.caseStatus|Pending Consideration",
     "advanced|searchCriteria.caseStatus|Pending Decision",
@@ -212,14 +213,13 @@ def _terminal_checkpoint(
         end=scope.end,
         include_open=scope.include_open,
     )
-    expected_queries = _expected_query_keys(scope)
     seen = checkpoint.seen_references
     durable = state.references
     return (
         checkpoint.result_page == "live"
         and checkpoint.live_scope == expected
         and checkpoint.live_complete
-        and checkpoint.completed_queries == expected_queries
+        and _completed_query_inventory(checkpoint, scope)
         and checkpoint.active_query is None
         and checkpoint.next_page == 1
         and checkpoint.query_row_count == 0
@@ -229,15 +229,48 @@ def _terminal_checkpoint(
     )
 
 
-def _expected_query_keys(scope: QualificationScope) -> tuple[str, ...]:
+def _expected_weekly_queries(
+    scope: QualificationScope,
+) -> tuple[tuple[date, str], ...]:
     monday = scope.start - timedelta(days=scope.start.weekday())
-    weekly = []
+    weekly: list[tuple[date, str]] = []
     while monday <= scope.end:
         if monday + timedelta(days=6) >= scope.start:
-            week = monday.strftime("%d/%m/%Y")
-            weekly.extend(f"{week}|{date_type}" for date_type in _WEEKLY_DATE_TYPES)
+            weekly.extend((monday, date_type) for date_type in _WEEKLY_DATE_TYPES)
         monday += timedelta(days=7)
-    return (*weekly, *_ADVANCED_QUERY_KEYS)
+    return tuple(weekly)
+
+
+def _completed_query_inventory(
+    checkpoint: WestSuffolkCheckpointV1,
+    scope: QualificationScope,
+) -> bool:
+    expected_weekly = _expected_weekly_queries(scope)
+    weekly_count = len(expected_weekly)
+    completed = checkpoint.completed_queries
+    if completed[weekly_count:] != _ADVANCED_QUERY_KEYS:
+        return False
+    actual_weekly: list[tuple[date, str]] = []
+    for key in completed[:weekly_count]:
+        week_value, separator, date_type = key.rpartition("|")
+        if separator != "|" or date_type not in _WEEKLY_DATE_TYPES:
+            return False
+        parsed = _parse_week_date(week_value)
+        if parsed is None:
+            return False
+        actual_weekly.append((parsed, date_type))
+    return tuple(actual_weekly) == expected_weekly
+
+
+def _parse_week_date(value: str) -> date | None:
+    for date_format in _WEEK_DATE_FORMATS:
+        try:
+            return (
+                datetime.strptime(value.strip(), date_format).replace(tzinfo=UTC).date()
+            )
+        except ValueError:
+            continue
+    return None
 
 
 def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
