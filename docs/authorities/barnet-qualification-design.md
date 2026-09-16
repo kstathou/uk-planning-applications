@@ -56,6 +56,14 @@ A separate inventory module lost because callers would need to trace query owner
 
 The official portal may rate-limit the run or cap one advanced partition. Either outcome prevents a receipt. Two weekly refreshes approximately 7 and 14 days after bootstrap cannot happen on the implementation date and remain pending.
 
-## Next implementation step
+## Implementation and live result
 
-Add the failing behavior tests for exact-scope weekly, older-open, active-appeal, pagination, and resume semantics.
+The adapter, tests, qualification command, and typed receipt are implemented.
+The full deterministic suite reached 100% branch coverage before the live run.
+
+The first live attempt on 16 September 2026 stopped on an official HTTP 429
+during detail collection. Durable state contains 10 discovered references, 6
+committed applications, one pending retry, and a resumable first-query page
+checkpoint. No receipt was written. This is a source-health blocker, not a
+successful bootstrap. The two weekly refreshes remain future work and Barnet
+must remain discovery-only.

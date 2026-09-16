@@ -43,7 +43,11 @@ The portal depends on a server-side session. Fixture captures must retain the re
 
 ## Known limits
 
-This walkthrough covered one current tree application and one weekly validated list. It did not yet prove decided-search behavior, older open enumeration, comment pagination, document pagination, or live retry behavior.
+The implementation now covers validated and decided weekly searches, four
+native older-open case states, and five native active-appeal states. The first
+qualification attempt did not reach every partition because the official
+source rate-limited detail collection. Comment and document pagination also
+remain unproved on a non-empty live section.
 
 ## Request contract capture
 
@@ -97,3 +101,21 @@ also returned 429. No further requests were made during the cooldown. This is
 useful contract evidence, but it is not a completed live bootstrap and Barnet
 remains discovery-only. The saved state can resume the same bounded week after
 the source has recovered.
+
+## Live qualification attempt
+
+The 30-day qualification command started at 09:13 UTC on 16 September 2026
+with the exact inclusive range 18 August through 16 September and active
+discovery enabled. It persisted the first 10 unique references from the weekly
+validated partition, committed 6 applications with 24 retained evidence
+captures, and stopped after 26 successful HTTP responses. The failed run
+recorded one pending retry for `26/3080/192` and retained a checkpoint for page
+2 of `weekly|2026-08-17|DC_Validated`.
+
+A separate read-only visit to that exact official detail URL showed HTTP 429
+with the portal's `Too Many Requests` page. The target contains no receipt and
+no attachment URL appears in its evidence table. The advanced older-open and
+active-appeal partitions were not reached, so this attempt cannot prove a live
+bootstrap. The safe resume target is
+`.yimby/qualification-barnet-2026-09-16` and must be reused with `--resume`
+only after the official portal recovers.

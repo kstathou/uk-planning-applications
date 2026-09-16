@@ -87,6 +87,24 @@ smoke is evidence for only that authority, week, and successfully completed
 sections. It does not promote the authority or satisfy a weekly cycle by
 itself.
 
+Barnet's durable qualification command uses a separate target. It requires an
+inclusive 30-day range and every older-open and active-appeal partition.
+
+```sh
+uv run python scripts/qualify_barnet.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-barnet-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+Add `--resume` only when reusing that exact non-empty target. A success receipt
+requires a terminal checkpoint, exact query inventory, intact evidence hashes,
+matching durable references and locators, healthy sections, SQLite integrity,
+zero attachment-body requests, and an immediate zero-I/O rerun. The two weekly
+refresh entries remain pending until their real future dates.
+
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 
 ```sh

@@ -22,7 +22,7 @@ requirement.
 
 | Authority | Fixture package | Recorded source evidence | Real adapter boundary | Live bootstrap | Two weekly cycles |
 |---|---|---|---|---|---|
-| Barnet | Verified | Weekly, detail, and child routes recorded; older-open result cap recorded | Bounded weekly adapter; smoke reached paged discovery before HTTP 429 | Open | Open |
+| Barnet | Verified | Weekly, detail, child, advanced-form, and capped current-list routes recorded | Exact-scope weekly, older-open, and active-appeal adapter; 30-day qualification stopped during detail collection on HTTP 429 | Blocked | Open |
 | Camden | Verified | Detail and 16-row document index recorded; comments open | Exact-reference JSF, Northgate detail, and document-index adapter; bounded discovery explicitly unavailable | Open | Open |
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
@@ -41,12 +41,13 @@ requirement.
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
 As of 16 September 2026, no authority has completed a verified live bootstrap.
-The Barnet smoke is incomplete because the source returned HTTP 429 during
-pagination; its saved checkpoint permits a later bounded resume without
-repeating completed pages. All fifteen authorities still require a live
-bootstrap and two successful weekly cycles. Blocked and partial authorities
-remain in coverage denominators and failure reporting until those checks
-succeed.
+The Barnet 30-day qualification is incomplete because the source returned HTTP
+429 during detail collection. It persisted 10 references, 6 applications, one
+pending retry, and a page-2 checkpoint for the first weekly partition. No
+receipt exists. Its saved state permits a later bounded resume without losing
+committed work. All fifteen authorities still require a live bootstrap and two
+successful weekly cycles. Blocked and partial authorities remain in coverage
+denominators and failure reporting until those checks succeed.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds

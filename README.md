@@ -10,6 +10,12 @@ adapters and the required two weekly validation cycles are completed. See the
 No authority is described as live-collection verified until a complete real
 bootstrap has been persisted and compared with its dated walkthrough.
 
+Barnet has an explicit fail-closed qualification command for an inclusive
+30-day bootstrap plus older-open and active-appeal discovery. Its typed receipt
+also records two future weekly refreshes as pending. See the
+[Barnet qualification design](docs/authorities/barnet-qualification-design.md)
+and the acceptance ledger for the latest live result.
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) 0.12.15 or newer
