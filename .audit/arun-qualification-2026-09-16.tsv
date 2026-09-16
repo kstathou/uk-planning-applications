@@ -1,0 +1,3 @@
+ts	phase	decision	why	evidence	result
+2026-09-16T08:40:39Z	frame	require every requested receipt invariant and repository gate before live-ready promotion	the task defines a fail-closed qualification, and same-day weekly cycles cannot satisfy operational qualification	docs/plan.md; docs/pilot-acceptance.md	live bootstrap may pass today; two later weekly cycles remain pending
+2026-09-16T08:40:39Z	design	route the work through Figure It Out, Architect, TDD, and Show Me Your Work	the adapter, portal state, persistence, and typed receipt cross several boundaries	.audit/arun-qualification-2026-09-16.todo.md	grounding in progress
