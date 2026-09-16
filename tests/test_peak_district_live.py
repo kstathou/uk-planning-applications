@@ -17,9 +17,11 @@ from yimby.domain import (
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
+    SourceId,
+    SourceReference,
     TransportMode,
 )
-from yimby.transport import PortalRequest, RequestMethod
+from yimby.transport import PortalRequest, RequestMethod, SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -143,6 +145,147 @@ def _result_page(
     <span>Total record(s): {reported}</span>
     <div id="generalSearchPagination" data-url="/AssureLive/ES/Presentation/Planning/OnlinePlanning/SearchResultsForPagination">{links}</div>
     """.encode()
+
+
+def _detail(
+    reference: str = "NP/DDD/0926/0909",
+    *,
+    comments_tab: bool = False,
+    documents_route: str = "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
+) -> bytes:
+    comments = (
+        '<li id="Comments_tab"><a href="#tabComments">Comments</a></li>'
+        if comments_tab
+        else ""
+    )
+    return f"""
+    <span id="spnApplicationId">{reference}</span>
+    <input id="applicationReference" value="{reference}">
+    <a id="applicationStatusHelpTextHeader">REGISTERED: Valid</a>
+    <div class="row btspace tpspace"><div class="col-xs-12 padding-0">
+      <div class="col-xs-12"><label>Listed Building Consent</label></div>
+      <div class="col-xs-12"><label>Short proposal</label></div>
+      <div class="col-xs-12"><label id="applicationDisplayAddress">1 Moor Road\nBakewell</label></div>
+    </div></div>
+    <ul id="myTab"><li id="Overview_tab"></li><li id="Documents_tab"></li>{comments}</ul>
+    <div id="tabOverviewMain">
+      <table class="boxBorderLightGrey">
+        <tr><td><label>Proposal</label></td><td><label>Repair listed building</label></td></tr>
+        <tr><td><label>Applicant</label></td><td><label>Applicant One</label></td></tr>
+        <tr><td><label>Agent/Company</label></td><td><label>Agent One</label></td></tr>
+        <tr><td><label>Planning officer</label></td><td><label>Officer One</label></td></tr>
+        <tr><td><label>Registered</label></td><td><label>15 September 2026</label></td></tr>
+        <tr><td><label>Decided</label></td><td><label></label></td></tr>
+        <tr><td><label>Parish</label></td><td><label>Bakewell</label></td></tr>
+      </table>
+    </div>
+    <div id="divDisplayDocumentsUrl" data-url="{documents_route}"></div>
+    <div id="divDisplayCommentsUrl" data-url="/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetPlanningComments"></div>
+    """.encode()
+
+
+def _documents_page(
+    documents: tuple[tuple[str, str, str, str], ...],
+    *,
+    reported: int,
+    page: int = 0,
+    page_size: int = 2,
+) -> bytes:
+    if reported == 0:
+        return b'<div id="tabDocumentsMain"><form id="frmDocumentsMain"><strong>No record(s) found</strong></form></div>'
+    rows = "".join(
+        f"""
+        <div class="row btspace">
+          <div class="col-xs-2">{published}</div>
+          <div class="col-xs-3"><a href="{url}"><u>{title}</u></a></div>
+          <div class="col-xs-3"></div>
+          <div class="col-xs-4">{document_type}</div>
+        </div>
+        """
+        for title, url, published, document_type in documents
+    )
+    pages = (reported + page_size - 1) // page_size
+    links = "".join(
+        f'<a onclick="PagingClick(\'{index}\')">{index + 1}</a>'
+        for index in range(pages)
+    )
+    return f"""
+    <div id="tabDocumentsMain"><form id="frmDocumentsMain">
+      <div id="divOnlinePlanningDocuments">
+        <div class="row btspace"><strong>Received Date</strong></div>
+        {rows}
+      </div>
+      <input name="DocumentCount" value="{reported}">
+      <input name="PagingParameters.CurrentPageIndex" value="{page}">
+      <input name="PagingParameters.PageSize" value="{page_size}">
+      <input name="PagingParameters.TotalRecords" value="{reported}">
+    </form>
+    <span>Total record(s): {reported}</span>
+    <ul class="pagination">{links}</ul>
+    </div>
+    """.encode()
+
+
+class _PeakDetailMock:
+    documents = (
+        (
+            "Application Form.pdf",
+            "/AssureLive/ES/Presentation/Planning/OnlineDisplayDocument/DisplaySearchDocument/Application-Form.pdf?applicationNumber=NP%2FDDD%2F0926%2F0909&FileName=Application-Form.pdf&fileType=.pdf&aspectGuid=one",
+            "14 September 2026",
+            "Application Forms",
+        ),
+        (
+            "Design Statement.pdf",
+            "/AssureLive/ES/Presentation/Planning/OnlineDisplayDocument/DisplaySearchDocument/Design-Statement.pdf?applicationNumber=NP%2FDDD%2F0926%2F0909&FileName=Design-Statement.pdf&fileType=.pdf&aspectGuid=two",
+            "14 September 2026",
+            "Design and Access Statement",
+        ),
+        (
+            "Site Plan.pdf",
+            "/AssureLive/ES/Presentation/Planning/OnlineDisplayDocument/DisplaySearchDocument/Site-Plan.pdf?applicationNumber=NP%2FDDD%2F0926%2F0909&FileName=Site-Plan.pdf&fileType=.pdf&aspectGuid=three",
+            "15 September 2026",
+            "Plans and Drawings Planning Application",
+        ),
+    )
+
+    def __init__(
+        self,
+        *,
+        mismatch_detail: bool = False,
+        empty_documents: bool = False,
+        documents_fail: bool = False,
+        documents_route: str = "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
+    ) -> None:
+        self.mismatch_detail = mismatch_detail
+        self.empty_documents = empty_documents
+        self.documents_fail = documents_fail
+        self.documents_route = documents_route
+
+    def __call__(self, request: PortalRequest) -> bytes:
+        url = str(request.url)
+        if "OnlinePlanningOverview" in url:
+            return _detail(
+                "WRONG/1" if self.mismatch_detail else "NP/DDD/0926/0909",
+                documents_route=self.documents_route,
+            )
+        if "GetOnlineDocuments" in url:
+            if self.documents_fail:
+                raise SourceUnavailableError(url)
+            query = parse_qs(urlsplit(url).query)
+            assert query["applicationNumber"] == ["NP/DDD/0926/0909"]
+            assert query["IsDatePublishSortedDescending"] == ["false"]
+            assert query["pageSize"] == ["10"]
+            page = int(query["currentPageIndex"][0])
+            if self.empty_documents:
+                return _documents_page((), reported=0)
+            chunks = (self.documents[:2], self.documents[2:])
+            return _documents_page(
+                chunks[page],
+                reported=3,
+                page=page,
+                page_size=2,
+            )
+        raise AssertionError(url)
 
 
 class _PeakAssureMock:
@@ -449,3 +592,115 @@ def test_peak_district_fails_closed_on_form_and_count_drift() -> None:
             )
         ).query
     )["applicationNumber"] == ["NP/DDD/0926/0909"]
+
+
+def _reference() -> SourceReference:
+    return SourceReference(
+        source_id=peak.LEGACY_SOURCE,
+        reference="NP/DDD/0926/0909",
+        locator=(
+            f"{peak._ONLINE_BASE}/OnlinePlanningOverview"
+            "?applicationNumber=NP%2FDDD%2F0926%2F0909&guid=session"
+        ),
+    )
+
+
+def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
+    adapter = peak.PeakDistrictAdapter()
+    session = _Session(_PeakDetailMock())
+
+    snapshot = asyncio.run(adapter.fetch(session, _reference()))
+    normalised = adapter.normalise(snapshot)
+
+    assert snapshot.payload.park_reference == "NP/DDD/0926/0909"
+    assert snapshot.payload.record_type == "Listed Building Consent"
+    assert snapshot.payload.proposal_summary == "Repair listed building"
+    assert snapshot.payload.case_status == "REGISTERED: Valid"
+    assert snapshot.payload.parish == "Bakewell"
+    assert snapshot.payload.development_address == "1 Moor Road Bakewell"
+    assert snapshot.payload.validated_date == peak.date(2026, 9, 15)
+    assert [document.title for document in snapshot.payload.documents] == [
+        "Application Form.pdf",
+        "Design Statement.pdf",
+        "Site Plan.pdf",
+    ]
+    assert [document.document_type for document in snapshot.payload.documents] == [
+        "Application Forms",
+        "Design and Access Statement",
+        "Plans and Drawings Planning Application",
+    ]
+    assert all(
+        document.published_date is not None
+        for document in snapshot.payload.documents
+    )
+    assert snapshot.completeness.documents.kind == "complete"
+    assert snapshot.completeness.comments.kind == "unavailable"
+    assert len(snapshot.evidence) == 3
+    assert len(session.requests) == 3
+    assert all(
+        "OnlineDisplayDocument" not in str(request.url)
+        for request in session.requests
+    )
+    assert [document.title for document in normalised.documents] == [
+        "Application Form.pdf",
+        "Design Statement.pdf",
+        "Site Plan.pdf",
+    ]
+    assert normalised.metadata.officer_name == "Officer One"
+    assert normalised.metadata.published_parties == (
+        "Applicant One",
+        "Agent One",
+    )
+    assert normalised.metadata.validated_date == peak.date(2026, 9, 15)
+
+
+def test_peak_district_classifies_empty_and_failed_document_sections() -> None:
+    adapter = peak.PeakDistrictAdapter()
+    empty = asyncio.run(
+        adapter.fetch(_Session(_PeakDetailMock(empty_documents=True)), _reference())
+    )
+    assert empty.payload.documents == ()
+    assert empty.completeness.documents.kind == "empty"
+
+    failed = asyncio.run(
+        adapter.fetch(_Session(_PeakDetailMock(documents_fail=True)), _reference())
+    )
+    assert failed.payload.documents == ()
+    assert failed.completeness.documents.kind == "failed"
+
+    drifted = asyncio.run(
+        adapter.fetch(
+            _Session(_PeakDetailMock(documents_route="/unexpected")),
+            _reference(),
+        )
+    )
+    assert drifted.completeness.documents.kind == "failed"
+
+
+def test_peak_district_detail_identity_and_routing_fail_closed() -> None:
+    adapter = peak.PeakDistrictAdapter()
+    with pytest.raises(peak.PeakDistrictReferenceMismatchError):
+        asyncio.run(
+            adapter.fetch(_Session(_PeakDetailMock(mismatch_detail=True)), _reference())
+        )
+    with pytest.raises(peak.PeakDistrictRoutingError):
+        asyncio.run(
+            adapter.fetch(
+                _Session(_PeakDetailMock()),
+                _reference().model_copy(update={"source_id": SourceId("other")}),
+            )
+        )
+    with pytest.raises(peak.PeakDistrictRoutingError):
+        asyncio.run(
+            adapter.fetch(
+                _Session(_PeakDetailMock()),
+                _reference().model_copy(update={"locator": None}),
+            )
+        )
+    with pytest.raises(peak.PeakDistrictReferenceMismatchError):
+        asyncio.run(
+            adapter.fetch(
+                _Session(_PeakDetailMock()),
+                _reference().model_copy(update={"reference": "WRONG/1"}),
+            )
+        )
