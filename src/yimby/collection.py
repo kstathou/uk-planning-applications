@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit, urlunsplit
 
 from yimby.domain import (
     AuthorityId,
@@ -34,6 +36,7 @@ class _RunContext:
     started: float
     storage_before: int
     active_reference: SourceReference | None = None
+    attachment_urls: list[str] = field(default_factory=list)
 
 
 class Collector:
@@ -63,7 +66,6 @@ class Collector:
         )
         checkpoint = self._store.discovery_state(authority_id).checkpoint
         application_ids = []
-        attachment_urls: set[str] = set()
         processed: set[tuple[str, str]] = set()
 
         async def collect_reference(reference: SourceReference) -> None:
@@ -72,7 +74,7 @@ class Collector:
                 return
             context.active_reference = reference
             collected = await package.collect(session, reference)
-            attachment_urls.update(
+            context.attachment_urls.extend(
                 str(document.url) for document in collected.normalised.documents
             )
             application_ids.append(self._store.commit_observation(run_id, collected))
@@ -104,7 +106,7 @@ class Collector:
                 error,
             )
             raise
-        retrieved_attachment_urls = attachment_urls.intersection(session.requested_urls)
+        attachment_body_requests = self._attachment_body_requests(context)
         self._store.finish_run(
             run_id,
             authority_id,
@@ -117,9 +119,7 @@ class Collector:
         return CollectionReport(
             applications=tuple(application_ids),
             requested_urls=session.requested_urls,
-            attachment_body_requests=(
-                session.attachment_body_requests + len(retrieved_attachment_urls)
-            ),
+            attachment_body_requests=attachment_body_requests,
         )
 
     def _finish_failed_run(
@@ -153,14 +153,32 @@ class Collector:
             ),
         )
 
-    def _metrics(self, context: _RunContext) -> RunMetrics:
+    def _metrics(
+        self,
+        context: _RunContext,
+    ) -> RunMetrics:
         return RunMetrics(
             request_count=len(context.session.requested_urls),
             transferred_bytes=context.session.transferred_bytes,
             duration_ms=max(0, round((monotonic() - context.started) * 1000)),
             browser_time_ms=context.session.browser_time_ms,
+            attachment_body_requests=self._attachment_body_requests(context),
             storage_growth_bytes=max(
                 0,
                 self._store.storage_bytes() - context.storage_before,
             ),
         )
+
+    @staticmethod
+    def _attachment_body_requests(context: _RunContext) -> int:
+        published = Counter(_transport_url(url) for url in context.attachment_urls)
+        requested = Counter(
+            _transport_url(url) for url in context.session.requested_urls
+        )
+        retrieved = sum(min(count, requested[url]) for url, count in published.items())
+        return context.session.attachment_body_requests + retrieved
+
+
+def _transport_url(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))

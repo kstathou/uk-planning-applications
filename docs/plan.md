@@ -62,6 +62,17 @@ reported totals and duplicate source rows, record source freshness and covered
 periods, and fail closed when the machine-readable source cannot prove the
 required 30-day, older-open, or incremental-refresh inventory.
 
+### Arun bootstrap status
+
+Arun completed a persisted live bootstrap on 16 September 2026 for the
+inclusive 30-day window plus older open applications: 60 exact date queries
+reconciled to 648 unique portal records, including three source-published
+test/dummy records. The run retained document metadata and source evidence,
+reverified exact result membership from 73 search captures, and completed an
+immediate zero-network rerun. This is bootstrap evidence only. The approximately
+7- and 14-day refresh cycles remain pending, so Arun stays discovery-only and is
+not operationally qualified.
+
 ### Required investigation for every authority
 
 Before writing its scraper:
