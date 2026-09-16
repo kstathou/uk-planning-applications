@@ -1220,6 +1220,37 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             active_page,
         )
 
+    legacy_shuffled = legacy_active.model_copy(
+        update={
+            "next_page": 3,
+            "query_row_count": 2,
+            "seen_references": ("B", "A"),
+        }
+    )
+    restored_legacy = barnet_adapter._restore_query_progress(
+        legacy_shuffled,
+        active_page.query_key,
+        (
+            barnet_adapter._parse_search_page(
+                _showing_result_page(
+                    (("A", "KEY-A"),),
+                    ("Showing 1-1 of 2",),
+                )
+            ),
+            barnet_adapter._parse_search_page(
+                _showing_result_page(
+                    (("B", "KEY-B"),),
+                    ("Showing 2-2 of 2",),
+                    current_page="2",
+                )
+            ),
+        ),
+    )
+    assert restored_legacy.active_query_references == ("A", "B")
+    assert restored_legacy.seen_references == ("A", "B")
+    assert restored_legacy.seen_locators == ("KEY-A", "KEY-B")
+    assert restored_legacy.tracks_locators
+
     resumable_first_page = barnet_adapter._parse_search_page(
         _showing_result_page(
             (("A", "KEY"),),
