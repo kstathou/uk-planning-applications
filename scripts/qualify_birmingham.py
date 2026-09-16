@@ -11,7 +11,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
@@ -39,6 +39,7 @@ _AUTHORITY_ID = AuthorityId("birmingham")
 _RECEIPT_NAME = "birmingham-qualification-v1.json"
 _PAGE_SIZE = 25
 _MAX_PAGES = 1000
+_RECENCY_MAX_LAG_DAYS = 1
 _LAYER_ID = 12
 _LAYER_MAX_RECORD_COUNT = 1000
 _OBSERVED_RECORD_COUNT = 254_064
@@ -187,7 +188,6 @@ class SectionGapV1(FrozenModel):
     """A required child section absent from the ArcGIS contract."""
 
     status: Literal["not-exposed"] = "not-exposed"
-    item_count: Literal[0] = 0
 
 
 class SectionGapsV1(FrozenModel):
@@ -762,9 +762,12 @@ async def _recent_facts(
             or not isinstance(object_id, int)
         ):
             _fail_invariant("invalid-recent-feature")
+        received_date = _epoch_date(attributes.get("Received"))
+        if not _QUALIFICATION_START <= received_date <= _QUALIFICATION_END:
+            _fail_invariant("recent-feature-outside-window")
         references.append(reference)
         object_ids.append(object_id)
-        received.append((_epoch_date(attributes.get("Received")), reference))
+        received.append((received_date, reference))
     coherent = (
         reported_count == len(recent) == len(set(references)) == len(set(object_ids))
         and terminal
@@ -776,6 +779,9 @@ async def _recent_facts(
     latest_feature_date, latest_reference = max(received)
     if latest_feature_date != latest_received:
         _fail_invariant("latest-record-mismatch")
+    recency_threshold = _QUALIFICATION_END - timedelta(days=_RECENCY_MAX_LAG_DAYS)
+    if latest_feature_date < recency_threshold:
+        _fail_invariant("latest-record-not-current")
     return _RecentFacts(
         reported_count=reported_count,
         feature_count=len(recent),
@@ -888,6 +894,8 @@ async def _qualify(
     store: SqliteStore,
     session_factory: SessionFactory,
     now: Clock,
+    *,
+    verify_replay: bool = True,
 ) -> BirminghamBlockedQualificationReceiptV1:
     evidence_store = EvidenceStore(config.data_dir / "evidence")
     inventory: list[QueryObservationV1] = []
@@ -917,7 +925,7 @@ async def _qualify(
     ):
         _fail_invariant("registry-readiness-changed")
     gap = SectionGapV1()
-    return BirminghamBlockedQualificationReceiptV1(
+    receipt = BirminghamBlockedQualificationReceiptV1(
         created_at=now(),
         scope=config.scope,
         source_freshness=SourceFreshnessV1(
@@ -975,6 +983,18 @@ async def _qualify(
             PendingWeeklyCycleV1(ordinal=2, required_offset_days=14),
         ),
     )
+    if verify_replay:
+        replay_session = _ReplaySession(config.data_dir, receipt.query_inventory)
+        replayed = await _qualify(
+            config,
+            store,
+            lambda: replay_session,
+            lambda: receipt.created_at,
+            verify_replay=False,
+        )
+        if not replay_session.complete or replayed != receipt:
+            _fail_invariant("offline-replay-mismatch")
+    return receipt
 
 
 def replay_persisted_state(data_dir: Path) -> OfflineReplayV1:
@@ -995,6 +1015,7 @@ def replay_persisted_state(data_dir: Path) -> OfflineReplayV1:
                 store,
                 lambda: session,
                 lambda: receipt.created_at,
+                verify_replay=False,
             )
         )
         if not session.complete or replayed != receipt:
