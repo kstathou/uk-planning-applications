@@ -432,6 +432,56 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
     assert terminal_session.requests == []
 
 
+def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
+    adapter = arun.ArunAdapter()
+    window = DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+
+    async def first_batch() -> DiscoveryBatch[arun.ArunCheckpointV1]:
+        batches = cast(
+            "AsyncGenerator[DiscoveryBatch[arun.ArunCheckpointV1]]",
+            adapter.discover(_Session(_DiscoveryResponder()), window, None),
+        )
+        first = await anext(batches)
+        await batches.aclose()
+        return first
+
+    first = asyncio.run(first_batch())
+
+    def changed(request: PortalRequest) -> bytes:
+        if request.method == RequestMethod.GET:
+            return _search_form()
+        values = {field.name: field.value for field in request.form}
+        if values.get("showall") == "showall":
+            return _complete_results(("NEW/1", "BR/1/26/PL", "BR/2/26/PL"))
+        if values.get("receivedFrom") == "18-08-26":
+            fields = "".join(
+                f'<input type="hidden" name="{name}" value="{value}">'
+                for name, value in values.items()
+                if name != "action"
+            )
+            return _partial_results(fields).replace(
+                b"there are 2 in total",
+                b"there are 3 in total",
+            ).replace(b"BR/1/26/PL", b"NEW/1")
+        return b"No applications found for entered search criteria"
+
+    resumed = asyncio.run(
+        _batches(adapter, _Session(changed), window, first.next_checkpoint)
+    )
+
+    assert [
+        reference.reference for batch in resumed for reference in batch.references
+    ] == ["NEW/1", "BR/2/26/PL"]
+    terminal = resumed[-1].next_checkpoint.cursor
+    assert isinstance(terminal, arun.ArunLiveCursor)
+    assert isinstance(terminal.progress, arun.ArunComplete)
+    assert terminal.progress.completed[0].reported_count == 3
+
+
 def test_arun_live_checkpoint_rejects_a_different_scope() -> None:
     adapter = arun.ArunAdapter()
     window = DiscoveryWindow(
