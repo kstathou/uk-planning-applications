@@ -696,6 +696,14 @@ def test_cheshire_total_or_next_link_cannot_claim_weekly_terminality(
     assert "weekly-list-terminality-unproven" in {
         blocker.code for blocker in receipt.blockers
     }
+    assert next(
+        blocker.explanation
+        for blocker in receipt.blockers
+        if blocker.code == "weekly-list-terminality-unproven"
+    ) == (
+        "the historical weekly page does not publish an internally consistent "
+        "terminal boundary"
+    )
     assert (
         next(
             check.status
