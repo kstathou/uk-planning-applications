@@ -296,7 +296,10 @@ def _camden_result(reference: str = "2026/2706/L", locator: str = "681726") -> b
 
 
 def _camden_detail(
-    reference: str = "2026/2706/L", *, coordinates: bool = True
+    reference: str = "2026/2706/L",
+    *,
+    coordinates: bool = True,
+    proposal: str = "Repair listed townhouse",
 ) -> bytes:
     coordinate_rows = (
         "<tr><th>Easting</th><td>530748</td></tr>"
@@ -310,7 +313,7 @@ def _camden_detail(
       <tr><th>Address</th><td>1 Camden Square</td></tr>
       <tr><th>Application Type</th><td>Listed Building Consent</td></tr>
       <tr><th>Development Type</th><td>Alterations</td></tr>
-      <tr><th>Proposal</th><td>Repair listed townhouse</td></tr>
+      <tr><th>Proposal</th><td>{proposal}</td></tr>
       <tr><th>Current Status</th><td>Decision Issued</td></tr>
       <tr><th>Applicant</th><td>Applicant Three</td></tr>
       <tr><th>Agent</th><td>Agent Three</td></tr>
@@ -343,11 +346,13 @@ class _CamdenMock:
         *,
         mismatch_detail: bool = False,
         missing_coordinates: bool = False,
+        empty_fields: bool = False,
         document_failure: bool = False,
         document_reported: int = 2,
     ) -> None:
         self.mismatch_detail = mismatch_detail
         self.missing_coordinates = missing_coordinates
+        self.empty_fields = empty_fields
         self.document_failure = document_failure
         self.document_reported = document_reported
 
@@ -375,12 +380,15 @@ class _CamdenMock:
             return _camden_detail(
                 "WRONG/1" if self.mismatch_detail else "2026/2706/L",
                 coordinates=not self.missing_coordinates,
+                proposal="" if self.empty_fields else "Repair listed townhouse",
             )
         if url.startswith(camden.DOCUMENT_BASE):
             query = parse_qs(urlsplit(url).query)["q"]
             assert query == ['recContainer:"2026/2706/L"']
             if self.document_failure:
                 raise SourceUnavailableError("document service unavailable")
+            if self.empty_fields:
+                return b"There are no public documents for this application"
             return _camden_documents(reported=self.document_reported)
         raise AssertionError(url)
 
@@ -822,6 +830,9 @@ def test_camden_search_and_parser_boundaries() -> None:
         )
     assert camden._mapping_value({"second": "value"}, "first", "second") == "value"
     assert camden._mapping_value({}, "missing") is None
+    assert camden._field_allowing_empty({"proposal": ""}, "proposal") == ""
+    with pytest.raises(camden.CamdenParseError, match="detail missing"):
+        camden._field_allowing_empty({}, "missing")
     with pytest.raises(camden.CamdenParseError, match="detail missing"):
         camden._required_field({}, "missing")
     with pytest.raises(camden.CamdenParseError, match="integer easting"):
@@ -882,6 +893,25 @@ def test_camden_official_detail_and_document_shapes() -> None:
     assert snapshot.payload.grid_easting is None
     assert snapshot.payload.grid_northing is None
     assert camden.CamdenAdapter().normalise(snapshot).metadata.location is None
+
+
+def test_camden_preserves_empty_proposal_and_explicit_empty_documents() -> None:
+    reference = SourceReference(
+        source_id=camden.SEARCH_SOURCE,
+        reference="2026/2706/L",
+        locator="681726",
+    )
+
+    snapshot = asyncio.run(
+        camden.CamdenAdapter().fetch(
+            _Session(_CamdenMock(empty_fields=True)),
+            reference,
+        )
+    )
+
+    assert snapshot.payload.proposal == ""
+    assert snapshot.completeness.documents.kind == "empty"
+    assert camden.CamdenAdapter().normalise(snapshot).proposal == ""
 
 
 def test_camden_native_shape_and_parser_fail_closed_branches() -> None:

@@ -283,7 +283,7 @@ class CamdenAdapter:
         grid_easting, grid_northing = _coordinate_pair(fields)
         payload = CamdenApplicationV1(
             public_reference=published,
-            proposal=_required_field(fields, "proposal", "description"),
+            proposal=_field_allowing_empty(fields, "proposal", "description"),
             current_status=_required_field(fields, "current status", "status"),
             grid_easting=grid_easting,
             grid_northing=grid_northing,
@@ -508,6 +508,10 @@ def _reported_document_count(soup: BeautifulSoup) -> int:
             value = cells[-1].get_text(" ", strip=True)
             if label == "records" and value.isdigit():
                 return int(value)
+    if "there are no public documents for this application" in _normalise_label(
+        soup.get_text(" ", strip=True)
+    ):
+        return 0
     match = re.search(
         r"(?:reported|found|total)\s+(\d+)\s+(?:documents?|records?)",
         soup.get_text(" ", strip=True),
@@ -633,6 +637,14 @@ def _mapping_value(values: dict[str, str], *names: str) -> str | None:
 def _optional_field(fields: dict[str, str], *names: str) -> str | None:
     value = _mapping_value(fields, *names)
     return None if value is None else unescape(value)
+
+
+def _field_allowing_empty(fields: dict[str, str], *names: str) -> str:
+    for name in names:
+        value = fields.get(_normalise_label(name))
+        if value is not None:
+            return unescape(value)
+    return _raise_parse(f"detail {'/'.join(names)}")
 
 
 def _required_field(fields: dict[str, str], *names: str) -> str:
