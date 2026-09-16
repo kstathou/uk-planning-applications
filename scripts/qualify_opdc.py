@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -34,6 +35,7 @@ from yimby.domain import (
     LiveReadiness,
     LiveTransportKind,
     QualificationSnapshot,
+    RetainedNativeRecord,
     RunStatus,
     SourceReference,
 )
@@ -46,6 +48,7 @@ from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("opdc")
 _RECEIPT_NAME = "opdc-qualification-v1.json"
+_PROOF_NAME = "opdc-qualification-proof-v1.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -55,6 +58,24 @@ _SCOPE_MISMATCH = "scope-mismatch"
 _LIVE_PAGE = "live"
 _ATTACHMENT_PATH = "/api/application/document/opdc/"
 _APPLICATION_EVIDENCE_COUNT = 3
+_COMMITMENT_CANONICALIZATION = "sha256-canonical-json-v1"
+_CHECK_NAMES = (
+    "terminal-checkpoint",
+    "reference-application-agreement",
+    "pending-retries",
+    "failed-sections",
+    "attachment-policy",
+    "database-integrity",
+    "authority-readiness",
+    "evidence-paths",
+    "evidence-integrity",
+    "application-evidence",
+    "application-count",
+    "unmapped-records",
+    "idempotent-rerun",
+    "terminal-rerun-requests",
+    "run-statuses",
+)
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -127,8 +148,33 @@ class QualificationQuery(FrozenModel):
     result_total: int = Field(ge=0)
 
 
-class OpdcQualificationReceiptV1(FrozenModel):
-    """Versioned success proof for one complete OPDC bootstrap."""
+class QualificationEvidenceCommitment(FrozenModel):
+    """Sanitized aggregate and digest commitment for retained evidence."""
+
+    canonicalization: Literal["sha256-canonical-json-v1"]
+    applications: int = Field(ge=1)
+    captures_per_application: Literal[3]
+    capture_associations: int = Field(ge=1)
+    content_digests: int = Field(ge=1)
+    missing_paths: Literal[0]
+    invalid_paths: Literal[0]
+    application_capture_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    content_digest_set_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class _EvidenceCaptureCommitmentInput(FrozenModel):
+    digest: str
+    source_url: str
+    media_type: str
+
+
+class _ApplicationCaptureCommitmentInput(FrozenModel):
+    identity: QualificationIdentity
+    captures: tuple[_EvidenceCaptureCommitmentInput, ...]
+
+
+class _OpdcQualificationReceiptV1(FrozenModel):
+    """Fields shared by private and sanitized OPDC qualification receipts."""
 
     schema_version: Literal[1] = 1
     authority_id: Literal["opdc"] = "opdc"
@@ -136,11 +182,21 @@ class OpdcQualificationReceiptV1(FrozenModel):
     created_at: datetime
     scope: QualificationScope
     query_inventory: tuple[QualificationQuery, ...]
-    identities: tuple[QualificationIdentity, ...]
     counts: QualificationCounts
     costs: QualificationCosts
     run_statuses: tuple[RunStatus, ...]
     checks: tuple[QualificationCheck, ...]
+    evidence_commitment: QualificationEvidenceCommitment
+
+
+class OpdcSanitizedQualificationReceiptV1(_OpdcQualificationReceiptV1):
+    """Committed receipt schema without the source identity inventory."""
+
+
+class OpdcQualificationReceiptV1(_OpdcQualificationReceiptV1):
+    """Versioned local success proof for one complete OPDC bootstrap."""
+
+    identities: tuple[QualificationIdentity, ...] = Field(min_length=1)
 
 
 class _Config(FrozenModel):
@@ -301,12 +357,12 @@ def _scope_compatible(store: SqliteStore, scope: QualificationScope) -> bool:
     return checkpoint.live_scope == _expected_scope(scope)
 
 
-def _application_evidence(
+def _qualified_records(
     store: SqliteStore,
     checkpoint: OpdcCheckpointV1 | None,
-) -> bool:
+) -> tuple[RetainedNativeRecord, ...] | None:
     if checkpoint is None:
-        return False
+        return None
     expected_identities = set(_checkpoint_identities(checkpoint))
     try:
         records = tuple(
@@ -315,21 +371,101 @@ def _application_evidence(
             if record.authority_id == _AUTHORITY_ID
         )
     except (EvidenceIntegrityError, KeyError):
-        return False
+        return None
     if {_identity(record.reference) for record in records} != expected_identities:
-        return False
+        return None
     for record in records:
         locator = record.reference.locator
         captures = record.evidence
         if locator is None or len(captures) != _APPLICATION_EVIDENCE_COUNT:
-            return False
+            return None
         root = f"{API_BASE_URL}/api/application/{locator}"
         actual_urls = tuple(str(capture.url) for capture in captures)
         if actual_urls != (root, f"{root}/document", f"{root}/responses") or any(
             _ATTACHMENT_PATH in urlsplit(url).path.casefold() for url in actual_urls
         ):
-            return False
-    return True
+            return None
+    return records
+
+
+def _application_evidence(
+    store: SqliteStore,
+    checkpoint: OpdcCheckpointV1 | None,
+) -> bool:
+    return _qualified_records(store, checkpoint) is not None
+
+
+def _sha256_commitment(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return f"sha256:{sha256(payload).hexdigest()}"
+
+
+def _evidence_commitment(
+    store: SqliteStore,
+    checkpoint: OpdcCheckpointV1 | None,
+) -> QualificationEvidenceCommitment | None:
+    records = _qualified_records(store, checkpoint)
+    if records is None:
+        return None
+    applications = tuple(
+        sorted(
+            (
+                _ApplicationCaptureCommitmentInput(
+                    identity=QualificationIdentity(
+                        reference=record.reference.reference,
+                        locator=record.reference.locator or "",
+                    ),
+                    captures=tuple(
+                        _EvidenceCaptureCommitmentInput(
+                            digest=str(capture.digest),
+                            source_url=str(capture.url),
+                            media_type=capture.media_type,
+                        )
+                        for capture in record.evidence
+                    ),
+                )
+                for record in records
+            ),
+            key=lambda application: (
+                application.identity.source_id,
+                application.identity.reference,
+                application.identity.locator,
+            ),
+        )
+    )
+    content_digests = tuple(
+        sorted(
+            {
+                capture.digest
+                for application in applications
+                for capture in application.captures
+            }
+        )
+    )
+    missing_paths = store.missing_evidence_paths()
+    invalid_paths = store.invalid_evidence_paths()
+    if missing_paths or invalid_paths:
+        return None
+    return QualificationEvidenceCommitment(
+        canonicalization=_COMMITMENT_CANONICALIZATION,
+        applications=len(applications),
+        captures_per_application=_APPLICATION_EVIDENCE_COUNT,
+        capture_associations=sum(
+            len(application.captures) for application in applications
+        ),
+        content_digests=len(content_digests),
+        missing_paths=0,
+        invalid_paths=0,
+        application_capture_sha256=_sha256_commitment(
+            [application.model_dump(mode="json") for application in applications]
+        ),
+        content_digest_set_sha256=_sha256_commitment(content_digests),
+    )
 
 
 def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
@@ -466,6 +602,9 @@ async def _qualify(
     terminal = _terminal_checkpoint(store, config.scope)
     if terminal is None:
         raise QualificationFailedError(("terminal-checkpoint",))
+    evidence_commitment = _evidence_commitment(store, terminal)
+    if evidence_commitment is None:
+        raise QualificationFailedError(("application-evidence",))
     identities = tuple(
         QualificationIdentity(
             reference=identity.reference,
@@ -488,14 +627,135 @@ async def _qualify(
         ),
         run_statuses=run_statuses,
         checks=final_checks,
+        evidence_commitment=evidence_commitment,
     )
+
+
+def _temporary_receipt_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}.tmp")
+
+
+def _receipt_matches_store(
+    store: SqliteStore,
+    config: _Config,
+    receipt: OpdcQualificationReceiptV1,
+    terminal: OpdcCheckpointV1,
+    evidence_commitment: QualificationEvidenceCommitment,
+) -> bool:
+    snapshot = store.qualification_snapshot(_AUTHORITY_ID)
+    expected_queries = tuple(
+        QualificationQuery(query=item.query, result_total=item.result_total)
+        for item in terminal.completed_queries
+    )
+    expected_identities = tuple(
+        QualificationIdentity(
+            reference=identity.reference,
+            locator=identity.locator,
+        )
+        for identity in terminal.seen_references
+    )
+    current_checks = _base_checks(
+        store,
+        snapshot,
+        config.scope,
+        receipt.costs.initial,
+    )
+    return (
+        receipt.scope == config.scope
+        and receipt.query_inventory == expected_queries
+        and receipt.identities == expected_identities
+        and receipt.counts == _counts(snapshot)
+        and receipt.costs.initial.request_count > 0
+        and receipt.costs.initial.transferred_bytes > 0
+        and receipt.run_statuses == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED)
+        and store.run_statuses()[-2:] == receipt.run_statuses
+        and tuple(check.name for check in receipt.checks) == _CHECK_NAMES
+        and all(check.ok for check in receipt.checks)
+        and all(check.ok for check in current_checks)
+        and receipt.evidence_commitment == evidence_commitment
+    )
+
+
+def _read_receipt(
+    path: Path,
+    store: SqliteStore,
+    config: _Config,
+) -> OpdcQualificationReceiptV1:
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise QualificationFailedError(("bootstrap-provenance",)) from error
+    terminal = _terminal_checkpoint(store, config.scope)
+    evidence_commitment = _evidence_commitment(store, terminal)
+    if not isinstance(payload, dict) or terminal is None or evidence_commitment is None:
+        raise QualificationFailedError(("bootstrap-provenance",))
+    payload.setdefault(
+        "evidence_commitment",
+        evidence_commitment.model_dump(mode="json"),
+    )
+    try:
+        receipt = OpdcQualificationReceiptV1.model_validate(payload)
+    except ValueError as error:
+        raise QualificationFailedError(("bootstrap-provenance",)) from error
+    if not _receipt_matches_store(
+        store,
+        config,
+        receipt,
+        terminal,
+        evidence_commitment,
+    ):
+        raise QualificationFailedError(("bootstrap-provenance",))
+    return receipt
+
+
+def _has_acquisition_state(store: SqliteStore) -> bool:
+    state = store.discovery_state(_AUTHORITY_ID)
+    snapshot = store.qualification_snapshot(_AUTHORITY_ID)
+    return bool(
+        store.run_statuses()
+        or state.checkpoint is not None
+        or state.queued
+        or snapshot.applications
+        or snapshot.native_versions
+        or snapshot.application_versions
+        or snapshot.document_versions
+        or snapshot.comment_versions
+    )
+
+
+async def _qualify_or_recover(
+    store: SqliteStore,
+    config: _Config,
+    session_factory: SessionFactory,
+    now: Clock,
+) -> OpdcQualificationReceiptV1:
+    proof_path = config.data_dir / _PROOF_NAME
+    public_path = config.data_dir / _RECEIPT_NAME
+    candidates = (
+        proof_path,
+        _temporary_receipt_path(proof_path),
+        public_path,
+        _temporary_receipt_path(public_path),
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        receipt = _read_receipt(candidate, store, config)
+        if candidate != proof_path:
+            _write_receipt(proof_path, receipt)
+        return receipt
+    if _has_acquisition_state(store):
+        raise QualificationFailedError(("bootstrap-provenance",))
+    receipt = await _qualify(store, config, session_factory, now)
+    _write_receipt(proof_path, receipt)
+    return receipt
 
 
 def _write_receipt(
     path: Path,
     receipt: OpdcQualificationReceiptV1,
 ) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
+    temporary = _temporary_receipt_path(path)
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:
         output.write(payload)
@@ -542,7 +802,9 @@ def main(
             try:
                 if not _scope_compatible(store, config.scope):
                     raise QualificationConfigError(_SCOPE_MISMATCH)
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt = asyncio.run(
+                    _qualify_or_recover(store, config, session_factory, now)
+                )
                 _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
             finally:
                 store.close()
