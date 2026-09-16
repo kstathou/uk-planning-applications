@@ -1,3 +1,6 @@
 ts	phase	decision	why	evidence	result
 2026-09-16T08:40:39Z	frame	require every requested receipt invariant and repository gate before live-ready promotion	the task defines a fail-closed qualification, and same-day weekly cycles cannot satisfy operational qualification	docs/plan.md; docs/pilot-acceptance.md	live bootstrap may pass today; two later weekly cycles remain pending
 2026-09-16T08:40:39Z	design	route the work through Figure It Out, Architect, TDD, and Show Me Your Work	the adapter, portal state, persistence, and typed receipt cross several boundaries	.audit/arun-qualification-2026-09-16.todo.md	grounding in progress
+2026-09-16T09:12:47Z	grounding	accept the current test baseline	338 tests pass with 100 percent branch coverage	uv run pytest -q	baseline green
+2026-09-16T09:12:47Z	portal	use exact received-date partitions for older open applications	the official portal returns an explicit empty result for 1948-1999 and parish completeness is not stated	https://www1.arun.gov.uk/aplanning/OcellaWeb/planningSearch	60-query fail-closed plan
+2026-09-16T09:12:47Z	architecture	select the discriminated query-plan state machine	independent judge scored candidate 1 at 28 and candidate 2 at 27	.audit/arun-qualification-2026-09-16-design.md	implementation contract fixed
