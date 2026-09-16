@@ -38,7 +38,7 @@ from yimby.domain import (
     RunStatus,
 )
 from yimby.evidence import EvidenceStore
-from yimby.orchestration import ProcessLock
+from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
 from yimby.store import SqliteStore
 from yimby.transport import PortalSession
@@ -540,34 +540,37 @@ def main(
     receipt_path = config.data_dir / _RECEIPT_NAME
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
-            store = SqliteStore(
-                config.data_dir / "yimby.sqlite3",
-                EvidenceStore(config.data_dir / "evidence"),
-            )
             try:
-                receipt = asyncio.run(
-                    _qualify(store, config, active_session_factory, now)
+                store = SqliteStore(
+                    config.data_dir / "yimby.sqlite3",
+                    EvidenceStore(config.data_dir / "evidence"),
                 )
+                try:
+                    receipt = asyncio.run(
+                        _qualify(store, config, active_session_factory, now)
+                    )
+                finally:
+                    store.close()
                 _write_receipt(receipt_path, receipt)
-            finally:
-                store.close()
-    except QualificationFailedError as error:
-        blocked = _blocked_receipt(
-            config,
-            now,
-            "qualification-failed",
-            error.failed_checks,
-        )
-        _write_receipt(receipt_path, blocked)
-        return _error(
-            "qualification-failed",
-            1,
-            failed_checks=list(error.failed_checks),
-        )
-    except Exception as error:  # noqa: BLE001
-        blocked = _blocked_receipt(config, now, type(error).__name__)
-        _write_receipt(receipt_path, blocked)
-        return _error("runtime-failure", 1, exception=type(error).__name__)
+            except QualificationFailedError as error:
+                blocked = _blocked_receipt(
+                    config,
+                    now,
+                    "qualification-failed",
+                    error.failed_checks,
+                )
+                _write_receipt(receipt_path, blocked)
+                return _error(
+                    "qualification-failed",
+                    1,
+                    failed_checks=list(error.failed_checks),
+                )
+            except Exception as error:  # noqa: BLE001
+                blocked = _blocked_receipt(config, now, type(error).__name__)
+                _write_receipt(receipt_path, blocked)
+                return _error("runtime-failure", 1, exception=type(error).__name__)
+    except CollectionAlreadyRunningError:
+        return _error("qualification-already-running", 1)
     print(receipt.model_dump_json())
     return 0
 
