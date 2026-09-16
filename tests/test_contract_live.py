@@ -448,7 +448,7 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
 def test_camden_exact_resolution_and_public_package_collection() -> None:
     adapter = camden.CamdenAdapter()
     package = AuthorityPackage(
-        adapter, camden.CamdenApplicationV1, camden.CamdenCheckpointV1
+        adapter, camden.CamdenApplicationV1, camden_discovery.CamdenCheckpointV1
     )
     session = _Session(_CamdenMock())
 
@@ -910,7 +910,9 @@ def test_camden_native_shape_and_parser_fail_closed_branches() -> None:
             include_open=True,
         )
     )
-    with pytest.raises(camden.CamdenCheckpointModeError, match="live checkpoint"):
+    with pytest.raises(
+        camden_discovery.CamdenCheckpointModeError, match="live checkpoint"
+    ):
         asyncio.run(
             _batches(
                 camden.CamdenAdapter(),

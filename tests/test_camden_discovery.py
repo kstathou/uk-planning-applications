@@ -3,9 +3,12 @@
 
 """Camden GeneralSearch discovery and checkpoint behavior."""
 
+from __future__ import annotations
+
 import asyncio
 from datetime import date
 from hashlib import sha256
+from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
@@ -15,12 +18,16 @@ from pydantic import ValidationError
 from yimby.authorities.camden import discovery
 from yimby.authorities.camden.adapter import CamdenAdapter
 from yimby.domain import (
+    DiscoveryBatch,
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
     TransportMode,
 )
 from yimby.transport import PortalRequest, RequestMethod
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 
 def _window(*, include_open: bool = True) -> DiscoveryWindow:
@@ -697,13 +704,35 @@ class _DiscoverySession:
     def mode(self) -> TransportMode:
         return TransportMode.LIVE
 
+    @property
+    def requested_urls(self) -> tuple[str, ...]:
+        return tuple(str(request.url) for request in self.requests)
+
+    @property
+    def attachment_body_requests(self) -> int:
+        return 0
+
+    @property
+    def transferred_bytes(self) -> int:
+        return 0
+
+    @property
+    def browser_time_ms(self) -> int:
+        return 0
+
+    async def aclose(self) -> None:
+        return None
+
 
 async def _first_batch(
     adapter: CamdenAdapter,
     session: _DiscoverySession,
     window: DiscoveryWindow,
-) -> object:
-    batches = adapter.discover(session, window, None)
+) -> DiscoveryBatch[discovery.CamdenCheckpointV1]:
+    batches = cast(
+        "AsyncGenerator[DiscoveryBatch[discovery.CamdenCheckpointV1]]",
+        adapter.discover(session, window, None),
+    )
     first = await anext(batches)
     await batches.aclose()
     return first
@@ -714,8 +743,11 @@ async def _first_batches(
     session: _DiscoverySession,
     window: DiscoveryWindow,
     count: int,
-) -> list[object]:
-    batches = adapter.discover(session, window, None)
+) -> list[DiscoveryBatch[discovery.CamdenCheckpointV1]]:
+    batches = cast(
+        "AsyncGenerator[DiscoveryBatch[discovery.CamdenCheckpointV1]]",
+        adapter.discover(session, window, None),
+    )
     selected = [await anext(batches) for _ in range(count)]
     await batches.aclose()
     return selected
@@ -725,9 +757,9 @@ async def _all_batches(
     adapter: CamdenAdapter,
     session: _DiscoverySession,
     window: DiscoveryWindow,
-    checkpoint: object,
-) -> list[object]:
-    return [batch async for batch in adapter.discover(session, window, checkpoint)]  # type: ignore[arg-type]
+    checkpoint: discovery.CamdenCheckpointV1 | None,
+) -> list[DiscoveryBatch[discovery.CamdenCheckpointV1]]:
+    return [batch async for batch in adapter.discover(session, window, checkpoint)]
 
 
 def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> None:
@@ -735,8 +767,8 @@ def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> N
     window = _window()
     first_session = _DiscoverySession(_DiscoveryPortal())
     first = asyncio.run(_first_batch(adapter, first_session, window))
-    assert len(first.references) == 10  # type: ignore[attr-defined]
-    checkpoint = first.next_checkpoint  # type: ignore[attr-defined]
+    assert len(first.references) == 10
+    checkpoint = first.next_checkpoint
     assert "XMLLoc" not in checkpoint.model_dump_json()
 
     resumed_session = _DiscoverySession(_DiscoveryPortal())
@@ -744,12 +776,12 @@ def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> N
 
     emitted = [
         reference.reference for batch in batches for reference in batch.references
-    ]  # type: ignore[attr-defined]
+    ]
     assert emitted[:2] == ["2026/11/P", "2026/12/P"]
     assert emitted.count("2026/1/P") == 0
     assert emitted[-1] == "TP/TP/12531/180693"
-    assert batches[-1].complete  # type: ignore[attr-defined]
-    terminal = batches[-1].next_checkpoint  # type: ignore[attr-defined]
+    assert batches[-1].complete
+    terminal = batches[-1].next_checkpoint
     live = terminal.root
     assert isinstance(live, discovery.CamdenLiveCheckpointV1)
     assert isinstance(live.progress, discovery.CamdenTerminalV1)
@@ -768,7 +800,7 @@ def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> N
     rerun = _DiscoverySession(_DiscoveryPortal())
     rerun_batches = asyncio.run(_all_batches(adapter, rerun, window, terminal))
     assert len(rerun_batches) == 1
-    assert rerun_batches[0].complete  # type: ignore[attr-defined]
+    assert rerun_batches[0].complete
     assert rerun.requests == []
 
 
@@ -785,7 +817,7 @@ def test_camden_live_discovery_rejects_resumed_prefix_drift() -> None:
                 adapter,
                 _DiscoverySession(_DiscoveryPortal(drift=True)),
                 window,
-                first.next_checkpoint,  # type: ignore[attr-defined]
+                first.next_checkpoint,
             )
         )
 
@@ -795,7 +827,7 @@ def test_camden_live_discovery_follows_pages_without_a_resume() -> None:
 
     batches = asyncio.run(_all_batches(CamdenAdapter(), session, _window(), None))
 
-    assert batches[-1].complete  # type: ignore[attr-defined]
+    assert batches[-1].complete
     assert any("p=10" in str(request.url) for request in session.requests)
 
 
@@ -809,10 +841,10 @@ def test_camden_live_discovery_replays_a_multi_page_prefix() -> None:
     resumed = _DiscoverySession(_DiscoveryPortal(recent_count=22))
 
     batches = asyncio.run(
-        _all_batches(adapter, resumed, _window(), first_two[-1].next_checkpoint)  # type: ignore[attr-defined]
+        _all_batches(adapter, resumed, _window(), first_two[-1].next_checkpoint)
     )
 
-    assert batches[0].references[0].reference == "2026/21/P"  # type: ignore[attr-defined]
+    assert batches[0].references[0].reference == "2026/21/P"
     replay_urls = [str(request.url) for request in resumed.requests[:4]]
     assert any("p=10" in url for url in replay_urls)
     assert any("p=20" in url for url in replay_urls)
