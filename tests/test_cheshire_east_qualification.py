@@ -788,7 +788,25 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
             cheshire.CheshireEastParseError,
         ),
         (
+            _detail().replace(
+                b'<button id="all_documents_loaded_application_documents" disabled>'
+                b"All Documents Loaded</button>",
+                b'<span id="all_documents_loaded_application_documents" disabled>'
+                b"All Documents Loaded</span>",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
             _detail().replace(b">Show More</button>", b">Continue</button>"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<button id="show_more_documents_application_documents" '
+                b'style="display:none">Show More</button>',
+                b'<div id="show_more_documents_application_documents" '
+                b'style="display:none">Show More</div>',
+            ),
             cheshire.CheshireEastParseError,
         ),
         (
