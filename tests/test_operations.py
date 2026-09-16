@@ -602,6 +602,36 @@ def test_retained_evidence_rejects_valid_gzip_with_wrong_digest(
     store.close()
 
 
+def test_authority_reference_and_evidence_integrity_proofs(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    _collect_barnet(store)
+
+    references = store.authority_reference_sets(AuthorityId("barnet"))
+    assert references.discovery == references.applications
+    assert references.applications == references.rebuild_inputs
+    assert references.discovery[0].locator is not None
+
+    integrity = store.evidence_integrity(AuthorityId("barnet"))
+    assert integrity.captures_checked > 0
+    assert integrity.uncompressed_bytes > 0
+    assert integrity.issues == ()
+    assert len(integrity.manifest_sha256) == 64
+
+    evidence_path = next((tmp_path / "evidence").rglob("*.gz"))
+    original = evidence_path.read_bytes()
+    evidence_path.write_bytes(gzip.compress(b"tampered", mtime=0))
+    assert {issue.code for issue in store.evidence_integrity(AuthorityId("barnet")).issues} == {
+        "digest-mismatch"
+    }
+
+    evidence_path.write_bytes(b"not-gzip")
+    assert {issue.code for issue in store.evidence_integrity(AuthorityId("barnet")).issues} == {
+        "invalid-gzip"
+    }
+    evidence_path.write_bytes(original)
+    store.close()
+
+
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
     """Public output is allowlisted and every format is deterministic/readable."""
     store = _store(tmp_path / "data")
