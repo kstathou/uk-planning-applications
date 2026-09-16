@@ -70,6 +70,7 @@ def _weekly_form() -> bytes:
 
 def _search_results() -> bytes:
     return b"""
+    <div class="centered application-list">
     <table id="application_results_table">
       <tr><th>Reference</th><th>Application Type</th><th>Location</th>
       <th>Proposal</th><th>View</th></tr>
@@ -77,6 +78,7 @@ def _search_results() -> bytes:
       <td>139 Abbey Road</td><td>Single storey rear extension.</td>
       <td><button class="view_application" data-id="406569">View</button></td></tr>
     </table>
+    </div>
     """
 
 
@@ -174,7 +176,9 @@ class _QualificationSession:
         self._weekly_results = weekly_results or _weekly_results()
         self._search_form = _search_form() if search_form is None else search_form
         self._search_results = (
-            b'<div class="centered application-list"><p>No Results Found</p></div>'
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b"No Results Found.</strong></div></div>"
             if search_results is None
             else search_results
         )
@@ -312,36 +316,51 @@ def test_cheshire_detail_contract_includes_only_document_metadata() -> None:
 def test_cheshire_search_and_form_failure_boundaries() -> None:
     result = cheshire.parse_search_boundary(
         b"""
+        <div class="centered application-list">
         <table id="application_results_table">
         <tr><th>Reference</th><th>Application Type</th><th>Location</th>
         <th>Proposal</th><th>View</th></tr>
         <tr><td>26/1/FUL</td><td>Full</td><td>One Road</td><td>Build</td>
         <td><button class="view_application" data-id="1">View</button></td></tr>
         </table>
+        </div>
         """
     )
     assert result.explicit_zero is False
     assert result.results[0].public_reference == "26/1/FUL"
 
     zero = cheshire.parse_search_boundary(
-        b'<div class="centered application-list"><p>No Results Found</p></div>'
+        b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+        b'<div class="push-30-t"><strong class="text-danger">'
+        b"No Results Found.</strong></div></div>"
     )
     assert zero.explicit_zero is True
 
     for body in (
         b"<main></main>",
         b"<p>No Results Found</p>",
-        b'<div class="centered application-list"><script>No Results Found</script></div>',
-        b'<div class="centered application-list"><style>No Results Found</style></div>',
-        b'<div class="centered application-list"><template>No Results Found</template></div>',
-        b'<div class="centered application-list"><title>No Results Found</title></div>',
-        b'<div class="centered application-list"><noscript>No Results Found</noscript></div>',
-        b'<div class="centered application-list"><p hidden>No Results Found</p></div>',
-        b'<div class="centered application-list"><p aria-hidden="true">No Results Found</p></div>',
-        b'<div class="centered application-list"><p style="display:none">No Results Found</p></div>',
-        b'<div class="centered application-list"><p>No Results Found</p>'
+        b'<div class="centered application-list"><script>No Results Found.</script></div>',
+        b'<div class="centered application-list"><style>No Results Found.</style></div>',
+        b'<div class="centered application-list"><template>No Results Found.</template></div>',
+        b'<div class="centered application-list"><title>No Results Found.</title></div>',
+        b'<div class="centered application-list"><noscript>No Results Found.</noscript></div>',
+        b'<div class="centered application-list"><p hidden>No Results Found.</p></div>',
+        b'<div class="centered application-list"><p aria-hidden="true">No Results Found.</p></div>',
+        b'<div class="centered application-list"><p style="display:none">No Results Found.</p></div>',
+        b'<div class="centered application-list"><p>No Results Found.</p>'
         + _search_results()
         + b"</div>",
+        _search_results().replace(
+            b"</table>",
+            b'</table><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>',
+            1,
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger" hidden>'
+            b"No Results Found.</strong></div></div>"
+        ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_boundary(body)
@@ -572,9 +591,7 @@ def test_cheshire_document_boundary_rejects_ambiguous_or_unscoped_controls() -> 
     table_section.append(BeautifulSoup(str(table), "html.parser"))
 
     duplicate_loaded = BeautifulSoup(_detail(), "html.parser")
-    loaded = duplicate_loaded.select_one(
-        "#all_documents_loaded_application_documents"
-    )
+    loaded = duplicate_loaded.select_one("#all_documents_loaded_application_documents")
     loaded_section = duplicate_loaded.select_one("#documents")
     assert isinstance(loaded, Tag)
     assert isinstance(loaded_section, Tag)

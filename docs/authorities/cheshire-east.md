@@ -41,10 +41,13 @@ detail `26/3335/PRIOR-1A`, whose application status is `Pending Consideration`
 and whose valid date is 14 September 2026. Neither form is therefore a proven
 enumeration of the requested recent or active records.
 
-The parser treats the exact no-results marker as terminal only for that zero
-response. A positive result table publishes no result total, pagination
-boundary, or all-results-loaded marker, so a non-empty page remains explicitly
-unproved rather than being treated as the complete 30-day inventory.
+The parser treats only the rendered `strong.text-danger` value `No Results
+Found.` inside the unique `div.application-list > div.push-30-t` result
+boundary as terminal for that zero response. Hidden, duplicated, unscoped, or
+mixed result boundaries fail closed. A positive result table publishes no
+result total, pagination boundary, or all-results-loaded marker, so a non-empty
+page remains explicitly unproved rather than being treated as the complete
+30-day inventory.
 
 The register states that appeals are not visible and points users to the
 Planning Inspectorate.
@@ -79,8 +82,10 @@ and the show-more control was hidden. No thumbnail or attachment body was
 requested.
 
 The parser verifies the numeric locator and public reference before accepting
-the detail. It accepts document metadata only when the all-loaded marker and
-the exact table columns are present. Attachment URLs remain metadata.
+the detail. It accepts document metadata only when exactly one document
+section contains exactly one table, disabled all-loaded marker, and hidden
+show-more control with the exact table columns. Duplicate or out-of-section
+controls fail closed. Attachment URLs remain metadata.
 
 ## Automated qualification result
 

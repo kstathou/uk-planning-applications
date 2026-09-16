@@ -250,9 +250,10 @@ class CheshireEastAdapter:
 def parse_search_form(body: bytes) -> Tag:
     """Validate the exact official general-search form boundary."""
     soup = BeautifulSoup(body, "html.parser")
-    form = soup.select_one("form#form")
-    if not isinstance(form, Tag):
+    forms = soup.select("form#form")
+    if len(forms) != 1:
         _raise_parse("search form")
+    form = forms[0]
     if str(form.get("method", "get")).casefold() != "post":
         raise CheshireEastFormMethodUnavailableError
     if form.get("name") != "form":
@@ -390,7 +391,22 @@ def detail_request(locator: str) -> PortalRequest:
 def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
     """Parse visible search rows or one exact no-results marker."""
     soup = BeautifulSoup(body, "html.parser")
-    if soup.select_one("table#application_results_table") is not None:
+    containers = soup.select("div.application-list")
+    if len(containers) != 1:
+        _raise_parse("search result boundary")
+    container = containers[0]
+    tables = soup.select("table#application_results_table")
+    scoped_tables = container.select("table#application_results_table")
+    if tables:
+        if (
+            len(tables) != 1
+            or len(scoped_tables) != 1
+            or tables[0] is not scoped_tables[0]
+            or set(map(str, container.get_attribute_list("class")))
+            != {"centered", "application-list"}
+            or container.select("div.push-30-t > strong.text-danger")
+        ):
+            _raise_parse("search result boundary")
         return CheshireEastSearchBoundaryV1(
             results=_parse_result_table(body),
             explicit_zero=False,
@@ -398,12 +414,34 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
             pagination_links=(),
             terminal_marker=False,
         )
-    zero_markers = tuple(
-        element
-        for element in soup.find_all(string=True)
-        if _normalise_label(str(element)) == "no results found"
-    )
-    if len(zero_markers) != 1:
+    zero_markers = container.select("div.push-30-t > strong.text-danger")
+    if (
+        len(scoped_tables) != 0
+        or len(zero_markers) != 1
+        or set(map(str, container.get_attribute_list("class")))
+        != {"col-sm-12", "col-md-12", "animation-fadeIn", "application-list"}
+    ):
+        _raise_parse("search result boundary")
+    marker = zero_markers[0]
+    marker_parent = marker.parent
+    if (
+        not isinstance(marker_parent, Tag)
+        or marker_parent.parent is not container
+        or set(map(str, marker_parent.get_attribute_list("class"))) != {"push-30-t"}
+        or set(map(str, marker.get_attribute_list("class"))) != {"text-danger"}
+        or _normalise_label(marker.get_text(" ", strip=True)) != "no results found."
+        or container.get_text(" ", strip=True) != marker.get_text(" ", strip=True)
+        or any(
+            element.has_attr("hidden")
+            or str(element.get("aria-hidden", "")).casefold() == "true"
+            or "display:none"
+            in str(element.get("style", "")).replace(" ", "").casefold()
+            or "visibility:hidden"
+            in str(element.get("style", "")).replace(" ", "").casefold()
+            for element in (container, marker_parent, marker)
+        )
+        or container.select("script, style, template, title, noscript")
+    ):
         _raise_parse("search result boundary")
     return CheshireEastSearchBoundaryV1(
         results=(),
@@ -581,17 +619,36 @@ def _grid_reference(value: str) -> tuple[float, float]:
 def _parse_document_metadata(
     soup: BeautifulSoup, expected_locator: str
 ) -> tuple[CheshireEastDocumentMetadataV1, ...]:
-    table = soup.select_one("table#application_documents")
-    loaded = soup.select_one("#all_documents_loaded_application_documents[disabled]")
-    show_more = soup.select_one("#show_more_documents_application_documents")
+    sections = soup.select("div#documents")
+    if len(sections) != 1:
+        _raise_parse("complete document table")
+    section = sections[0]
+    tables = soup.select("table#application_documents")
+    section_tables = section.select("table#application_documents")
+    loaded_controls = soup.select("#all_documents_loaded_application_documents")
+    section_loaded_controls = section.select(
+        "#all_documents_loaded_application_documents"
+    )
+    show_more_controls = soup.select("#show_more_documents_application_documents")
+    section_show_more_controls = section.select(
+        "#show_more_documents_application_documents"
+    )
     if (
-        not isinstance(table, Tag)
-        or loaded is None
-        or show_more is None
+        len(tables) != 1
+        or len(section_tables) != 1
+        or tables[0] is not section_tables[0]
+        or len(loaded_controls) != 1
+        or len(section_loaded_controls) != 1
+        or loaded_controls[0] is not section_loaded_controls[0]
+        or not loaded_controls[0].has_attr("disabled")
+        or len(show_more_controls) != 1
+        or len(section_show_more_controls) != 1
+        or show_more_controls[0] is not section_show_more_controls[0]
         or "display:none"
-        not in str(show_more.get("style", "")).replace(" ", "").casefold()
+        not in str(show_more_controls[0].get("style", "")).replace(" ", "").casefold()
     ):
         _raise_parse("complete document table")
+    table = tables[0]
     expected_headers = (
         "document type",
         "description",
