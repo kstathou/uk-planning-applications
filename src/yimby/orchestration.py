@@ -83,8 +83,10 @@ class ProcessLock:
             os.write(descriptor, f"{os.getpid()}\n".encode())
             os.fsync(descriptor)
         except BaseException:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
             raise
         self._descriptor = descriptor
         return self
@@ -103,9 +105,11 @@ class ProcessLock:
             os.ftruncate(descriptor, 0)
             os.fsync(descriptor)
         finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
-            self._descriptor = None
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+                self._descriptor = None
 
 
 class LiveSessionFactory:

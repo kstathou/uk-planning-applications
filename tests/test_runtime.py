@@ -850,6 +850,37 @@ def test_process_lock_releases_after_pid_write_failure(
         assert lock_path.read_text().strip() == str(os.getpid())
 
 
+def test_process_lock_closes_descriptor_when_unlock_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlock errors cannot leak a descriptor or strand kernel ownership."""
+    lock_path = tmp_path / "collection.lock"
+    original_flock = fcntl.flock
+    original_write = os.write
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        if operation == fcntl.LOCK_UN:
+            raise OSError("unlock failed")
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(fcntl, "flock", fail_unlock)
+    monkeypatch.setattr("os.write", MagicMock(side_effect=OSError("write failed")))
+    with pytest.raises(OSError, match="unlock failed"):
+        with ProcessLock(lock_path):
+            pass
+
+    monkeypatch.setattr("os.write", original_write)
+    held = ProcessLock(lock_path)
+    held.__enter__()
+    with pytest.raises(OSError, match="unlock failed"):
+        held.__exit__(None, None, None)
+    assert held._descriptor is None
+
+    monkeypatch.setattr(fcntl, "flock", original_flock)
+    with ProcessLock(lock_path):
+        assert lock_path.read_text().strip() == str(os.getpid())
+
+
 class _CloseFailureSession:
     def __init__(self, inner: FixtureSession) -> None:
         self._inner = inner
