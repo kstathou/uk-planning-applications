@@ -949,6 +949,20 @@ def test_barnet_form_and_search_boundary_variants() -> None:
                 b"",
             )
         )
+    for filtered_advanced in (
+        ADVANCED_FORM.replace(
+            b'name="caseAddressType" value=""', b'name="caseAddressType" value="Site"'
+        ),
+        ADVANCED_FORM.replace(
+            b'name="searchType" value=""', b'name="searchType" value="Application"'
+        ),
+        ADVANCED_FORM.replace(
+            b"</form>",
+            b'<input name="searchCriteria.ward" value="North"></form>',
+        ),
+    ):
+        with pytest.raises(BarnetParseError, match="advanced form neutral filters"):
+            barnet_adapter._parse_advanced_form(filtered_advanced)
     for malformed in (
         b"<html></html>",
         ADVANCED_FORM.replace(b'method="post"', b'method="get"'),
