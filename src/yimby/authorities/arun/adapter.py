@@ -916,7 +916,12 @@ def _parse_search_results(
         _raise_parse("result pagination")
     found = _parse_result_references(soup)
     text = soup.get_text(" ", strip=True)
-    reported = _parse_reported_count(soup, text, expected_reported)
+    reported = _parse_reported_count(
+        soup,
+        text,
+        expected_reported,
+        len(found),
+    )
     return _SearchResults(
         references=found,
         reported=reported,
@@ -974,6 +979,7 @@ def _parse_reported_count(
     soup: BeautifulSoup,
     text: str,
     expected_reported: int | None,
+    reference_count: int,
 ) -> int:
     if "retrieve more than 200 results" in text.casefold():
         raise ArunResultCapError
@@ -998,11 +1004,45 @@ def _parse_reported_count(
         reported = 0
     elif expected_reported is not None:
         reported = expected_reported
+    elif _is_explicit_complete_result_page(soup, reference_count):
+        reported = reference_count
     else:
         _raise_parse("reported result count")
     if reported >= _RESULT_CAP:
         raise ArunResultCapError
     return reported
+
+
+def _is_explicit_complete_result_page(
+    soup: BeautifulSoup,
+    reference_count: int,
+) -> bool:
+    forms = tuple(soup.select('form[action="planningSearch"]'))
+    if len(forms) != 1 or not isinstance(forms[0], Tag):
+        return False
+    form = forms[0]
+    back_controls = tuple(
+        control
+        for control in form.select('input[type="submit"]')
+        if control.get("name") == "BackToSearch"
+        and control.get("value") == "Back to Search page"
+    )
+    result_tables = tuple(
+        table
+        for table in soup.select("table")
+        if tuple(
+            _normalise_label(header.get_text(" ", strip=True))
+            for header in table.select("th")
+        )
+        == ("reference", "location", "proposal", "status")
+    )
+    return (
+        reference_count > 0
+        and str(form.get("method", "")).casefold() == "post"
+        and len(back_controls) == 1
+        and len(result_tables) == 1
+        and len(result_tables[0].select("tr:has(td)")) == reference_count
+    )
 
 
 def _parse_show_all_form(soup: BeautifulSoup) -> ArunShowAllForm | None:
