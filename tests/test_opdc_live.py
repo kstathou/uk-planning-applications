@@ -964,6 +964,12 @@ def test_opdc_qualification_adopts_legacy_receipt_without_network(
     assert module.main(args, session_factory=session_factory) == 0
     original = json.loads(capsys.readouterr().out)
     (data_dir / "opdc-qualification-proof-v1.json").unlink()
+    legacy = original.copy()
+    legacy.pop("evidence_commitment")
+    (data_dir / "opdc-qualification-v1.json").write_text(
+        f"{json.dumps(legacy, indent=2)}\n",
+        encoding="utf-8",
+    )
     sessions.clear()
 
     assert module.main([*args, "--resume"], session_factory=session_factory) == 0
@@ -1082,14 +1088,11 @@ def test_opdc_qualification_rejects_digest_mismatched_evidence(
 
     assert module.main([*args, "--resume"], session_factory=session_factory) == 1
     error = json.loads(capsys.readouterr().err)
-    assert error["error"] == "qualification-failed"
-    assert {
-        "terminal-checkpoint",
-        "evidence-integrity",
-        "application-evidence",
-    }.issubset(error["failed_checks"])
-    assert len(sessions) == 1
-    assert sessions[0].requested_urls == ()
+    assert error == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
+    assert sessions == []
     assert not (data_dir / "opdc-qualification-v1.json").exists()
 
 
@@ -1167,13 +1170,9 @@ def test_opdc_qualification_rejects_checkpoint_reference_disagreement(
 
     assert module.main([*args, "--resume"], session_factory=session_factory) == 1
     error = json.loads(capsys.readouterr().err)
-    assert error["error"] == "qualification-failed"
-    assert {
-        "terminal-checkpoint",
-        "reference-application-agreement",
-        "application-evidence",
-    }.issubset(error["failed_checks"])
-    assert len(sessions) == 1
-    assert sessions[0].requested_urls == ()
-    assert sessions[0].closed is True
+    assert error == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
+    assert sessions == []
     assert not (data_dir / "opdc-qualification-v1.json").exists()

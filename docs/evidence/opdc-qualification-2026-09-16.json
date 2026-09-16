@@ -110,5 +110,16 @@
       "name": "run-statuses",
       "ok": true
     }
-  ]
+  ],
+  "evidence_commitment": {
+    "canonicalization": "sha256-canonical-json-v1",
+    "applications": 55,
+    "captures_per_application": 3,
+    "capture_associations": 165,
+    "content_digests": 103,
+    "missing_paths": 0,
+    "invalid_paths": 0,
+    "application_capture_sha256": "sha256:46c34a62e3faf144fc6a1de45892a9d8449e5e2dc52f362101f5125b7762149d",
+    "content_digest_set_sha256": "sha256:8f2c5eb871927248dc6c53ca8e86853705cecadc1c727315833724f2531cf608"
+  }
 }
