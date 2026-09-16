@@ -306,7 +306,7 @@ def parse_search_form(body: bytes) -> Tag:
     _require_input_type(controls["submitted"], {"hidden"})
     _require_input_type(controls["valid_date_from"], {"", "text"})
     _require_input_type(controls["valid_date_to"], {"", "text"})
-    if controls["fa"].get("value") != "search":
+    if controls["fa"].get("value") not in {"", "search"}:
         _raise_parse("search form discriminator")
     successful_names = _successful_field_names(form)
     if len(successful_names) != len(set(successful_names)):
@@ -581,8 +581,18 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
             len(tables) != 1
             or len(scoped_tables) != 1
             or tables[0] is not scoped_tables[0]
-            or set(map(str, container.get_attribute_list("class")))
-            != {"centered", "application-list"}
+            or frozenset(map(str, container.get_attribute_list("class")))
+            not in {
+                frozenset({"centered", "application-list"}),
+                frozenset(
+                    {
+                        "col-sm-12",
+                        "col-md-12",
+                        "animation-fadeIn",
+                        "application-list",
+                    }
+                ),
+            }
             or container.select("div.push-30-t > strong.text-danger")
             or _has_hidden_ancestor(tables[0])
         ):
@@ -1036,14 +1046,25 @@ def _parse_result_table(
     headers = tuple(
         _normalise_label(cell.get_text(" ", strip=True)) for cell in header_cells
     )
-    expected_headers = (
+    legacy_headers = (
         "reference",
         "application type",
         "location",
         "proposal",
         "view",
     )
-    if headers != expected_headers:
+    current_headers = (
+        "application reference",
+        "application type",
+        "location details",
+        "proposal",
+        "ward",
+        "community",
+        "consultation closes",
+        "decision",
+        "view",
+    )
+    if headers not in {legacy_headers, current_headers}:
         return _raise_parse("valid-date result table headers")
     results = _parse_table_rows(tuple(rows[1:]), headers)
     if not results:
@@ -1078,7 +1099,12 @@ def _parse_table_rows(
         ):
             _raise_parse("View detail locator")
         view = views[0]
-        reference = _required_mapping(values, "reference")
+        reference = _required_mapping(
+            values,
+            "application reference"
+            if "application reference" in values
+            else "reference",
+        )
         locator = str(view["data-id"])
         if reference in references or locator in locators:
             _raise_parse("result row identity")
