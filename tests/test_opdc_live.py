@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib.util
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -34,14 +37,9 @@ from yimby.domain import (
     AuthorityId,
     DiscoveryBatch,
     DiscoveryWindow,
-    DurableDiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
-    RunMetrics,
-    RunOutcome,
-    RunStatus,
     SourceReference,
-    StoredCheckpoint,
     TransportMode,
     Wgs84Coordinate,
 )
@@ -458,6 +456,15 @@ def test_opdc_live_checkpoint_and_cross_query_identity_must_be_coherent() -> Non
             result_total=1,
             identities=(),
         )
+    with pytest.raises(ValueError, match="query identity"):
+        OpdcCompletedQuery(
+            query=OpdcDiscoveryQuery.REGISTERED_WINDOW,
+            result_total=2,
+            identities=(
+                OpdcIdentity(reference="A", locator="1"),
+                OpdcIdentity(reference="A", locator="2"),
+            ),
+        )
     with pytest.raises(ValueError, match="identity"):
         OpdcCheckpointV1(
             page_token=_LIVE_PAGE,
@@ -466,6 +473,30 @@ def test_opdc_live_checkpoint_and_cross_query_identity_must_be_coherent() -> Non
                 OpdcIdentity(reference="A", locator="1"),
                 OpdcIdentity(reference="A", locator="2"),
             ),
+        )
+    with pytest.raises(ValueError, match="identity inventory"):
+        OpdcCheckpointV1(
+            page_token=_LIVE_PAGE,
+            live_scope=scope,
+            seen_references=(OpdcIdentity(reference="A", locator="1"),),
+        )
+    with pytest.raises(ValueError, match="cross-query identity"):
+        OpdcCheckpointV1(
+            page_token=_LIVE_PAGE,
+            live_scope=scope,
+            completed_queries=(
+                OpdcCompletedQuery(
+                    query=OpdcDiscoveryQuery.REGISTERED_WINDOW,
+                    result_total=1,
+                    identities=(OpdcIdentity(reference="A", locator="1"),),
+                ),
+                OpdcCompletedQuery(
+                    query=OpdcDiscoveryQuery.DETERMINED_WINDOW,
+                    result_total=1,
+                    identities=(OpdcIdentity(reference="A", locator="2"),),
+                ),
+            ),
+            seen_references=(OpdcIdentity(reference="A", locator="1"),),
         )
 
     registered, determined, _ = _query_urls()
@@ -881,6 +912,48 @@ def test_opdc_qualification_rejects_failed_sections_without_a_receipt(
     assert not (data_dir / "opdc-qualification-v1.json").exists()
 
 
+def test_opdc_qualification_rejects_digest_mismatched_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Readable evidence with altered bytes cannot support a success receipt."""
+    module = _qualification_module()
+    data_dir = tmp_path / "corrupt-evidence"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    (data_dir / "opdc-qualification-v1.json").unlink()
+    evidence_path = next((data_dir / "evidence").rglob("*.gz"))
+    evidence_path.write_bytes(gzip.compress(b"altered but readable", mtime=0))
+    sessions.clear()
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert {
+        "terminal-checkpoint",
+        "evidence-integrity",
+        "application-evidence",
+    }.issubset(error["failed_checks"])
+    assert len(sessions) == 1
+    assert sessions[0].requested_urls == ()
+    assert not (data_dir / "opdc-qualification-v1.json").exists()
+
+
 def test_opdc_qualification_refuses_a_changed_scope_before_network(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -943,38 +1016,13 @@ def test_opdc_qualification_rejects_checkpoint_reference_disagreement(
     store = _store(data_dir)
     stored = store.discovery_state(AuthorityId("opdc")).checkpoint
     assert stored is not None
-    checkpoint = OpdcCheckpointV1.model_validate_json(stored.payload_json)
-    corrupt = checkpoint.model_copy(
-        update={"seen_references": checkpoint.seen_references[:-1]}
-    )
-    run_id = store.begin_run(AuthorityId("opdc"))
-    store.commit_discovery(
-        run_id,
-        AuthorityId("opdc"),
-        DurableDiscoveryBatch(
-            references=(),
-            next_checkpoint=StoredCheckpoint(
-                schema_version=1,
-                payload_json=corrupt.model_dump_json(),
-            ),
-            complete=True,
-        ),
-    )
-    store.finish_run(
-        run_id,
-        AuthorityId("opdc"),
-        RunOutcome(
-            status=RunStatus.SUCCEEDED,
-            metrics=RunMetrics(
-                request_count=0,
-                transferred_bytes=0,
-                duration_ms=0,
-                storage_growth_bytes=0,
-            ),
-            transport_mode=TransportMode.LIVE,
-        ),
-    )
     store.close()
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "DELETE FROM discovery_queue WHERE reference = ?",
+            ("15/0004/FULOPDC",),
+        )
+        connection.commit()
     (data_dir / "opdc-qualification-v1.json").unlink()
     sessions.clear()
 

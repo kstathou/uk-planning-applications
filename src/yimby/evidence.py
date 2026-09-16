@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import gzip
+import zlib
+from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from pydantic import HttpUrl
@@ -13,6 +15,14 @@ from yimby.domain import EvidenceCapture, EvidenceDigest
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+class EvidenceIntegrityError(OSError):
+    """Retained evidence is unreadable or differs from its content digest."""
+
+    def __init__(self, stored_path: str) -> None:
+        """Identify the invalid local evidence path without exposing its body."""
+        super().__init__(f"invalid retained evidence: {stored_path}")
 
 
 class EvidenceStore:
@@ -47,9 +57,15 @@ class EvidenceStore:
     ) -> EvidenceCapture:
         """Rehydrate retained evidence for offline normalisation."""
         candidate = self.root / stored_path
+        try:
+            body = gzip.decompress(candidate.read_bytes())
+        except (OSError, EOFError, zlib.error) as error:
+            raise EvidenceIntegrityError(stored_path) from error
+        if sha256(body).hexdigest() != str(digest):
+            raise EvidenceIntegrityError(stored_path)
         return EvidenceCapture(
             url=HttpUrl(source_url),
             media_type=media_type,
-            body=gzip.decompress(candidate.read_bytes()),
+            body=body,
             digest=digest,
         )
