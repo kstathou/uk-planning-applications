@@ -361,6 +361,29 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<div class="push-30-t"><strong class="text-danger" hidden>'
             b"No Results Found.</strong></div></div>"
         ),
+        (
+            b'<main hidden><div class="col-sm-12 col-md-12 animation-fadeIn '
+            b'application-list"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div></main>'
+        ),
+        (
+            b'<main aria-hidden="true"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
+        (
+            b'<main style="display:none"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
+        (
+            b'<main style="visibility:hidden"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_boundary(body)
@@ -913,22 +936,27 @@ def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
             encoding="utf-8"
         )
     )
-    payload["evidence"][0]["media_type"] = "application/pdf"
-    (data_dir / "cheshire-east-qualification-blocker-v2.json").write_text(
-        json.dumps(payload),
-        encoding="utf-8",
-    )
-    assert (
-        module.main(
-            [*arguments, "--resume"],
-            session_factory=forbidden_factory,
-            now=lambda: datetime(2026, 9, 16, 9, 2, tzinfo=UTC),
+    for media_type in (
+        "application/pdf",
+        "Application/PDF",
+        "application/pdf; charset=binary",
+    ):
+        payload["evidence"][0]["media_type"] = media_type
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").write_text(
+            json.dumps(payload),
+            encoding="utf-8",
         )
-        == 1
-    )
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert '"error": "runtime-failure"' in captured.err
+        assert (
+            module.main(
+                [*arguments, "--resume"],
+                session_factory=forbidden_factory,
+                now=lambda: datetime(2026, 9, 16, 9, 2, tzinfo=UTC),
+            )
+            == 1
+        )
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert '"error": "runtime-failure"' in captured.err
 
 
 @pytest.mark.parametrize(
