@@ -123,7 +123,7 @@ def _live_status(
 
 
 def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
-    """Fixture coverage remains distinct from all four live status values."""
+    """Only receipt-qualified OPDC is live-ready; other gaps stay explicit."""
     registry = pilot_registry()
     readiness_by_authority = {
         manifest.id: manifest.live_status.readiness for manifest in registry.manifests()
@@ -135,7 +135,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         AuthorityId("devon"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("peak-district"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("arun"): LiveReadiness.DISCOVERY_ONLY,
-        AuthorityId("opdc"): LiveReadiness.BLOCKED,
+        AuthorityId("opdc"): LiveReadiness.LIVE_READY,
         AuthorityId("dorset"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("cheshire-east"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("blackburn-with-darwen"): LiveReadiness.BLOCKED,
@@ -151,11 +151,20 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         evidence=("docs/evidence/west-suffolk-qualification-2026-09-16.json",),
         transport=LiveTransportKind.HTTP,
     )
+    assert registry.manifest(AuthorityId("opdc")).live_status == LiveStatus(
+        readiness=LiveReadiness.LIVE_READY,
+        reason="official Agile API bootstrap and immediate idempotent rerun qualified",
+        evidence=(
+            "docs/evidence/opdc-qualification-2026-09-16.json records "
+            "55 complete applications",
+        ),
+        transport=LiveTransportKind.HTTP,
+    )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
     assert snapshot.coverage_implemented == 15
-    assert snapshot.live_ready == 1
+    assert snapshot.live_ready == 2
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
