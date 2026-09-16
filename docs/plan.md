@@ -46,6 +46,22 @@ Implement in three waves of five. All 15 belong to the pilot; national rollout b
 
 The additions include confirmed distinct implementations: [Arun's Ocella interface](https://www.arun.gov.uk/planning-application-search/), [OPDC's Agile/APAS system](https://www.london.gov.uk/adhs13-apas-back-office-planning-system-fee-2025-26), and [Blackburn's Planning Explorer](https://planning.blackburn.gov.uk/Northgate/PlanningExplorer/ApplicationSearch.aspx). Confirm each authority's current portal and supporting services during its walkthrough.
 
+### Prefer official machine-readable sources
+
+For every authority, look first for an official API, open-data feed, or complete
+data dump. Use that source instead of scraping HTML or automating a browser when
+it supplies the required records, identifiers, fields, update semantics, and
+completeness signals. Build a scraper only for data or workflows that the
+official machine-readable source does not cover, and document the gap that each
+scraped route fills.
+
+API-backed and dump-backed collectors still use an authority-owned package,
+versioned native schema, retained source evidence, resumable checkpoints,
+normalisation, and the same acceptance tests as portal scrapers. Reconcile
+reported totals and duplicate source rows, record source freshness and covered
+periods, and fail closed when the machine-readable source cannot prove the
+required 30-day, older-open, or incremental-refresh inventory.
+
 ### Required investigation for every authority
 
 Before writing its scraper:
