@@ -9,7 +9,7 @@ import json
 import sqlite3
 import sys
 from contextlib import closing
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl
@@ -389,7 +389,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         module.main(
             _args(data_dir, "--resume"),
             session_factory=session_factory,
-            now=lambda: now,
+            now=lambda: now + timedelta(days=5),
         )
         == 0
     )
@@ -398,6 +398,8 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert all(session.requested_urls == () for session in sessions)
     assert resumed["costs"]["initial"]["request_count"] == 0
     assert resumed["costs"]["rerun"]["request_count"] == 0
+    assert resumed["created_at"] == "2026-09-16T12:00:00Z"
+    assert resumed["weekly_refreshes"] == receipt["weekly_refreshes"]
 
 
 def test_barnet_qualification_rejects_failed_current_sections(
