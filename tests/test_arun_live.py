@@ -7,18 +7,20 @@ import asyncio
 from datetime import date, timedelta
 from hashlib import sha256
 from itertools import pairwise
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 import yimby.authorities.arun.adapter as arun
 from yimby.domain import (
+    DiscoveryBatch,
+    DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
     SourceReference,
     TransportMode,
 )
-from yimby.transport import PortalRequest, RequestMethod
+from yimby.transport import FormField, PortalRequest, RequestMethod
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -73,9 +75,15 @@ def _complete_results(references: tuple[str, ...]) -> bytes:
 
 
 class _Session:
-    def __init__(self, responder: "Callable[[PortalRequest], bytes]") -> None:
+    def __init__(
+        self,
+        responder: "Callable[[PortalRequest], bytes]",
+        *,
+        mode: TransportMode = TransportMode.LIVE,
+    ) -> None:
         self.responder = responder
         self.requests: list[PortalRequest] = []
+        self._mode = mode
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
@@ -105,7 +113,7 @@ class _Session:
 
     @property
     def mode(self) -> TransportMode:
-        return TransportMode.LIVE
+        return self._mode
 
     async def aclose(self) -> None:
         return None
@@ -120,10 +128,7 @@ class _DiscoveryResponder:
         values = {field.name: field.value for field in request.form}
         if values.get("showall") == "showall":
             return _complete_results(self.references)
-        if (
-            values.get("receivedFrom") == "18-08-26"
-            and values.get("undecided") == ""
-        ):
+        if values.get("receivedFrom") == "18-08-26" and values.get("undecided") == "":
             fields = "".join(
                 f'<input type="hidden" name="{name}" value="{value}">'
                 for name, value in values.items()
@@ -136,9 +141,9 @@ class _DiscoveryResponder:
 async def _batches(
     adapter: arun.ArunAdapter,
     session: _Session,
-    window: arun.DiscoveryWindow,
+    window: DiscoveryWindow,
     checkpoint: arun.ArunCheckpointV1 | None,
-) -> tuple[object, ...]:
+) -> tuple[DiscoveryBatch[arun.ArunCheckpointV1], ...]:
     return tuple(
         [batch async for batch in adapter.discover(session, window, checkpoint)]
     )
@@ -277,20 +282,23 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
 
 def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
     adapter = arun.ArunAdapter()
-    window = arun.DiscoveryWindow(
+    window = DiscoveryWindow(
         start=date(2026, 8, 18),
         end=date(2026, 9, 16),
         include_open=True,
     )
 
-    async def first_batch() -> object:
-        batches = adapter.discover(_Session(_DiscoveryResponder()), window, None)
+    async def first_batch() -> DiscoveryBatch[arun.ArunCheckpointV1]:
+        batches = cast(
+            "AsyncGenerator[DiscoveryBatch[arun.ArunCheckpointV1]]",
+            adapter.discover(_Session(_DiscoveryResponder()), window, None),
+        )
         first = await anext(batches)
         await batches.aclose()
         return first
 
     first = asyncio.run(first_batch())
-    assert isinstance(first, arun.DiscoveryBatch)
+    assert isinstance(first, DiscoveryBatch)
     assert [reference.reference for reference in first.references] == ["BR/1/26/PL"]
     assert isinstance(first.next_checkpoint.cursor, arun.ArunLiveCursor)
     assert isinstance(first.next_checkpoint.cursor.progress, arun.ArunAwaitingShowAll)
@@ -300,9 +308,7 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
         _batches(adapter, resumed_session, window, first.next_checkpoint)
     )
     assert [
-        reference.reference
-        for batch in resumed
-        for reference in batch.references
+        reference.reference for batch in resumed for reference in batch.references
     ] == ["BR/2/26/PL"]
     terminal = resumed[-1].next_checkpoint
     assert resumed[-1].complete
@@ -321,7 +327,7 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
 
 def test_arun_live_checkpoint_rejects_a_different_scope() -> None:
     adapter = arun.ArunAdapter()
-    window = arun.DiscoveryWindow(
+    window = DiscoveryWindow(
         start=date(2026, 8, 18),
         end=date(2026, 9, 16),
         include_open=False,
@@ -338,12 +344,14 @@ def test_arun_live_checkpoint_rejects_a_different_scope() -> None:
     changed = window.model_copy(update={"start": date(2026, 8, 19)})
 
     with pytest.raises(arun.ArunCheckpointError):
-        asyncio.run(_batches(adapter, _Session(_DiscoveryResponder()), changed, checkpoint))
+        asyncio.run(
+            _batches(adapter, _Session(_DiscoveryResponder()), changed, checkpoint)
+        )
 
 
 def test_arun_reference_identity_is_unique_across_overlapping_queries() -> None:
     adapter = arun.ArunAdapter()
-    window = arun.DiscoveryWindow(
+    window = DiscoveryWindow(
         start=date(2026, 8, 18),
         end=date(2026, 9, 16),
         include_open=True,
@@ -353,9 +361,7 @@ def test_arun_reference_identity_is_unique_across_overlapping_queries() -> None:
     batches = asyncio.run(_batches(adapter, session, window, None))
 
     references = tuple(
-        reference.reference
-        for batch in batches
-        for reference in batch.references
+        reference.reference for batch in batches for reference in batch.references
     )
     assert references == _DiscoveryResponder.references
     assert all(
@@ -368,3 +374,203 @@ def test_arun_reference_identity_is_unique_across_overlapping_queries() -> None:
         for batch in batches
         for reference in batch.references
     )
+
+
+def test_arun_checkpoint_invariants_reject_contradictory_progress() -> None:
+    scope = arun.ArunDiscoveryScope(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+    plan = arun._canonical_query_plan(scope)
+    summary = arun.ArunCompletedQuery(
+        key=plan[0].key,
+        reported_count=0,
+        enumerated_count=0,
+    )
+
+    with pytest.raises(ValueError, match="counts disagree"):
+        arun.ArunCompletedQuery(
+            key=plan[0].key,
+            reported_count=1,
+            enumerated_count=0,
+        )
+    with pytest.raises(ValueError, match="not a plan prefix"):
+        arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunReady(
+                next_query=1,
+                completed=(summary.model_copy(update={"key": "wrong"}),),
+            ),
+        )
+    with pytest.raises(ValueError, match="not unique"):
+        arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunReady(
+                next_query=0,
+                seen_references=("A", "A"),
+            ),
+        )
+    with pytest.raises(ValueError, match="does not cover"):
+        arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunComplete(completed=()),
+        )
+    with pytest.raises(ValueError, match="does not follow"):
+        arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunReady(next_query=1),
+        )
+    with pytest.raises(ValueError, match="absent from the seen set"):
+        arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunAwaitingShowAll(
+                next_query=0,
+                reported_count=2,
+                initial_references=("A",),
+            ),
+        )
+
+
+def test_arun_checkpoint_modes_cannot_cross_transport_boundaries() -> None:
+    adapter = arun.ArunAdapter()
+    window = DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+    scope = arun.ArunDiscoveryScope.model_validate(window.model_dump())
+    live = arun.ArunCheckpointV1(
+        cursor=arun.ArunLiveCursor(
+            scope=scope,
+            plan=arun._canonical_query_plan(scope),
+            progress=arun.ArunReady(next_query=0),
+        )
+    )
+    fixture = arun.ArunCheckpointV1(cursor=arun.ArunFixtureCursor(result_row="first"))
+
+    with pytest.raises(arun.ArunCheckpointError):
+        asyncio.run(
+            _batches(
+                adapter,
+                _Session(_DiscoveryResponder(), mode=TransportMode.FIXTURE),
+                window,
+                live,
+            )
+        )
+    with pytest.raises(arun.ArunCheckpointError):
+        asyncio.run(_batches(adapter, _Session(_DiscoveryResponder()), window, fixture))
+
+
+def test_arun_form_and_show_all_structure_fail_closed() -> None:
+    query = arun.ArunReceivedQuery(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+    )
+    with pytest.raises(arun.ArunParseError, match="form method"):
+        arun._parse_search_form(
+            _search_form().replace(b'method="post"', b'method="get"')
+        )
+    with pytest.raises(arun.ArunParseError, match="search controls"):
+        arun._parse_search_form(
+            _search_form().replace(b'name="receivedTo"', b'name="other"')
+        )
+    with pytest.raises(arun.ArunParseError, match="search submit"):
+        arun._parse_search_form(
+            _search_form().replace(b'value="Search"', b'value="Find"')
+        )
+
+    values = arun._query_values(query)
+    fields = "".join(
+        f'<input type="hidden" name="{name}" value="{value}">'
+        for name, value in values.items()
+    )
+    results = arun._parse_search_results(_partial_results(fields))
+    show_all = results.show_all_form
+    assert show_all is not None
+    duplicate = show_all.model_copy(
+        update={"fields": (*show_all.fields, show_all.fields[0])}
+    )
+    with pytest.raises(arun.ArunQueryReplayError):
+        arun._show_all_request(duplicate, query)
+    wrong_action = show_all.model_copy(
+        update={
+            "fields": tuple(
+                FormField(name=field.name, value="Reset")
+                if field.name == "action"
+                else field
+                for field in show_all.fields
+            )
+        }
+    )
+    with pytest.raises(arun.ArunQueryReplayError):
+        arun._show_all_request(wrong_action, query)
+    with pytest.raises(arun.ArunResultCapError):
+        arun._parse_search_results(b'<p data-result-count="200">200 records</p>')
+    with pytest.raises(arun.ArunParseError, match="show all form"):
+        arun._parse_search_results(_partial_results(fields) + _partial_results(fields))
+    with pytest.raises(arun.ArunParseError, match="show all form method"):
+        arun._parse_search_results(
+            _partial_results(fields).replace(b'method="post"', b'method="get"')
+        )
+
+
+def test_arun_active_query_replay_and_ambiguous_exact_results_fail_closed() -> None:
+    adapter = arun.ArunAdapter()
+    window = DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+    scope = arun.ArunDiscoveryScope.model_validate(window.model_dump())
+    plan = arun._canonical_query_plan(scope)
+    replay = arun.ArunCheckpointV1(
+        cursor=arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunAwaitingShowAll(
+                next_query=0,
+                reported_count=2,
+                initial_references=("DIFFERENT",),
+                seen_references=("DIFFERENT",),
+            ),
+        )
+    )
+    with pytest.raises(arun.ArunQueryReplayError):
+        asyncio.run(_batches(adapter, _Session(_DiscoveryResponder()), window, replay))
+
+    def ambiguous(request: PortalRequest) -> bytes:
+        if request.method == RequestMethod.GET:
+            return _search_form()
+        values = {field.name: field.value for field in request.form}
+        fields = "".join(
+            f'<input type="hidden" name="{name}" value="{value}">'
+            for name, value in values.items()
+            if name != "action"
+        )
+        return _partial_results(fields).replace(b"there are 2", b"there are 1")
+
+    with pytest.raises(arun.ArunQueryReplayError):
+        asyncio.run(_batches(adapter, _Session(ambiguous), window, None))
+
+    terminal = arun.ArunLiveCursor(
+        scope=scope,
+        plan=plan,
+        progress=arun.ArunComplete(
+            completed=tuple(
+                arun.ArunCompletedQuery(
+                    key=query.key,
+                    reported_count=0,
+                    enumerated_count=0,
+                )
+                for query in plan
+            )
+        ),
+    )
+    with pytest.raises(arun.ArunCheckpointError):
+        arun._complete_query(terminal, plan[0], 0, ())

@@ -95,35 +95,50 @@ def _registry(package: Any) -> AuthorityRegistry:
 def _arun_form() -> bytes:
     return b"""
     <form action="planningSearch" method="post">
-      <input type="hidden" name="csrf" value="sanitised">
       <input type="text" name="reference" value="old">
       <input type="text" name="location" value="old">
       <input type="text" name="OcellaPlanningSearch.postcode" value="old">
       <input type="text" name="area" value="old">
       <input type="text" name="applicant" value="old">
       <input type="text" name="agent" value="old">
-      <input type="checkbox" name="undecided" value="true">
+      <input type="checkbox" name="undecided" value="Y">
       <select name="type"><option value="old" selected>Old</option></select>
       <input name="receivedFrom"><input name="receivedTo">
       <input name="decidedFrom"><input name="decidedTo">
-      <input type="submit" name="submit" value="Search">
+      <input type="submit" name="action" value="Search">
+      <input type="submit" name="action" value="Reset">
     </form>
     """
 
 
 def _arun_results(
-    references: tuple[str, ...], reported: int, *, show_all: bool
+    references: tuple[str, ...],
+    reported: int,
+    *,
+    show_all: bool,
+    fields: dict[str, str],
 ) -> bytes:
     rows = "".join(
         f'<tr><td><a href="planningDetails?reference={reference.replace("/", "%2F")}&amp;from=planningSearch">{reference}</a></td></tr>'
         for reference in references
     )
+    controls = "".join(
+        f'<input type="hidden" name="{name}" value="{value}">'
+        for name, value in fields.items()
+        if name != "action"
+    )
     control = (
-        '<input type="submit" name="showall" value="Show all results">'
+        '<form method="post" action="planningSearch">'
+        '<input type="hidden" name="action" value="Search">'
+        '<input type="hidden" name="showall" value="showall">'
+        f'{controls}<input type="submit" value="Show all results"></form>'
         if show_all
         else ""
     )
-    return f'<p data-result-count="{reported}">{reported} records</p><table>{rows}</table>{control}'.encode()
+    return (
+        f'<p data-result-count="{reported}">{reported} records</p>'
+        f"<table>{rows}</table>{control}"
+    ).encode()
 
 
 def _arun_detail(reference: str) -> bytes:
@@ -168,21 +183,26 @@ class _ArunMock:
         if request.method == RequestMethod.GET and url.rstrip("/") == arun._SEARCH_URL:
             return _arun_form()
         if request.method == RequestMethod.POST and url.rstrip("/") == arun._SEARCH_URL:
-            fields = tuple((field.name, field.value) for field in request.form)
-            assert ("receivedFrom", "16-08-26") in fields
-            assert ("receivedTo", "16-09-26") in fields
-            assert ("csrf", "sanitised") in fields
-            if any(name == "showall" for name, _ in fields):
+            fields = {field.name: field.value for field in request.form}
+            if fields.get("showall") == "showall":
                 return _arun_results(
                     self.expanded_rows,
                     self.expanded_reported,
                     show_all=False,
+                    fields=fields,
                 )
-            return _arun_results(
-                self.references[:1],
-                self.first_reported,
-                show_all=self.first_show_all,
-            )
+            if (
+                fields.get("receivedFrom") == "16-08-26"
+                and fields.get("receivedTo") == "16-09-26"
+                and fields.get("undecided") == ""
+            ):
+                return _arun_results(
+                    self.references[:1],
+                    self.first_reported,
+                    show_all=self.first_show_all,
+                    fields=fields,
+                )
+            return b"No applications found for entered search criteria"
         if "planningDetails" in url:
             reference = parse_qs(urlsplit(url).query)["reference"][0]
             return _arun_detail("WRONG/1" if self.mismatch_detail else reference)
@@ -573,7 +593,7 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
         sum(
             request.method == RequestMethod.POST for request in resumed_session.requests
         )
-        == 2
+        == 3
     )
 
     with pytest.raises(arun.ArunCountMismatchError):
@@ -588,17 +608,29 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
         asyncio.run(
             _batches(adapter, _Session(_ArunMock(expanded_reported=3)), window, None)
         )
-    with pytest.raises(arun.ArunOpenEnumerationUnsupportedError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(_ArunMock()),
-                window.model_copy(update={"include_open": True}),
-                None,
-            )
+    open_batches = asyncio.run(
+        _batches(
+            adapter,
+            _Session(_ArunMock()),
+            window.model_copy(update={"include_open": True}),
+            None,
         )
+    )
+    assert open_batches[-1].complete
+    open_cursor = open_batches[-1].next_checkpoint.cursor
+    assert isinstance(open_cursor, arun.ArunLiveCursor)
+    assert len(open_cursor.plan) == 60
+    stale_scope = arun.ArunDiscoveryScope(
+        start=date(2020, 1, 1),
+        end=date(2020, 1, 2),
+        include_open=False,
+    )
     stale = arun.ArunCheckpointV1(
-        result_row="live", window_start=date(2020, 1, 1), window_end=date(2020, 1, 2)
+        cursor=arun.ArunLiveCursor(
+            scope=stale_scope,
+            plan=arun._canonical_query_plan(stale_scope),
+            progress=arun.ArunReady(next_query=0),
+        )
     )
     with pytest.raises(arun.ArunCheckpointError):
         asyncio.run(_batches(adapter, _Session(_ArunMock()), window, stale))
@@ -771,10 +803,26 @@ def test_arun_terminal_and_parser_boundaries() -> None:
     window = DiscoveryWindow(
         start=date(2026, 8, 16), end=date(2026, 9, 16), include_open=False
     )
-    terminal = arun.ArunCheckpointV1(result_row="live", live_phase="complete")
+    scope = arun.ArunDiscoveryScope.model_validate(window.model_dump())
+    plan = arun._canonical_query_plan(scope)
+    completed = tuple(
+        arun.ArunCompletedQuery(
+            key=query.key,
+            reported_count=0,
+            enumerated_count=0,
+        )
+        for query in plan
+    )
+    terminal = arun.ArunCheckpointV1(
+        cursor=arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunComplete(completed=completed),
+        )
+    )
     batches = asyncio.run(_batches(adapter, _Session(_ArunMock()), window, terminal))
     assert batches[0].complete
-    with pytest.raises(arun.ArunOpenEnumerationUnsupportedError):
+    with pytest.raises(arun.ArunCheckpointError):
         asyncio.run(
             _batches(
                 adapter,
@@ -787,19 +835,28 @@ def test_arun_terminal_and_parser_boundaries() -> None:
     complete_mock = _ArunMock(first_reported=1, first_show_all=False)
     complete = asyncio.run(_batches(adapter, _Session(complete_mock), window, None))
     assert complete[-1].complete
-    with pytest.raises(arun.ArunOpenEnumerationUnsupportedError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(complete_mock),
-                window.model_copy(update={"include_open": True}),
-                None,
-            )
+    open_complete = asyncio.run(
+        _batches(
+            adapter,
+            _Session(complete_mock),
+            window.model_copy(update={"include_open": True}),
+            None,
         )
-    show_all_checkpoint = arun.ArunCheckpointV1(
-        result_row="live", live_phase="show-all"
     )
-    with pytest.raises(arun.ArunCountMismatchError):
+    assert open_complete[-1].complete
+    show_all_checkpoint = arun.ArunCheckpointV1(
+        cursor=arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunAwaitingShowAll(
+                next_query=0,
+                reported_count=2,
+                initial_references=("BR/156/25/PL",),
+                seen_references=("BR/156/25/PL",),
+            ),
+        )
+    )
+    with pytest.raises(arun.ArunQueryReplayError):
         asyncio.run(
             _batches(
                 adapter,

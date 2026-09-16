@@ -7,12 +7,12 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime, timedelta
 from html import unescape
-from typing import TYPE_CHECKING, Literal, NoReturn
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn, Self, cast
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pydantic import HttpUrl
+from pydantic import Field, HttpUrl, model_validator
 
 from yimby.domain import (
     ApplicationMetadata,
@@ -115,7 +115,10 @@ class ArunOpenReceivedQuery(FrozenModel):
         return f"{self.kind}|{self.start.isoformat()}|{self.end.isoformat()}"
 
 
-type ArunQuery = ArunReceivedQuery | ArunDecidedQuery | ArunOpenReceivedQuery
+type ArunQuery = Annotated[
+    ArunReceivedQuery | ArunDecidedQuery | ArunOpenReceivedQuery,
+    Field(discriminator="kind"),
+]
 
 
 def _canonical_query_plan(scope: ArunDiscoveryScope) -> tuple[ArunQuery, ...]:
@@ -155,14 +158,108 @@ def _canonical_query_plan(scope: ArunDiscoveryScope) -> tuple[ArunQuery, ...]:
     return tuple(plan)
 
 
-class ArunCheckpointV1(FrozenModel):
-    """Fixture cursor plus resumable Arun received-search progress."""
+class ArunCompletedQuery(FrozenModel):
+    """One fully enumerated query in plan order."""
 
-    result_row: str
-    live_phase: Literal["initial", "show-all", "complete"] = "initial"
-    window_start: date | None = None
-    window_end: date | None = None
+    key: str
+    reported_count: int = Field(ge=0, lt=_RESULT_CAP)
+    enumerated_count: int = Field(ge=0, lt=_RESULT_CAP)
+
+    @model_validator(mode="after")
+    def counts_agree(self) -> Self:
+        """Reject summaries that conceal incomplete enumeration."""
+        if self.reported_count != self.enumerated_count:
+            message = "Arun completed-query counts disagree"
+            raise ValueError(message)
+        return self
+
+
+class ArunReady(FrozenModel):
+    """Live discovery can start the next canonical query."""
+
+    kind: Literal["ready"] = "ready"
+    next_query: int = Field(ge=0)
+    completed: tuple[ArunCompletedQuery, ...] = ()
     seen_references: tuple[str, ...] = ()
+
+
+class ArunAwaitingShowAll(FrozenModel):
+    """The active query must be replayed before its expansion."""
+
+    kind: Literal["show-all"] = "show-all"
+    next_query: int = Field(ge=0)
+    completed: tuple[ArunCompletedQuery, ...] = ()
+    reported_count: int = Field(gt=0, lt=_RESULT_CAP)
+    initial_references: tuple[str, ...] = Field(min_length=1)
+    seen_references: tuple[str, ...] = ()
+
+
+class ArunComplete(FrozenModel):
+    """Every query in the canonical live plan is complete."""
+
+    kind: Literal["complete"] = "complete"
+    completed: tuple[ArunCompletedQuery, ...]
+    seen_references: tuple[str, ...] = ()
+
+
+type ArunProgress = Annotated[
+    ArunReady | ArunAwaitingShowAll | ArunComplete,
+    Field(discriminator="kind"),
+]
+
+
+class ArunFixtureCursor(FrozenModel):
+    """Cursor for deterministic fixture replay."""
+
+    mode: Literal["fixture"] = "fixture"
+    result_row: str
+
+
+class ArunLiveCursor(FrozenModel):
+    """Scope-bound query plan and its valid progress state."""
+
+    mode: Literal["live"] = "live"
+    scope: ArunDiscoveryScope
+    plan: tuple[ArunQuery, ...] = Field(min_length=1)
+    progress: ArunProgress
+
+    @model_validator(mode="after")
+    def progress_matches_plan(self) -> Self:
+        """Require progress to describe one strict canonical-plan prefix."""
+        progress = self.progress
+        completed = progress.completed
+        expected_keys = tuple(query.key for query in self.plan[: len(completed)])
+        if tuple(item.key for item in completed) != expected_keys:
+            message = "Arun completed queries are not a plan prefix"
+            raise ValueError(message)
+        if len(progress.seen_references) != len(set(progress.seen_references)):
+            message = "Arun checkpoint references are not unique"
+            raise ValueError(message)
+        if isinstance(progress, ArunComplete):
+            if len(completed) != len(self.plan):
+                message = "Arun terminal progress does not cover the plan"
+                raise ValueError(message)
+            return self
+        if progress.next_query != len(completed) or progress.next_query >= len(
+            self.plan
+        ):
+            message = "Arun next query does not follow the completed prefix"
+            raise ValueError(message)
+        if isinstance(progress, ArunAwaitingShowAll) and not set(
+            progress.initial_references
+        ).issubset(progress.seen_references):
+            message = "Arun first-page references are absent from the seen set"
+            raise ValueError(message)
+        return self
+
+
+class ArunCheckpointV1(FrozenModel):
+    """Discriminated fixture or live Arun checkpoint."""
+
+    cursor: Annotated[
+        ArunFixtureCursor | ArunLiveCursor,
+        Field(discriminator="mode"),
+    ]
 
 
 class ArunApplicationV1(FrozenModel):
@@ -228,7 +325,12 @@ class ArunAdapter:
         window: DiscoveryWindow,
         checkpoint: ArunCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[ArunCheckpointV1]]:
-        row = "first" if checkpoint is None else checkpoint.result_row
+        if checkpoint is None:
+            row = "first"
+        elif isinstance(checkpoint.cursor, ArunFixtureCursor):
+            row = checkpoint.cursor.result_row
+        else:
+            raise ArunCheckpointError
         url = (
             f"{BASE_URL}/Search?from={window.start.isoformat()}"
             f"&to={window.end.isoformat()}&row={quote(row)}"
@@ -244,82 +346,128 @@ class ArunAdapter:
         next_row = _required_fixture(html, r'data-arun-row="([^"]+)"', "result row")
         yield DiscoveryBatch(
             references=references,
-            next_checkpoint=ArunCheckpointV1(result_row=next_row),
+            next_checkpoint=ArunCheckpointV1(
+                cursor=ArunFixtureCursor(result_row=next_row)
+            ),
             complete=next_row == "complete",
         )
 
-    async def _discover_live(  # noqa: C901
+    async def _discover_live(  # noqa: C901, PLR0912
         self,
         session: PortalSession,
         window: DiscoveryWindow,
         checkpoint: ArunCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[ArunCheckpointV1]]:
-        progress = checkpoint or ArunCheckpointV1(result_row="live")
-        _assert_window(progress, window)
-        if progress.live_phase == "complete":
-            if window.include_open:
-                raise ArunOpenEnumerationUnsupportedError
-            yield DiscoveryBatch(references=(), next_checkpoint=progress, complete=True)
+        scope = ArunDiscoveryScope.model_validate(window.model_dump())
+        plan = _canonical_query_plan(scope)
+        if checkpoint is None:
+            cursor = ArunLiveCursor(
+                scope=scope,
+                plan=plan,
+                progress=ArunReady(next_query=0),
+            )
+        elif isinstance(checkpoint.cursor, ArunLiveCursor):
+            cursor = checkpoint.cursor
+            if cursor.scope != scope or cursor.plan != plan:
+                raise ArunCheckpointError
+        else:
+            raise ArunCheckpointError
+        if _is_complete(cursor.progress):
+            yield DiscoveryBatch(
+                references=(),
+                next_checkpoint=ArunCheckpointV1(cursor=cursor),
+                complete=True,
+            )
             return
         form_capture = await session.fetch(
             PortalRequest(url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH)
         )
         form = _parse_search_form(form_capture.body)
-        initial_capture = await session.fetch(
-            _search_request(form, window, show_all=False)
-        )
-        initial = _parse_search_results(initial_capture.body)
-        if len(initial.references) > initial.reported:
-            raise ArunCountMismatchError(initial.reported, len(initial.references))
-        if progress.live_phase == "initial":
-            fresh, seen = _fresh(initial.references, progress.seen_references)
-            initial_complete = len(initial.references) == initial.reported
-            if not initial_complete and not initial.has_show_all:
+        while True:
+            progress = cursor.progress
+            if _is_complete(progress):
+                return
+            progress = cast("ArunReady | ArunAwaitingShowAll", progress)
+            query = cursor.plan[progress.next_query]
+            initial_capture = await session.fetch(_initial_search_request(form, query))
+            initial = _parse_search_results(initial_capture.body)
+            if len(initial.references) > initial.reported:
                 raise ArunCountMismatchError(initial.reported, len(initial.references))
-            progress = progress.model_copy(
-                update={
-                    "live_phase": "complete" if initial_complete else "show-all",
-                    "window_start": window.start,
-                    "window_end": window.end,
-                    "seen_references": seen,
-                }
+            if isinstance(progress, ArunAwaitingShowAll):
+                if (
+                    initial.reported != progress.reported_count
+                    or tuple(reference.reference for reference in initial.references)
+                    != progress.initial_references
+                ):
+                    raise ArunQueryReplayError
+            else:
+                fresh, seen = _fresh(
+                    initial.references,
+                    progress.seen_references,
+                )
+                if len(initial.references) == initial.reported:
+                    if initial.has_show_all:
+                        raise ArunQueryReplayError
+                    cursor = _complete_query(
+                        cursor,
+                        query,
+                        initial.reported,
+                        seen,
+                    )
+                    yield DiscoveryBatch(
+                        references=fresh,
+                        next_checkpoint=ArunCheckpointV1(cursor=cursor),
+                        complete=isinstance(cursor.progress, ArunComplete),
+                    )
+                    continue
+                if not initial.has_show_all:
+                    raise ArunCountMismatchError(
+                        initial.reported,
+                        len(initial.references),
+                    )
+                progress = ArunAwaitingShowAll(
+                    next_query=progress.next_query,
+                    completed=progress.completed,
+                    reported_count=initial.reported,
+                    initial_references=tuple(
+                        reference.reference for reference in initial.references
+                    ),
+                    seen_references=seen,
+                )
+                cursor = cursor.model_copy(update={"progress": progress})
+                yield DiscoveryBatch(
+                    references=fresh,
+                    next_checkpoint=ArunCheckpointV1(cursor=cursor),
+                    complete=False,
+                )
+            expanded_capture = await session.fetch(
+                _show_all_request(initial.show_all_form, query)
+            )
+            expanded = _parse_search_results(expanded_capture.body)
+            if (
+                expanded.has_show_all
+                or expanded.reported != progress.reported_count
+                or len(expanded.references) != progress.reported_count
+            ):
+                raise ArunCountMismatchError(
+                    progress.reported_count,
+                    len(expanded.references),
+                )
+            fresh, seen = _fresh(
+                expanded.references,
+                progress.seen_references,
+            )
+            cursor = _complete_query(
+                cursor,
+                query,
+                progress.reported_count,
+                seen,
             )
             yield DiscoveryBatch(
                 references=fresh,
-                next_checkpoint=progress,
-                complete=initial_complete and not window.include_open,
+                next_checkpoint=ArunCheckpointV1(cursor=cursor),
+                complete=isinstance(cursor.progress, ArunComplete),
             )
-            if initial_complete:
-                if window.include_open:
-                    raise ArunOpenEnumerationUnsupportedError
-                return
-        if not initial.has_show_all:
-            raise ArunCountMismatchError(initial.reported, len(initial.references))
-        expanded_capture = await session.fetch(
-            _search_request(form, window, show_all=True)
-        )
-        expanded = _parse_search_results(expanded_capture.body)
-        if (
-            expanded.reported != initial.reported
-            or len(expanded.references) != initial.reported
-        ):
-            raise ArunCountMismatchError(initial.reported, len(expanded.references))
-        fresh, seen = _fresh(expanded.references, progress.seen_references)
-        completed = progress.model_copy(
-            update={
-                "live_phase": "complete",
-                "window_start": window.start,
-                "window_end": window.end,
-                "seen_references": seen,
-            }
-        )
-        yield DiscoveryBatch(
-            references=fresh,
-            next_checkpoint=completed,
-            complete=not window.include_open,
-        )
-        if window.include_open:
-            raise ArunOpenEnumerationUnsupportedError
 
     async def fetch(
         self,
@@ -601,31 +749,6 @@ def _show_all_request(
     )
 
 
-def _search_request(
-    form: ArunSearchForm,
-    window: DiscoveryWindow,
-    *,
-    show_all: bool,
-) -> PortalRequest:
-    query = ArunReceivedQuery(start=window.start, end=window.end)
-    if show_all:
-        fields = (
-            FormField(name="action", value="Search"),
-            FormField(name="showall", value="showall"),
-            *tuple(
-                FormField(name=name, value=value)
-                for name, value in _query_values(query).items()
-            ),
-        )
-        return PortalRequest(
-            url=form.action,
-            intent=RequestIntent.SEARCH,
-            method=RequestMethod.POST,
-            form=fields,
-        )
-    return _initial_search_request(form, query)
-
-
 def _parse_search_results(body: bytes) -> _SearchResults:
     soup = BeautifulSoup(body, "html.parser")
     found = _parse_result_references(soup)
@@ -739,12 +862,55 @@ def _fresh(
     references: tuple[SourceReference, ...], seen_values: tuple[str, ...]
 ) -> tuple[tuple[SourceReference, ...], tuple[str, ...]]:
     seen = set(seen_values)
+    ordered_seen = list(seen_values)
     fresh = []
     for reference in references:
         if reference.reference not in seen:
             seen.add(reference.reference)
+            ordered_seen.append(reference.reference)
             fresh.append(reference)
-    return tuple(fresh), tuple(seen)
+    return tuple(fresh), tuple(ordered_seen)
+
+
+def _is_complete(progress: ArunProgress) -> bool:
+    return progress.kind == "complete"
+
+
+def _complete_query(
+    cursor: ArunLiveCursor,
+    query: ArunQuery,
+    reported_count: int,
+    seen_references: tuple[str, ...],
+) -> ArunLiveCursor:
+    progress = cursor.progress
+    if isinstance(progress, ArunComplete):
+        raise ArunCheckpointError
+    completed = (
+        *progress.completed,
+        ArunCompletedQuery(
+            key=query.key,
+            reported_count=reported_count,
+            enumerated_count=reported_count,
+        ),
+    )
+    next_query = progress.next_query + 1
+    next_progress: ArunProgress
+    if next_query == len(cursor.plan):
+        next_progress = ArunComplete(
+            completed=completed,
+            seen_references=seen_references,
+        )
+    else:
+        next_progress = ArunReady(
+            next_query=next_query,
+            completed=completed,
+            seen_references=seen_references,
+        )
+    return ArunLiveCursor(
+        scope=cursor.scope,
+        plan=cursor.plan,
+        progress=next_progress,
+    )
 
 
 def _normalise_label(value: str) -> str:
@@ -776,13 +942,6 @@ def _optional_date(fields: dict[str, str], *names: str) -> date | None:
         except ValueError:
             continue
     return _raise_parse(f"date {'/'.join(names)}")
-
-
-def _assert_window(checkpoint: ArunCheckpointV1, window: DiscoveryWindow) -> None:
-    if checkpoint.window_start is not None and (
-        checkpoint.window_start != window.start or checkpoint.window_end != window.end
-    ):
-        raise ArunCheckpointError
 
 
 def _required_fixture(value: str, pattern: str, field: str) -> str:
@@ -827,14 +986,6 @@ class ArunQueryReplayError(ValueError):
 
 class ArunCheckpointError(ValueError):
     """A saved cursor belongs to another received-date window."""
-
-
-class ArunOpenEnumerationUnsupportedError(RuntimeError):
-    """Older open applications cannot yet be enumerated completely."""
-
-    def __init__(self) -> None:
-        """Keep the unsupported boundary explicit."""
-        super().__init__("Arun older-open enumeration is not verified")
 
 
 class ArunRoutingError(ValueError):
