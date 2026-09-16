@@ -8,6 +8,8 @@ import asyncio
 from typing import TYPE_CHECKING, NoReturn
 from urllib.parse import urljoin, urlsplit
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from yimby.browser_transport import (
     BrowserBoundary,
     BrowserWorker,
@@ -108,7 +110,14 @@ class BlackburnPlaywrightSession(PlaywrightPortalSession):
         application = page.locator(
             f'#application_details[data-application-id="{locator.record_id}"]'
         )
-        await application.wait_for()
+        try:
+            await application.wait_for(timeout=20_000)
+        except PlaywrightTimeoutError as error:
+            text = (await page.locator("body").inner_text()).casefold()
+            if "let's confirm you are human" in text:
+                raise BlackburnHumanVerificationRequiredError from None
+            route_error = BlackburnPageObjectRouteError(locator.record_id)
+            raise route_error from error
         if await application.count() != 1:
             return _raise_route(locator.record_id)
         body = (await page.content()).encode()
@@ -167,6 +176,10 @@ class BlackburnPageObjectRouteError(RuntimeError):
     def __init__(self, record_id: str) -> None:
         """Name the safe record identifier."""
         super().__init__(f"Blackburn browser route mismatch: {record_id}")
+
+
+class BlackburnHumanVerificationRequiredError(RuntimeError):
+    """The public detail route requires an interactive human check."""
 
 
 def _raise_form(field: str) -> NoReturn:
