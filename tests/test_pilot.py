@@ -324,7 +324,6 @@ def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:
     """Blocked and map-only source shells retain unknown live capabilities."""
     registry = pilot_registry()
     unresolved = {
-        AuthorityId("opdc"),
         AuthorityId("dorset"),
         AuthorityId("blackburn-with-darwen"),
         AuthorityId("birmingham"),
@@ -335,3 +334,7 @@ def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:
         if registry.manifest(authority_id).capabilities.discovery
         == CapabilityState.UNKNOWN
     } == unresolved
+    assert (
+        registry.manifest(AuthorityId("opdc")).capabilities.discovery
+        == CapabilityState.SUPPORTED
+    )
