@@ -91,6 +91,12 @@ EXPECTED_ADVANCED_QUERY_COUNT = 33
 EXPECTED_QUALIFICATION_PASSES = 2
 CONFIG_ERROR_EXIT = 2
 SECOND_PAGE = 2
+DOCUMENT_DIRECTORY = "22EBB8C56217604A5FD1BC986E79FFF3"
+DOCUMENT_HREF = f"/online-applications/files/{DOCUMENT_DIRECTORY}/pdf/tree-plan.pdf"
+DOCUMENT_ANCHOR = (
+    f'<a href="{DOCUMENT_HREF}" target="_blank" title="View Document" '
+    'class="recaptcha-link"></a>'
+)
 
 
 def _weekly_form(*, with_week_options: bool = True) -> bytes:
@@ -346,6 +352,33 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
         ),
         (
             _weekly_form().replace(
+                b'<option value="" selected>All</option>',
+                b'<option value="north">North</option>',
+                1,
+            ),
+            "weekly geography options",
+        ),
+        (
+            _weekly_form().replace(
+                b'<option value="" selected>All</option>',
+                (
+                    b'<optgroup label="unavailable" disabled>'
+                    b'<option value="" selected>All</option></optgroup>'
+                ),
+                1,
+            ),
+            "weekly geography options",
+        ),
+        (
+            _weekly_form().replace(
+                b'<option value="" selected>All</option>',
+                b'<option value="" selected>Everywhere</option>',
+                1,
+            ),
+            "weekly geography options",
+        ),
+        (
+            _weekly_form().replace(
                 b'<input type="hidden" name="dateType" value="DC_Validated">',
                 (
                     b'<input type="hidden" name="dateType" '
@@ -397,6 +430,9 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
         "multiple-forms",
         "missing-date-type",
         "select-inventory",
+        "missing-geography-all",
+        "disabled-geography-all",
+        "renamed-geography-all",
         "disabled-date-type",
         "unknown-filter",
         "search-discriminator",
@@ -919,9 +955,9 @@ def _documents(
         row = (
             ""
             if header_only
-            else """
+            else f"""
       <tr><td>15/09/2026</td><td>Plan</td>
-      <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
+      <td>Tree location plan</td><td>{DOCUMENT_ANCHOR}</td></tr>
     """
         )
         header = """
@@ -934,7 +970,7 @@ def _documents(
             if header_only
             else f"""
       <tr><td>{structural_cell}</td><td>15/09/2026</td><td>Plan</td><td>A-01</td>
-      <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
+      <td>Tree location plan</td><td>{DOCUMENT_ANCHOR}</td></tr>
     """
         )
         header = """
@@ -1095,7 +1131,7 @@ def test_leeds_fetches_summary_and_six_cell_document_metadata() -> None:
     assert payload.documents[0].document_type == "Plan"
     assert payload.documents[0].drawing_number == "A-01"
     assert payload.documents[0].description == "Tree location plan"
-    assert str(payload.documents[0].url).endswith("/files/tree-plan.pdf")
+    assert str(payload.documents[0].url).endswith("/pdf/tree-plan.pdf")
     assert isinstance(snapshot.completeness.comments, UnavailableSection)
     assert mock.tabs == ["summary", "documents"]
     assert mock.attachment_paths == []
@@ -1310,23 +1346,41 @@ def test_leeds_rejects_active_tab_zero_as_empty(body: bytes) -> None:
         ),
         (
             _documents().replace(
-                b'<a href="files/tree-plan.pdf">View</a>',
+                DOCUMENT_ANCHOR.encode(),
                 b"View",
             ),
             "document metadata link",
         ),
         (
             _documents().replace(
-                b'href="files/tree-plan.pdf"',
+                f'href="{DOCUMENT_HREF}"'.encode(),
                 b'href=""',
             ),
             "document metadata link",
         ),
         (
             _documents().replace(
-                b'href="files/tree-plan.pdf"',
+                f'href="{DOCUMENT_HREF}"'.encode(),
                 b'href="#documents"',
             ),
+            "document metadata link",
+        ),
+        (
+            _documents().replace(
+                DOCUMENT_HREF.encode(),
+                b"/online-applications/login.do",
+            ),
+            "document metadata link",
+        ),
+        (
+            _documents().replace(
+                DOCUMENT_ANCHOR.encode(),
+                (DOCUMENT_ANCHOR + DOCUMENT_ANCHOR).encode(),
+            ),
+            "document metadata link",
+        ),
+        (
+            _documents().replace(b' class="recaptcha-link"', b""),
             "document metadata link",
         ),
         (
@@ -1345,6 +1399,9 @@ def test_leeds_rejects_active_tab_zero_as_empty(body: bytes) -> None:
         "missing-link",
         "blank-link",
         "fragment-link",
+        "unexpected-route",
+        "multiple-links",
+        "link-attributes",
         "published-date",
     ),
 )

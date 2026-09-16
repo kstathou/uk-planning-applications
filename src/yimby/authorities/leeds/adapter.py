@@ -73,6 +73,9 @@ _DATE_FORMATS = (
 _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_CELL_COUNT = 6
 _COMPACT_DOCUMENT_CELL_COUNT = 4
+_DOCUMENT_HREF_PATTERN = re.compile(
+    r"/online-applications/files/[0-9A-F]{32}/(?:pdf/)?[^/?#]+"
+)
 _DETAIL_BODY_ATTEMPTS = 3
 _LIVE_EVIDENCE_CAPTURE_COUNT = 2
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
@@ -657,6 +660,15 @@ def _parse_form(body: bytes) -> Tag:
         or action != _WEEKLY_RESULTS_URL
     ):
         _raise_parse("weekly form")
+    _validate_weekly_control_inventory(form, fields)
+    _validate_weekly_options(form)
+    return form
+
+
+def _validate_weekly_control_inventory(
+    form: Tag,
+    fields: tuple[FormField, ...],
+) -> None:
     hidden_names = Counter(
         str(control.get("name"))
         for control in form.select('input[type="hidden"][name]')
@@ -674,16 +686,28 @@ def _parse_form(body: bytes) -> Tag:
         _raise_parse("weekly form fields")
     if Counter(field.name for field in fields) != Counter(_WEEKLY_FORM_FIELD_NAMES):
         _raise_parse("weekly form fields")
+    values = {field.name: field.value for field in fields}
+    if values["dateType"] != "DC_Validated" or values["searchType"] != "Application":
+        _raise_parse("weekly form discriminators")
+
+
+def _validate_weekly_options(form: Tag) -> None:
+    for field in ("searchCriteria.parish", "searchCriteria.ward"):
+        blank_options = form.select(f'select[name="{field}"] option[value=""]')
+        if len(blank_options) != 1:
+            _raise_parse("weekly geography options")
+        blank_option = blank_options[0]
+        if (
+            _is_control_disabled(blank_option)
+            or blank_option.get_text(" ", strip=True) != "All"
+        ):
+            _raise_parse("weekly geography options")
     week_options = form.select('select[name="week"] option')
     if not week_options or any(
         not option.has_attr("value") or _is_control_disabled(option)
         for option in week_options
     ):
         _raise_parse("weekly week options")
-    values = {field.name: field.value for field in fields}
-    if values["dateType"] != "DC_Validated" or values["searchType"] != "Application":
-        _raise_parse("weekly form discriminators")
-    return form
 
 
 def _parse_advanced_form(body: bytes) -> Tag:
@@ -1151,13 +1175,17 @@ def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
     published_index, type_index, description_index, view_index = (
         (0, 1, 2, 3) if compact else (1, 2, 4, 5)
     )
-    hrefs = tuple(
-        str(link.get("href", "")).strip()
-        for link in cells[view_index].select("a[href]")
+    link_cell = cells[view_index]
+    links = link_cell.select("a")
+    matching_links = link_cell.select(
+        'a.recaptcha-link[target="_blank"][title="View Document"][href]'
     )
-    if not hrefs or any(not href or href.startswith("#") for href in hrefs):
+    if len(links) != 1 or links != matching_links:
         _raise_parse("document metadata link")
-    links = tuple(HttpUrl(urljoin(f"{BASE_URL}/", href)) for href in hrefs)
+    href = str(links[0].get("href", "")).strip()
+    if _DOCUMENT_HREF_PATTERN.fullmatch(href) is None:
+        _raise_parse("document metadata link")
+    document_url = HttpUrl(urljoin(f"{BASE_URL}/", href))
     published = cells[published_index].get_text(" ", strip=True)
     published_date = _parse_date(published) if published else None
     if published and published_date is None:
@@ -1167,12 +1195,12 @@ def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
     description = cells[description_index].get_text(" ", strip=True) or None
     return LeedsDocumentV1(
         title=description or document_type or "Document",
-        url=links[-1],
+        url=document_url,
         published_date=published_date,
         document_type=document_type,
         drawing_number=drawing_number,
         description=description,
-        source_links=links,
+        source_links=(document_url,),
     )
 
 

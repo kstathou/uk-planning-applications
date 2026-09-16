@@ -68,11 +68,15 @@ table shapes were observed:
 - four cells: date published, document type, description, and view.
 
 The selection cell may contain the portal's accessibility label and checkbox.
-Unknown headers, row widths, dates, links, or pagination remain failed sections.
-For a normal document page, parsed metadata rows must exactly match the active
-`tab_documents` count. A header-only or missing table maps to empty only with
-the exact `li.nodocuments` zero marker. Five retained official pages revealed a
-Leeds defect where that stale zero marker coexisted with one non-paginated,
+Every row has exactly one captured `recaptcha-link` with the observed target
+and title. Across 10,610 retained links, its relative attachment path had one
+of two shapes: `files/{32-uppercase-hex}/pdf/{filename}` or
+`files/{32-uppercase-hex}/{filename}`. Unknown headers, row widths, dates,
+links, or pagination remain failed sections. For a normal document page,
+parsed metadata rows must exactly match the active `tab_documents` count. A
+header-only or missing table maps to empty only with the exact
+`li.nodocuments` zero marker. Five retained official pages revealed a Leeds
+defect where that stale zero marker coexisted with one non-paginated,
 structurally valid table containing 3, 3, 5, 6, or 8 rows. Only that exact shape
 uses the fully enumerated table as complete; other count contradictions,
 unknown headers, page-wide pagination, and malformed rows fail closed. An
