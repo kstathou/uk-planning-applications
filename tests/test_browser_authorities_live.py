@@ -52,7 +52,7 @@ from yimby.transport import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable
     from types import ModuleType
 
     from playwright.async_api import Page
@@ -427,37 +427,6 @@ def _haringey_package() -> AuthorityPackage[
     )
 
 
-class _CompleteHaringeyAdapter(haringey.HaringeyAdapter):
-    """Test seam representing a future evidenced older-open implementation."""
-
-    async def discover(
-        self,
-        session: Any,
-        window: DiscoveryWindow,
-        checkpoint: haringey.HaringeyCheckpointV1 | None,
-    ) -> AsyncIterator[DiscoveryBatch[haringey.HaringeyCheckpointV1]]:
-        bounded = window.model_copy(update={"include_open": False})
-        async for batch in super().discover(session, bounded, checkpoint):
-            yield batch.model_copy(
-                update={
-                    "next_checkpoint": batch.next_checkpoint.model_copy(
-                        update={"older_open_complete": True}
-                    ),
-                    "complete": batch.complete,
-                }
-            )
-
-
-def _complete_haringey_package() -> AuthorityPackage[
-    haringey.HaringeyApplicationV1, haringey.HaringeyCheckpointV1
-]:
-    return AuthorityPackage(
-        _CompleteHaringeyAdapter(today=lambda: TODAY),
-        haringey.HaringeyApplicationV1,
-        haringey.HaringeyCheckpointV1,
-    )
-
-
 def test_haringey_qualification_requires_explicit_safe_options(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -511,99 +480,173 @@ def test_haringey_qualification_requires_explicit_safe_options(
     assert module.main(args, session_factory=session_factory) == 2
     assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
     assert (occupied / "existing").read_text(encoding="utf-8") == "preserve"
+
+    wrong_span = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "seven-day-scope"),
+        "--start",
+        "2026-09-10",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(wrong_span, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "30-day-window-required"
     assert created == 0
 
 
-def test_haringey_qualification_writes_receipt_only_after_all_checks(
+def test_haringey_receipt_schema_and_atomic_writer_resist_predictable_symlink(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Exercise the future success path through a fully evidenced test seam."""
+    """Describe pending weekly obligations and avoid a fixed temporary path."""
     module = _haringey_qualification_module()
-    data_dir = tmp_path / "qualified"
-    sessions: list[_QualificationBrowserSession] = []
+    created_at = datetime(2026, 9, 16, 13, tzinfo=UTC)
+    receipt = module.HaringeyQualificationReceiptV1(
+        created_at=created_at,
+        scope=module.QualificationScope(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+        counts=module.QualificationCounts(
+            applications=1,
+            discovered_references=1,
+            native_versions=1,
+            application_versions=1,
+            document_versions=1,
+            comment_versions=1,
+            pending_retries=0,
+            failed_sections=0,
+            unmapped_records=0,
+        ),
+        costs=module.QualificationCosts(
+            initial=module.QualificationCost(
+                request_count=1,
+                transferred_bytes=1,
+                attachment_body_requests=0,
+            ),
+            rerun=module.QualificationCost(
+                request_count=0,
+                transferred_bytes=0,
+                attachment_body_requests=0,
+            ),
+        ),
+        run_statuses=(RunStatus.SUCCEEDED, RunStatus.SUCCEEDED),
+        checks=(module.QualificationCheck(name="test", ok=True),),
+        weekly_refresh_obligations=module._pending_weekly_obligations(created_at),
+    )
+    obligations = receipt.model_dump(mode="json")["weekly_refresh_obligations"]
+    assert obligations == [
+        {
+            "ordinal": 1,
+            "minimum_days_after_bootstrap": 7,
+            "due_at": "2026-09-23T13:00:00Z",
+            "status": "pending",
+            "requires_genuinely_later_run": True,
+        },
+        {
+            "ordinal": 2,
+            "minimum_days_after_bootstrap": 14,
+            "due_at": "2026-09-30T13:00:00Z",
+            "status": "pending",
+            "requires_genuinely_later_run": True,
+        },
+    ]
 
-    async def session_factory() -> _QualificationBrowserSession:
-        pages = (
-            {1: _search_page(1, (_search_hit(2582),), pages=1, total=1)}
-            if not sessions
-            else {}
+    receipt_path = tmp_path / "haringey-qualification-v1.json"
+    victim = tmp_path / "victim"
+    victim.write_text("preserve", encoding="utf-8")
+    predictable = tmp_path / ".haringey-qualification-v1.json.tmp"
+    predictable.symlink_to(victim)
+    module._write_receipt(receipt_path, receipt)
+
+    assert victim.read_text(encoding="utf-8") == "preserve"
+    assert predictable.is_symlink()
+    assert json.loads(receipt_path.read_text(encoding="utf-8"))[
+        "weekly_refresh_obligations"
+    ] == obligations
+    assert tuple(tmp_path.glob(".haringey-qualification-v1.json.*.tmp")) == ()
+
+
+def test_haringey_terminal_checkpoint_requires_exact_durable_inventory() -> None:
+    """A terminal bit cannot replace reconciled queries and PKID identities."""
+    module = _haringey_qualification_module()
+    scope = module.QualificationScope(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=True,
+    )
+    query_keys = module._expected_query_inventory(scope)
+    assert query_keys == (
+        "weekly|2026-08-18|2026-08-25",
+        "weekly|2026-08-25|2026-09-01",
+        "weekly|2026-09-01|2026-09-08",
+        "weekly|2026-09-08|2026-09-15",
+        "weekly|2026-09-15|2026-09-16",
+        "map|mapsources/AllMaps|planning_current_apps",
+        "map|mapsources/WebTeam|curr_planning_apps_solo",
+        "map|mapsources/WebTeam|decided_planning_apps_solo",
+    )
+    assert "older_open_complete" not in haringey.HaringeyCheckpointV1.model_fields
+    completed = tuple(
+        haringey.HaringeyCompletedQueryV1(
+            key=key,
+            advertised_count=1,
+            observed_count=1,
+            unique_count=1,
         )
-        session = _QualificationBrowserSession(pages)
-        sessions.append(session)
-        return session
-
-    result = module.main(
-        [
-            "--confirm-live",
-            "--data-dir",
-            str(data_dir),
-            "--start",
-            "2026-09-10",
-            "--end",
-            "2026-09-16",
-            "--include-open",
-        ],
-        session_factory=session_factory,
-        now=lambda: datetime(2026, 9, 16, 13, tzinfo=UTC),
-        package=_complete_haringey_package(),
+        for key in query_keys
+    )
+    unresolved = haringey.HaringeyCheckpointV1(
+        page_token="complete",  # noqa: S106 - checkpoint cursor.
+        window_start=scope.start,
+        window_end=scope.end,
+        next_page=2,
+        reported_page_count=1,
+        reported_result_count=1,
+        observed_result_count=1,
+        seen_references=("HGY/1999/0250",),
+        quick_link_complete=True,
+        completed_queries=completed,
+        legacy_current_pkids=("19085",),
+    )
+    assert not module._checkpoint_inventory_complete(
+        unresolved,
+        scope,
+        ("HGY/1999/0250",),
+    )
+    missing_query = unresolved.model_copy(
+        update={
+            "completed_queries": completed[:-1],
+            "legacy_resolutions": (
+                haringey.HaringeyLegacyResolutionV1(
+                    pkid="19085",
+                    public_reference="HGY/1999/0250",
+                    salesforce_record_id="a0i8d000002Flr2AAC",
+                    evidence_digest="0" * 64,
+                ),
+            ),
+        }
+    )
+    assert not module._checkpoint_inventory_complete(
+        missing_query,
+        scope,
+        ("HGY/1999/0250",),
     )
 
-    assert result == 0
-    captured = capsys.readouterr()
-    assert captured.err == ""
-    receipt_path = data_dir / "haringey-qualification-v1.json"
-    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    assert receipt == json.loads(captured.out)
-    assert receipt["schema_version"] == 1
-    assert receipt["authority_id"] == "haringey"
-    assert receipt["scope"] == {
-        "start": "2026-09-10",
-        "end": "2026-09-16",
-        "include_open": True,
-    }
-    assert receipt["counts"]["applications"] == 1
-    assert receipt["counts"]["discovered_references"] == 1
-    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
-    assert all(check["ok"] for check in receipt["checks"])
-    assert receipt["costs"]["rerun"]["request_count"] == 0
-    assert len(sessions) == 2
-    assert all(session.closed for session in sessions)
-    assert not (data_dir / ".haringey-qualification-v1.json.tmp").exists()
 
-
-@pytest.mark.parametrize(
-    ("start", "expected_checks", "source_error", "pages"),
-    [
-        (
-            "2026-08-18",
-            ["bounded-30-day-discovery", "complete-older-open-inventory"],
-            "HaringeyWindowUnavailableError",
-            {},
-        ),
-        (
-            "2026-09-10",
-            ["complete-older-open-inventory"],
-            "HaringeyOlderOpenUnavailableError",
-            {1: _search_page(1, (_search_hit(2582),), pages=1, total=1)},
-        ),
-    ],
-)
 def test_haringey_qualification_refuses_incomplete_live_discovery(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-    start: str,
-    expected_checks: list[str],
-    source_error: str,
-    pages: dict[int, haringey.HaringeySearchPageV1],
 ) -> None:
     """Persist the failed run but never emit a receipt for an incomplete source."""
     module = _haringey_qualification_module()
-    data_dir = tmp_path / source_error
+    data_dir = tmp_path / "HaringeyWindowUnavailableError"
     sessions: list[_QualificationBrowserSession] = []
 
     async def session_factory() -> _QualificationBrowserSession:
-        session = _QualificationBrowserSession(pages)
+        session = _QualificationBrowserSession({})
         sessions.append(session)
         return session
 
@@ -613,13 +656,12 @@ def test_haringey_qualification_refuses_incomplete_live_discovery(
             "--data-dir",
             str(data_dir),
             "--start",
-            start,
+            "2026-08-18",
             "--end",
             "2026-09-16",
             "--include-open",
         ],
         session_factory=session_factory,
-        package=_haringey_package(),
     )
 
     assert result == 1
@@ -628,8 +670,11 @@ def test_haringey_qualification_refuses_incomplete_live_discovery(
     error = json.loads(captured.err)
     assert error == {
         "error": "qualification-failed",
-        "failed_checks": expected_checks,
-        "source_error": source_error,
+        "failed_checks": [
+            "bounded-30-day-discovery",
+            "complete-older-open-inventory",
+        ],
+        "source_error": "HaringeyWindowUnavailableError",
     }
     assert len(sessions) == 1
     assert sessions[0].closed is True
@@ -671,6 +716,44 @@ def test_haringey_public_collector_keeps_files_metadata_only(tmp_path: Path) -> 
     assert all("version/download" not in url for url in first.requested_urls)
     assert first.attachment_body_requests == 0
     assert first_session.application_calls == ["a0iP00002582"]
+    store.close()
+
+
+def test_haringey_qualification_rejects_digest_invalid_evidence(
+    tmp_path: Path,
+) -> None:
+    """Existing evidence paths are insufficient when retained bytes are corrupt."""
+    module = _haringey_qualification_module()
+    store = SqliteStore(tmp_path / "db.sqlite3", EvidenceStore(tmp_path / "evidence"))
+    collector = Collector(AuthorityRegistry((_haringey_package(),)), store)
+    page = _search_page(1, (_search_hit(2582),), pages=1, total=1)
+    asyncio.run(
+        collector.collect(
+            AuthorityId("haringey"),
+            RECENT,
+            _BrowserSession({1: page}),
+        )
+    )
+    evidence_path = next((tmp_path / "evidence").rglob("*.gz"))
+    evidence_path.write_bytes(b"tampered")
+    assert store.missing_evidence_paths() == ()
+    assert store.invalid_evidence_paths()
+
+    checks = module._base_checks(
+        store,
+        store.qualification_snapshot(AuthorityId("haringey")),
+        module.QualificationScope(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+        module.QualificationCost(
+            request_count=4,
+            transferred_bytes=1,
+            attachment_body_requests=0,
+        ),
+    )
+    assert {check.name: check.ok for check in checks}["evidence-integrity"] is False
     store.close()
 
 
@@ -1310,4 +1393,8 @@ def test_registry_statuses_remain_truthful() -> None:
     assert (
         registry.manifest(AuthorityId("haringey")).live_status.readiness.value
         == "browser-only"
+    )
+    assert registry.manifest(AuthorityId("haringey")).live_status.reason == (
+        "complete collection is blocked by the missing deterministic legacy-PKID "
+        "to HGY and Salesforce crosswalk"
     )

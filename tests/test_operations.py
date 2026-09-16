@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import sqlite3
 from contextlib import closing
@@ -550,6 +551,29 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     with pytest.raises(KeyError):
         reopened.retained_native_records()
     reopened.close()
+
+
+def test_store_detects_missing_corrupt_and_digest_mismatched_evidence(
+    tmp_path: Path,
+) -> None:
+    """Qualification-grade evidence validation checks bytes, not just paths."""
+    store = _store(tmp_path / "data")
+    _collect_barnet(store)
+    evidence_path = next((tmp_path / "data" / "evidence").rglob("*.gz"))
+    relative = str(evidence_path.relative_to(tmp_path / "data" / "evidence"))
+    original = evidence_path.read_bytes()
+    assert store.invalid_evidence_paths() == ()
+
+    evidence_path.write_bytes(gzip.compress(b"different", mtime=0))
+    assert store.invalid_evidence_paths() == (relative,)
+    evidence_path.write_bytes(b"not-gzip")
+    assert store.invalid_evidence_paths() == (relative,)
+    evidence_path.unlink()
+    assert store.invalid_evidence_paths() == (relative,)
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_bytes(original)
+    assert store.invalid_evidence_paths() == ()
+    store.close()
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
