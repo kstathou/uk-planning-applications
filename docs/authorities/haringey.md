@@ -34,3 +34,25 @@ The files tab exposed six metadata rows. Each row included a date, title, type a
 ## Verification status
 
 `VERIFIED` for seven-day discovery, its 72-record pagination contract, one detail record, one explicit empty comment section, and the complete six-row file index. Advanced search, user-defined weeks, collapsed appeals and consultees, historical comments, and incremental refresh remain open.
+
+## Browser request contract capture
+
+The seven-day journey was rechecked on 16 September 2026. Opening the register
+and selecting the quick link navigated to `/pr/s/register-view` with
+`c__r=Arcus_BE_Public_Register` and a base64-encoded `c__q` payload naming the
+register, `quick-link` search type, display label, and
+`Planning_Applications_Weekly_List` search. The response again reported 72
+records across eight pages.
+
+Each result link carried a Salesforce record identifier in
+`/pr/s/detail/<record-id>?c__r=Arcus_BE_Public_Register`. The pagination links
+had no page URL; their component-local `data-id` selected the page, so the live
+browser adapter must drive or reproduce that client interaction and reconcile
+all 72 rows.
+
+The detail component rendered labelled definition lists for the core fields and
+separate Details, Comments, and Files tabs. The observed Comments tab explicitly
+reported no comments. The Files table exposed six rows with date, title, media
+type, size, and a Salesforce source link. No file link or `Download all` control
+was opened. This contract requires an authority-owned page object; a single
+rendered-page GET cannot prove pagination or child-section completeness.

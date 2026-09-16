@@ -266,12 +266,36 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
     assert store.database_integrity() == "ok"
     assert store.storage_bytes() > 0
 
+    rich_reference = _rich_observation().normalised.reference
+    assert (
+        store.collection_work(
+            AuthorityId("barnet"),
+            datetime(2026, 9, 7, 23, 59, tzinfo=UTC),
+        )
+        == ()
+    )
+    assert store.collection_work(
+        AuthorityId("barnet"),
+        datetime(2026, 9, 8, tzinfo=UTC),
+    ) == (rich_reference,)
+
     store.set_refresh_schedule(
         application_id,
         datetime(2026, 10, 1, tzinfo=UTC),
         "quarterly",
         "decided",
     )
+    assert (
+        store.collection_work(
+            AuthorityId("barnet"),
+            datetime(2026, 9, 30, tzinfo=UTC),
+        )
+        == ()
+    )
+    assert store.collection_work(
+        AuthorityId("barnet"),
+        datetime(2026, 10, 1, tzinfo=UTC),
+    ) == (rich_reference,)
     store.set_suppression(application_id, suppressed=True, reason="reviewed")
     assert store.application_views() == ()
     store.set_suppression(application_id, suppressed=False, reason="corrected")
@@ -282,6 +306,101 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
             suppressed=True,
             reason="invalid",
         )
+    store.close()
+
+
+def test_old_decisions_receive_a_quarterly_refresh_schedule(tmp_path: Path) -> None:
+    """A decision older than ninety days is no longer placed on weekly refresh."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    original = _rich_observation()
+    reference = SourceReference(
+        source_id=SourceId("barnet-idox-current"),
+        reference="OLD/2026/1",
+    )
+    normalised = original.normalised.model_copy(
+        update={
+            "reference": reference,
+            "metadata": original.normalised.metadata.model_copy(
+                update={"decision_date": date(2026, 1, 1)}
+            ),
+        }
+    )
+    observed_at = datetime(2026, 9, 1, tzinfo=UTC)
+    old = original.model_copy(
+        update={"normalised": normalised, "observed_at": observed_at}
+    )
+    run_id = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(run_id, old)
+
+    assert (
+        store.collection_work(
+            AuthorityId("barnet"),
+            observed_at + timedelta(days=89),
+        )
+        == ()
+    )
+    assert store.collection_work(
+        AuthorityId("barnet"),
+        observed_at + timedelta(days=90),
+    ) == (reference,)
+    store.close()
+
+
+def test_semantic_ordering_does_not_create_false_changes(tmp_path: Path) -> None:
+    """Portal row reordering is canonical while native payload order is retained."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    original = _rich_observation()
+    second_document = DocumentRecord(
+        title="Application form",
+        url=HttpUrl("https://example.test/application.pdf"),
+    )
+    second_comment = CommentRecord(comment_id="comment-2", text="Object")
+    first_normalised = original.normalised.model_copy(
+        update={
+            "documents": (*original.normalised.documents, second_document),
+            "comments": (*original.normalised.comments, second_comment),
+            "metadata": original.normalised.metadata.model_copy(
+                update={
+                    "aliases": ("Z-ALIAS", "A-ALIAS"),
+                    "constraints": ("Trees", "Flooding"),
+                }
+            ),
+        }
+    )
+    second_normalised = first_normalised.model_copy(
+        update={
+            "documents": tuple(reversed(first_normalised.documents)),
+            "comments": tuple(reversed(first_normalised.comments)),
+            "metadata": first_normalised.metadata.model_copy(
+                update={
+                    "aliases": tuple(reversed(first_normalised.metadata.aliases)),
+                    "constraints": tuple(
+                        reversed(first_normalised.metadata.constraints)
+                    ),
+                }
+            ),
+        }
+    )
+    for normalised in (first_normalised, second_normalised):
+        run_id = store.begin_run(AuthorityId("barnet"))
+        store.commit_observation(
+            run_id,
+            original.model_copy(update={"normalised": normalised}),
+        )
+
+    application_id = store.application_views()[0].application.id
+    assert store.semantic_version_count(application_id, "application") == 1
+    assert store.semantic_version_count(application_id, "documents") == 1
+    assert store.semantic_version_count(application_id, "comments") == 1
+    view = store.application_view(application_id)
+    assert view.metadata.aliases == ("A-ALIAS", "Z-ALIAS")
+    assert view.metadata.constraints == ("Flooding", "Trees")
+    assert [document.title for document in view.application.documents] == [
+        "Application form",
+        "Decision notice",
+    ]
     store.close()
 
 
@@ -388,6 +507,7 @@ def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> No
     assert "native_json" not in public
     assert public["comment_count"] == 1
     assert public["source_url"] == "https://example.test/application/RICH-2026-1"
+    assert public["source_reuse"].startswith("Verify the linked authority source")
 
     export_records(store, research, ExportFormat.JSONL, ExportProfile.RESEARCH)
     research_row = json.loads(research.read_text())
@@ -645,8 +765,14 @@ def test_failed_interrupted_and_retried_detail_state(tmp_path: Path) -> None:
     assert pending.status == "pending"
     assert store.run_statuses() == (RunStatus.FAILED, RunStatus.FAILED)
 
-    asyncio.run(
+    successful = fixture_session(WINDOW)
+    report = asyncio.run(
         collector.collect(AuthorityId("barnet"), WINDOW, fixture_session(WINDOW))
+    )
+    assert report.requested_urls == (
+        successful.available_urls[2],
+        successful.available_urls[3],
+        successful.available_urls[1],
     )
     assert store.retry_items()[0].status == "succeeded"
     assert store.run_statuses()[-1] == RunStatus.SUCCEEDED

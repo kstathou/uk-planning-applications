@@ -27,7 +27,28 @@ from yimby.transport import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
-_ATTACHMENT_SUFFIXES = {".doc", ".docx", ".pdf", ".xls", ".xlsx", ".zip"}
+_ATTACHMENT_SUFFIXES = {
+    ".bmp",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".heic",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".xls",
+    ".xlsx",
+    ".zip",
+}
+_ATTACHMENT_PATH_FRAGMENTS = (
+    "/document/download",
+    "/sfc/servlet.shepherd/document/download/",
+    "/downloadall",
+)
 _ATTACHMENT_MEDIA_TYPES = {
     "application/msword",
     "application/octet-stream",
@@ -37,11 +58,16 @@ _ATTACHMENT_MEDIA_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "application/zip",
 }
+_ATTACHMENT_MEDIA_PREFIXES = ("audio/", "image/", "video/")
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _SUCCESS_MIN = 200
 _SUCCESS_MAX = 300
 _MAX_ATTEMPTS = 5
 _MAX_RETRY_DELAY = 60.0
+_DEFAULT_HEADERS = {
+    "accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    "user-agent": "yimby/0.1 (+local planning research; contact via source repository)",
+}
 
 
 class HostRateLimiter:
@@ -95,6 +121,7 @@ class HttpxPortalSession:
             raise ValueError(msg)
         self._client = client or httpx.AsyncClient(
             follow_redirects=True,
+            headers=_DEFAULT_HEADERS,
             timeout=httpx.Timeout(30.0),
         )
         self._limiter = limiter or HostRateLimiter()
@@ -109,7 +136,7 @@ class HttpxPortalSession:
         """Fetch one HTML or JSON response without reading attachments."""
         raw_url = str(request.url)
         split = urlsplit(raw_url)
-        if PurePosixPath(split.path).suffix.lower() in _ATTACHMENT_SUFFIXES:
+        if _is_attachment_path(split.path):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
         response = await self._send_with_retries(
@@ -141,6 +168,7 @@ class HttpxPortalSession:
         host: str,
     ) -> httpx.Response:
         last_status: int | None = None
+        safe_url = _safe_url(url)
         form = [(field.name, field.value) for field in portal_request.form]
         encoded_form = urlencode(form).encode() if form else None
         headers = (
@@ -160,7 +188,7 @@ class HttpxPortalSession:
                     )
             except httpx.TransportError as error:
                 if attempt == self._max_attempts:
-                    raise _attempts_error(host, attempt) from error
+                    raise _attempts_error(safe_url, attempt) from error
                 await self._sleep(_backoff(attempt))
                 continue
             last_status = response.status_code
@@ -176,9 +204,9 @@ class HttpxPortalSession:
                     continue
             if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
                 await response.aclose()
-                raise _status_error(host, response.status_code)
+                raise _status_error(safe_url, response.status_code)
             return response
-        raise _status_error(host, last_status)  # pragma: no cover
+        raise _status_error(safe_url, last_status)  # pragma: no cover
 
     @property
     def requested_urls(self) -> tuple[str, ...]:
@@ -217,6 +245,14 @@ def _is_attachment_response(response: httpx.Response) -> bool:
         "attachment" in disposition
         or "filename=" in disposition
         or media_type in _ATTACHMENT_MEDIA_TYPES
+        or media_type.startswith(_ATTACHMENT_MEDIA_PREFIXES)
+    )
+
+
+def _is_attachment_path(path: str) -> bool:
+    lowered = path.casefold()
+    return PurePosixPath(path).suffix.lower() in _ATTACHMENT_SUFFIXES or any(
+        fragment in lowered for fragment in _ATTACHMENT_PATH_FRAGMENTS
     )
 
 
@@ -226,7 +262,7 @@ def _safe_url(url: str) -> str:
 
 
 def _backoff(attempt: int) -> float:
-    return min(float(2 ** (attempt - 1)), 30.0)
+    return min(5.0 * float(2 ** (attempt - 1)), 30.0)
 
 
 def _retry_after_seconds(value: str | None, now: datetime) -> float | None:
@@ -253,13 +289,13 @@ def _attachment_error(host: str | None) -> AttachmentBodyBlockedError:
     )
 
 
-def _attempts_error(host: str, attempts: int) -> SourceUnavailableError:
+def _attempts_error(safe_url: str, attempts: int) -> SourceUnavailableError:
     return SourceUnavailableError(
-        f"source unavailable: {host} after {attempts} attempts"
+        f"source unavailable: {safe_url} after {attempts} attempts"
     )
 
 
-def _status_error(host: str, status: int | None) -> SourceUnavailableError:
+def _status_error(safe_url: str, status: int | None) -> SourceUnavailableError:
     return SourceUnavailableError(
-        f"source unavailable: {host} HTTP {status or 'unknown'}"
+        f"source unavailable: {safe_url} HTTP {status or 'unknown'}"
     )

@@ -31,3 +31,19 @@ The adapter must distinguish a visible loading state from an empty section. Clie
 
 This walkthrough covered one weekly query and one current record. It did not enumerate the JavaScript-loaded sections, replacement-portal documents, comments, decided cases, older open applications, or incremental changes.
 
+## Request contract capture
+
+The legacy weekly route was rechecked on 16 September 2026 at
+`/quicksearch/validated_past_week`. The returned `#searchresults` table was
+enhanced by a client-side DataTable. At that time it reported 30 entries over
+three pages, displayed ten rows at once, and provided the readable reference,
+record type, description, date, and one opaque `/result/...` link per record.
+The collector must parse or enumerate all entries rather than treat the first
+ten DOM rows as the complete result.
+
+The observed result page exposed the reference, description, planning portal
+reference, status, application type, development address, and parish. Four
+other areas still rendered `Loading...`, and no successful child-data request
+was visible in the document. Those sections remain failed or partial, not
+empty. The replacement AssureLive system remains the required source for
+current documents and other migrated fields.

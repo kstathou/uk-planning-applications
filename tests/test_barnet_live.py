@@ -64,8 +64,10 @@ WEEKLY_FORM = b"""
     <option value="14/09/2026">14 September</option>
     <option value="21/09/2026">21 September</option>
   </select>
-  <input type="hidden" name="dateType" value="DC_Validated">
-  <input type="hidden" name="searchType" value="Weekly List">
+  <input type="radio" name="dateType" value="DC_Validated" checked>
+  <input type="radio" name="dateType" value="DC_Decided">
+  <input type="checkbox" name="unused" value="must-not-be-posted">
+  <input type="hidden" name="searchType" value="Application">
   <input type="submit" name="submit" value="Search">
 </form></body></html>
 """
@@ -190,7 +192,11 @@ class _BarnetMock:
             assert submitted["_csrf"] == "sanitised-csrf"
             assert submitted["searchCriteria.ward"] == ""
             assert submitted["week"] == "14/09/2026"
-            assert submitted["searchType"] == "Weekly List"
+            assert submitted["searchType"] == "Application"
+            assert [value for name, value in fields if name == "dateType"] == [
+                submitted["dateType"]
+            ]
+            assert "unused" not in submitted
             if submitted["dateType"] == "DC_Decided":
                 if self.multi_page:
                     return httpx.Response(
@@ -657,6 +663,17 @@ def test_barnet_form_and_search_boundary_variants() -> None:
     assert parsed.reported == 1
     assert parsed.references[0].reference == "A"
 
+    live_count = (
+        b'<li class="searchresult"><a href="applicationDetails.do?keyVal=KEY">'
+        b"Details</a><p>Ref. No: A</p></li> Showing 1-1 of 1"
+    )
+    parsed = barnet_adapter._parse_search_page(live_count)
+    assert parsed.reported == 1
+    assert parsed.references[0].reference == "A"
+    empty = barnet_adapter._parse_search_page(b"<p>No results found</p>")
+    assert empty.reported == 0
+    assert empty.references == ()
+
 
 def test_barnet_detail_boundary_variants() -> None:
     """Detail sections distinguish empty, unavailable, malformed, and complete."""
@@ -770,6 +787,8 @@ def test_barnet_label_count_and_date_boundary_variants() -> None:
     assert barnet_adapter._labelled_value(prefix, "reference") == "TCP/0001/26"
     with pytest.raises(BarnetParseError, match="labelled missing"):
         barnet_adapter._labelled_value(prefix, "missing")
+    with pytest.raises(BarnetParseError, match="missing/absent"):
+        barnet_adapter._labelled_value_any(prefix, "missing", "absent")
     with pytest.raises(BarnetParseError, match="summary proposal"):
         barnet_adapter._required_field({}, "proposal")
     assert barnet_adapter._optional_date({}, "received date") is None

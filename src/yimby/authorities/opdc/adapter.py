@@ -13,9 +13,11 @@ from urllib.parse import quote
 from pydantic import HttpUrl
 
 from yimby.domain import (
+    AuthorityCapabilities,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
+    CapabilityState,
     Completeness,
     CompleteSection,
     DiscoveryBatch,
@@ -71,6 +73,7 @@ class OpdcAdapter:
         name="Old Oak and Park Royal Development Corporation",
         kind=AuthorityKind.DEVELOPMENT_CORPORATION,
         sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(BASE_URL)),),
+        capabilities=AuthorityCapabilities(discovery=CapabilityState.UNKNOWN),
     )
 
     async def discover(

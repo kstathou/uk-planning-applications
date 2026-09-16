@@ -34,3 +34,26 @@ The current search explicitly limits its coverage to records since 2010. Older r
 
 This walkthrough covered one exact-reference search and one decided record. It did not enumerate a date window, open cases, document rows, comments, pagination, or incremental changes.
 
+## Request contract capture
+
+The exact-reference path was rechecked on 16 September 2026. The JSF form
+posts `searchForm`, `searchForm:searchTermInput:textField`,
+`searchForm:SubmitButton:button`, and `javax.faces.ViewState` as multipart form
+data to its session-qualified `index.xhtml` action. The result URL retained the
+search term, page, and sort order. Its record link redirected through
+`/NECSWS/Redirection/redirect.aspx?linkid=EXDC&PARAM0=681726` to the Northgate
+standard-details route.
+
+The Northgate response used a `.dataview` record whose labelled fields included
+the reference, address, application and development types, proposal, current
+status, published parties, ward, BNG easting and northing, appeal state, case
+officer, determination level, and land uses. Dates, checks, meetings,
+constraints, consultees, and related documents were separate links keyed by the
+same Northgate numeric identifier.
+
+The document service query
+`/CMWebDrawer/PlanRec?q=recContainer:"2026/2706/L"` reported 16 records with
+created date, title, document type, and an inline source link. The capture read
+that index only and did not retrieve any attachment body. Exact-reference
+extraction and the observed document index are now verified at request level;
+bounded discovery, comments, pagination, and incremental changes remain open.

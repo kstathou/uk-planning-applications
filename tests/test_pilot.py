@@ -53,6 +53,7 @@ from yimby.authorities.west_suffolk.adapter import WestSuffolkParseError
 from yimby.authorities.west_suffolk.fixtures import (
     fixture_session as west_suffolk_fixtures,
 )
+from yimby.domain import CapabilityState
 from yimby.evidence import EvidenceStore
 from yimby.store import SqliteStore
 from yimby.transport import FixtureResponse, FixtureSession
@@ -317,3 +318,20 @@ def test_pilot_registry_ownership() -> None:
         AuthorityId("durham"),
         AuthorityId("west-suffolk"),
     )
+
+
+def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:
+    """Blocked and map-only source shells retain unknown live capabilities."""
+    registry = pilot_registry()
+    unresolved = {
+        AuthorityId("opdc"),
+        AuthorityId("dorset"),
+        AuthorityId("blackburn-with-darwen"),
+        AuthorityId("birmingham"),
+    }
+    assert {
+        authority_id
+        for authority_id in unresolved
+        if registry.manifest(authority_id).capabilities.discovery
+        == CapabilityState.UNKNOWN
+    } == unresolved

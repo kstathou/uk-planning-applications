@@ -30,15 +30,40 @@ from yimby.transport import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-_ATTACHMENT_SUFFIXES = {".doc", ".docx", ".pdf", ".xls", ".xlsx", ".zip"}
+_ATTACHMENT_SUFFIXES = {
+    ".bmp",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".heic",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".xls",
+    ".xlsx",
+    ".zip",
+}
+_ATTACHMENT_PATH_FRAGMENTS = (
+    "/document/download",
+    "/sfc/servlet.shepherd/document/download/",
+    "/downloadall",
+)
 _ATTACHMENT_MEDIA_PREFIXES = (
+    "audio/",
     "application/msword",
     "application/octet-stream",
     "application/pdf",
     "application/vnd.ms-",
     "application/vnd.openxmlformats-",
     "application/zip",
+    "image/",
+    "video/",
 )
+_BLOCKED_RESOURCE_TYPES = {"image", "media"}
 
 
 class BrowserPayload(FrozenModel):
@@ -95,8 +120,11 @@ class PlaywrightBoundary:
 
         async def route_request(route: Route) -> None:
             request = route.request
-            suffix = PurePosixPath(urlsplit(request.url).path).suffix.lower()
-            if suffix in _ATTACHMENT_SUFFIXES:
+            path = urlsplit(request.url).path
+            if (
+                _is_attachment_path(path)
+                or request.resource_type in _BLOCKED_RESOURCE_TYPES
+            ):
                 await route.abort()
             else:
                 await route.continue_()
@@ -160,7 +188,7 @@ class PlaywrightPortalSession:
         """Render one allowlisted page and retain the resulting HTML."""
         raw_url = str(request.url)
         split = urlsplit(raw_url)
-        if PurePosixPath(split.path).suffix.lower() in _ATTACHMENT_SUFFIXES:
+        if _is_attachment_path(split.path):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
         started = self._clock()
@@ -217,6 +245,13 @@ def _is_attachment(payload: BrowserPayload) -> bool:
         "attachment" in disposition
         or "filename=" in disposition
         or media_type.startswith(_ATTACHMENT_MEDIA_PREFIXES)
+    )
+
+
+def _is_attachment_path(path: str) -> bool:
+    lowered = path.casefold()
+    return PurePosixPath(path).suffix.lower() in _ATTACHMENT_SUFFIXES or any(
+        fragment in lowered for fragment in _ATTACHMENT_PATH_FRAGMENTS
     )
 
 

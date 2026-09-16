@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING
 
@@ -63,20 +64,32 @@ class Collector:
         checkpoint = self._store.discovery_state(authority_id).checkpoint
         application_ids = []
         attachment_urls: set[str] = set()
+        processed: set[tuple[str, str]] = set()
+
+        async def collect_reference(reference: SourceReference) -> None:
+            key = (str(reference.source_id), reference.reference)
+            if key in processed:
+                return
+            context.active_reference = reference
+            collected = await package.collect(session, reference)
+            attachment_urls.update(
+                str(document.url) for document in collected.normalised.documents
+            )
+            application_ids.append(self._store.commit_observation(run_id, collected))
+            self._store.mark_retry_succeeded(authority_id, reference)
+            processed.add(key)
+            context.active_reference = None
+
         try:
+            for reference in self._store.collection_work(
+                authority_id,
+                datetime.now(UTC),
+            ):
+                await collect_reference(reference)
             async for batch in package.discover(session, window, checkpoint):
                 self._store.commit_discovery(run_id, authority_id, batch)
                 for reference in batch.references:
-                    context.active_reference = reference
-                    collected = await package.collect(session, reference)
-                    attachment_urls.update(
-                        str(document.url) for document in collected.normalised.documents
-                    )
-                    application_ids.append(
-                        self._store.commit_observation(run_id, collected)
-                    )
-                    self._store.mark_retry_succeeded(authority_id, reference)
-                    context.active_reference = None
+                    await collect_reference(reference)
         except asyncio.CancelledError as error:
             self._finish_failed_run(
                 context,

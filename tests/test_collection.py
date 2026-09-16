@@ -207,7 +207,15 @@ def test_empty_and_initially_failed_comments_are_explicit(tmp_path: Path) -> Non
     failed_store.close()
 
 
-def test_attachment_policy_blocks_body_before_fixture_lookup() -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "files/plan.pdf",
+        "files/photo.png",
+        "Document/Download?id=1",
+    ],
+)
+def test_attachment_policy_blocks_body_before_fixture_lookup(path: str) -> None:
     """Document metadata URLs cannot become fixture body requests."""
     session = FixtureSession({})
     with pytest.raises(AttachmentBodyBlockedError):
@@ -215,7 +223,7 @@ def test_attachment_policy_blocks_body_before_fixture_lookup() -> None:
             session.fetch(
                 PortalRequest(
                     url=HttpUrl(
-                        "https://publicaccess.barnet.gov.uk/online-applications/files/plan.pdf"
+                        f"https://publicaccess.barnet.gov.uk/online-applications/{path}"
                     ),
                     intent=RequestIntent.DETAIL,
                 )

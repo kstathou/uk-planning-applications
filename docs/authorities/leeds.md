@@ -33,3 +33,19 @@ This is a failed detail request, not an empty application. Discovery is verified
 ## Verification status
 
 `VERIFIED` for the two weekly-list outcomes and the 156-record pagination contract. `INCONCLUSIVE` for the application detail and every child section because the selected record returned a remote exception.
+
+## Request contract capture
+
+The weekly-list request was rechecked on 16 September 2026. It posts to
+`weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
+`searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
+`searchType`. The date-type values were `DC_Validated` and `DC_Decided`.
+
+Selecting the week beginning 7 September 2026 again produced 156 records. The
+response used `li.searchresult` rows and
+`pagedSearchResults.do?action=page&searchCriteria.page=...`; the first ten page
+links and a next-page link were visible, so enumeration must continue until the
+reported 156 rows are queued. Each summary link carried the portal key in
+`applicationDetails.do?keyVal=...&activeTab=summary`, while the result row
+published the human reference, proposal, address, validated date, and status.
+The detail and child-section failure remains open.

@@ -13,9 +13,11 @@ from urllib.parse import quote
 from pydantic import HttpUrl
 
 from yimby.domain import (
+    AuthorityCapabilities,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
+    CapabilityState,
     Completeness,
     CompleteSection,
     DiscoveryBatch,
@@ -72,6 +74,7 @@ class BlackburnWithDarwenAdapter:
         name="Blackburn with Darwen Borough Council",
         kind=AuthorityKind.UNITARY,
         sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),),
+        capabilities=AuthorityCapabilities(discovery=CapabilityState.UNKNOWN),
     )
 
     async def discover(

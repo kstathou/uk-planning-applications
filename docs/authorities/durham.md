@@ -34,3 +34,17 @@ The document index exposed all six rows. Metadata included publication date, doc
 ## Verification status
 
 `VERIFIED` for the recorded weekly list, one application summary, comment-section shape, and complete six-row document index. Further-detail, contact, date, related-case, map, decided-list, pagination, and incremental-refresh paths remain open.
+
+## Request contract capture
+
+The weekly-list request was rechecked on 16 September 2026. It posts to
+`weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
+`searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
+`searchType`. The date-type values were `DC_Validated` and `DC_Decided`.
+
+The live validated response exposed nine `li.searchresult` rows without a
+second result page. Each summary link carried the portal key in
+`applicationDetails.do?keyVal=...&activeTab=summary`, while the row published
+the human reference, proposal, address, received date, validated date, status,
+and comment-open marker. This confirms the current weekly request and row
+contract, not the open decided, pagination, and incremental checks above.

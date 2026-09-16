@@ -236,14 +236,6 @@ class SqliteStore:
     ) -> ApplicationId:
         """Persist evidence, native input, and semantic section transitions."""
         normalised = collected.normalised
-        if normalised.metadata.source_url is None and collected.evidence:
-            normalised = normalised.model_copy(
-                update={
-                    "metadata": normalised.metadata.model_copy(
-                        update={"source_url": collected.evidence[0].url}
-                    )
-                }
-            )
         application_id = self._application_id(normalised)
         evidence_paths = [
             (capture, self._evidence.put(capture)) for capture in collected.evidence
@@ -339,7 +331,11 @@ class SqliteStore:
                     ),
                 ),
             )
-            self._set_default_refresh(application_id, collected.observed_at)
+            self._set_refresh_schedule(
+                application_id,
+                normalised,
+                collected.observed_at,
+            )
             self._update_observed_capabilities(normalised)
         return application_id
 
@@ -688,6 +684,64 @@ class SqliteStore:
             )
         )
 
+    def collection_work(
+        self,
+        authority_id: AuthorityId,
+        now: datetime,
+    ) -> tuple[SourceReference, ...]:
+        """Return uncollected, retryable, and due references without duplicates."""
+        rows = (
+            self._connection.execute(
+                """
+                SELECT queue.source_id, queue.reference, queue.locator
+                FROM discovery_queue AS queue
+                LEFT JOIN applications AS application
+                    ON application.source_id = queue.source_id
+                    AND application.reference = queue.reference
+                WHERE queue.authority_id = ? AND application.id IS NULL
+                ORDER BY queue.source_id, queue.reference
+                """,
+                (authority_id,),
+            ),
+            self._connection.execute(
+                """
+                SELECT source_id, reference, locator FROM retry_queue
+                WHERE authority_id = ? AND status = 'pending'
+                    AND next_attempt_at <= ?
+                ORDER BY source_id, reference
+                """,
+                (authority_id, now.isoformat()),
+            ),
+            self._connection.execute(
+                """
+                SELECT application.source_id, application.reference,
+                    application.locator
+                FROM applications AS application
+                JOIN refresh_schedules AS schedule
+                    ON schedule.application_id = application.id
+                WHERE application.authority_id = ?
+                    AND schedule.next_refresh_at <= ?
+                ORDER BY application.source_id, application.reference
+                """,
+                (authority_id, now.isoformat()),
+            ),
+        )
+        work: dict[tuple[str, str], SourceReference] = {}
+        for result in rows:
+            for row in result:
+                key = (row["source_id"], row["reference"])
+                candidate = SourceReference(
+                    source_id=SourceId(row["source_id"]),
+                    reference=row["reference"],
+                    locator=row["locator"],
+                )
+                current = work.get(key)
+                if current is None or (
+                    current.locator is None and candidate.locator is not None
+                ):
+                    work[key] = candidate
+        return tuple(work.values())
+
     def record_failure(
         self,
         authority_id: AuthorityId,
@@ -1005,12 +1059,19 @@ class SqliteStore:
         application_id: ApplicationId,
         normalised: NormalisedObservation,
     ) -> None:
+        normalised = self._canonical_observation(normalised)
         application = _ApplicationSection(
             proposal=normalised.proposal,
             status=normalised.status,
         )
+        application_payload: dict[str, object] = application.model_dump(mode="json")
+        application_payload["metadata"] = normalised.metadata.model_dump(mode="json")
         sections = (
-            ("application", application.model_dump_json(), "complete"),
+            (
+                "application",
+                json.dumps(application_payload, separators=(",", ":")),
+                "complete",
+            ),
             (
                 "documents",
                 _DOCUMENTS.dump_json(normalised.documents).decode(),
@@ -1031,6 +1092,57 @@ class SqliteStore:
                     normalised.normaliser_version,
                 )
         self._commit_metadata(application_id, normalised)
+
+    @staticmethod
+    def _canonical_observation(
+        normalised: NormalisedObservation,
+    ) -> NormalisedObservation:
+        metadata = normalised.metadata
+        canonical_metadata = metadata.model_copy(
+            update={
+                "aliases": tuple(sorted(metadata.aliases)),
+                "published_parties": tuple(sorted(metadata.published_parties)),
+                "constraints": tuple(sorted(metadata.constraints)),
+                "conditions": tuple(sorted(metadata.conditions)),
+                "consultations": tuple(sorted(metadata.consultations)),
+                "events": tuple(
+                    sorted(
+                        metadata.events,
+                        key=lambda event: (
+                            event.event_at,
+                            event.event_type,
+                            event.details or "",
+                        ),
+                    )
+                ),
+                "relationships": tuple(
+                    sorted(
+                        metadata.relationships,
+                        key=lambda relationship: (
+                            relationship.relationship_type,
+                            relationship.related_reference,
+                        ),
+                    )
+                ),
+            }
+        )
+        return normalised.model_copy(
+            update={
+                "documents": tuple(
+                    sorted(
+                        normalised.documents,
+                        key=lambda document: (document.title, str(document.url)),
+                    )
+                ),
+                "comments": tuple(
+                    sorted(
+                        normalised.comments,
+                        key=lambda comment: (comment.comment_id, comment.text),
+                    )
+                ),
+                "metadata": canonical_metadata,
+            }
+        )
 
     def _commit_section(
         self,
@@ -1306,19 +1418,45 @@ class SqliteStore:
                 ),
             )
 
-    def _set_default_refresh(
+    def _set_refresh_schedule(
         self,
         application_id: ApplicationId,
+        normalised: NormalisedObservation,
         observed_at: datetime,
     ) -> None:
+        decision_date = normalised.metadata.decision_date
+        within_decision_window = (
+            decision_date is not None
+            and observed_at.date() <= decision_date + timedelta(days=90)
+        )
+        if decision_date is not None and not within_decision_window:
+            cadence = "quarterly"
+            reason = "decided-over-90-days"
+            delay = timedelta(days=90)
+        else:
+            cadence = "weekly"
+            reason = (
+                "decided-within-90-days"
+                if within_decision_window
+                else "active-or-recent"
+            )
+            delay = timedelta(days=7)
         self._connection.execute(
             """
             INSERT INTO refresh_schedules(
                 application_id, next_refresh_at, cadence, reason
-            ) VALUES (?, ?, 'weekly', 'active-or-recent')
-            ON CONFLICT(application_id) DO NOTHING
+            ) VALUES (?, ?, ?, ?)
+            ON CONFLICT(application_id) DO UPDATE SET
+                next_refresh_at = excluded.next_refresh_at,
+                cadence = excluded.cadence,
+                reason = excluded.reason
             """,
-            (application_id, (observed_at + timedelta(days=7)).isoformat()),
+            (
+                application_id,
+                (observed_at + delay).isoformat(),
+                cadence,
+                reason,
+            ),
         )
 
     def _update_observed_capabilities(

@@ -48,6 +48,7 @@ from yimby.evidence import EvidenceStore
 from yimby.http_transport import (
     HostRateLimiter,
     HttpxPortalSession,
+    _backoff,
     _retry_after_seconds,
 )
 from yimby.orchestration import (
@@ -216,18 +217,30 @@ def test_http_session_cookies_accounting_and_secret_redaction() -> None:
     assert session.mode == TransportMode.LIVE
 
 
+def test_http_session_default_client_identifies_the_collector() -> None:
+    """Live requests use an explicit, honest identity accepted by public portals."""
+    session = HttpxPortalSession()
+    assert session._client.headers["user-agent"].startswith("yimby/0.1 ")
+    assert "text/html" in session._client.headers["accept"]
+    asyncio.run(session.aclose())
+
+
 @pytest.mark.parametrize(
-    ("url", "headers"),
+    ("url", "headers", "network_calls"),
     [
-        ("https://example.test/file.pdf", {}),
-        ("https://example.test/view", {"content-disposition": "attachment"}),
-        ("https://example.test/view", {"content-disposition": "filename=x.txt"}),
-        ("https://example.test/view", {"content-type": "application/pdf"}),
+        ("https://example.test/file.pdf", {}, 0),
+        ("https://example.test/file.png", {}, 0),
+        ("https://example.test/Document/Download?id=1", {}, 0),
+        ("https://example.test/view", {"content-disposition": "attachment"}, 1),
+        ("https://example.test/view", {"content-disposition": "filename=x.txt"}, 1),
+        ("https://example.test/view", {"content-type": "application/pdf"}, 1),
+        ("https://example.test/view", {"content-type": "image/jpeg"}, 1),
     ],
 )
 def test_http_session_blocks_attachment_bodies(
     url: str,
     headers: dict[str, str],
+    network_calls: int,
 ) -> None:
     """Path and response metadata stop attachment content before retention."""
     calls = 0
@@ -248,7 +261,7 @@ def test_http_session_blocks_attachment_bodies(
         await session.aclose()
 
     asyncio.run(exercise())
-    assert calls == (0 if url.endswith(".pdf") else 1)
+    assert calls == network_calls
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
 
@@ -388,6 +401,8 @@ def test_retry_after_parsing_covers_invalid_naive_and_past_dates() -> None:
     assert _retry_after_seconds("nonsense", now) is None
     assert _retry_after_seconds("Tue, 15 Sep 2026 00:00:00 GMT", now) == 0
     assert _retry_after_seconds("15 Sep 2026 00:00:02", now) == 0
+    assert _backoff(1) == 5.0
+    assert _backoff(4) == 30.0
 
 
 class _FakeBoundary:
@@ -447,20 +462,27 @@ def test_browser_session_serialises_accounts_and_blocks_attachments() -> None:
             BrowserPayload(body=b"not retained", media_type="application/pdf")
         )
     )
+    image_media_session = PlaywrightPortalSession(
+        _FakeBoundary(BrowserPayload(body=b"not retained", media_type="image/jpeg"))
+    )
 
     async def blocked() -> None:
         for current, url in (
             (path_session, "https://browser.test/file.docx"),
+            (path_session, "https://browser.test/file.jpeg"),
+            (path_session, "https://browser.test/Document/Download?id=1"),
             (disposition_session, "https://browser.test/view"),
             (media_session, "https://browser.test/view"),
+            (image_media_session, "https://browser.test/view"),
         ):
             with pytest.raises(AttachmentBodyBlockedError):
                 await current.fetch(_request(url))
 
     asyncio.run(blocked())
-    assert path_session.attachment_body_requests == 1
+    assert path_session.attachment_body_requests == 3
     assert disposition_session.attachment_body_requests == 1
     assert media_session.attachment_body_requests == 1
+    assert image_media_session.attachment_body_requests == 1
 
 
 def test_browser_worker_serialises_and_failed_time_is_measured() -> None:
@@ -536,13 +558,23 @@ def test_playwright_production_boundary_lifecycle(
         route_handler = context.route.await_args.args[1]
         blocked_route = MagicMock()
         blocked_route.request.url = "https://browser.test/file.pdf"
+        blocked_route.request.resource_type = "document"
         blocked_route.abort = AsyncMock()
         blocked_route.continue_ = AsyncMock()
         await route_handler(blocked_route)
         blocked_route.abort.assert_awaited_once()
 
+        image_route = MagicMock()
+        image_route.request.url = "https://browser.test/page-image"
+        image_route.request.resource_type = "image"
+        image_route.abort = AsyncMock()
+        image_route.continue_ = AsyncMock()
+        await route_handler(image_route)
+        image_route.abort.assert_awaited_once()
+
         html_route = MagicMock()
         html_route.request.url = "https://browser.test/page"
+        html_route.request.resource_type = "document"
         html_route.abort = AsyncMock()
         html_route.continue_ = AsyncMock()
         await route_handler(html_route)

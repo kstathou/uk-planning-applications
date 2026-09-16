@@ -531,6 +531,8 @@ def _form_fields(form: Tag) -> tuple[FormField, ...]:
             input_type = str(control.get("type", "text")).casefold()
             if input_type in {"button", "image", "reset", "submit"}:
                 continue
+            if input_type in {"checkbox", "radio"} and not control.has_attr("checked"):
+                continue
             value = str(control.get("value", ""))
         elif control.name == "select":
             selected = control.select_one("option[selected]") or control.select_one(
@@ -592,7 +594,6 @@ def _weekly_request(
                     "searchCriteria.ward": "",
                     "week": week,
                     "dateType": date_type,
-                    "searchType": "Weekly List",
                 },
             ),
         )
@@ -613,7 +614,7 @@ def _parse_search_page(body: bytes) -> _SearchPage:
         locators = parse_qs(urlsplit(href).query).get("keyVal", [])
         if len(locators) != 1 or not locators[0]:
             _raise_parse("search result keyVal")
-        reference = _labelled_value(row, "reference")
+        reference = _labelled_value_any(row, "reference", "ref. no", "ref no")
         references.append(
             SourceReference(
                 source_id=CURRENT_SOURCE,
@@ -627,14 +628,18 @@ def _parse_search_page(body: bytes) -> _SearchPage:
         reported = int(str(raw_count))
     else:
         text = soup.get_text(" ", strip=True)
-        match = re.search(
-            r"(?:displaying.*?of|total)\s+(\d+)\s+results?",
-            text,
-            re.IGNORECASE,
-        )
-        if match is None:
-            _raise_parse("reported result count")
-        reported = int(match.group(1))
+        if not references and "no results found" in text.casefold():
+            reported = 0
+        else:
+            match = re.search(
+                r"(?:showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of|"
+                r"displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
+                text,
+                re.IGNORECASE,
+            )
+            if match is None:
+                _raise_parse("reported result count")
+            reported = int(match.group(1))
     page_numbers = [1]
     for link in soup.select('a[href*="pagedSearchResults.do"]'):
         pages = parse_qs(urlsplit(str(link.get("href", ""))).query).get(
@@ -902,6 +907,15 @@ def _labelled_value(container: Tag, label: str) -> str:
         if value.casefold().startswith(prefix):
             return value[len(prefix) :].strip()
     return _raise_parse(f"labelled {label}")
+
+
+def _labelled_value_any(container: Tag, *labels: str) -> str:
+    for label in labels:
+        try:
+            return _labelled_value(container, label)
+        except BarnetParseError:
+            continue
+    return _raise_parse(f"labelled {'/'.join(labels)}")
 
 
 def _normalise_label(value: str) -> str:

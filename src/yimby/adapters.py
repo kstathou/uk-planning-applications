@@ -14,6 +14,7 @@ from yimby.domain import (
     DiscoveryBatch,
     DiscoveryWindow,
     DurableDiscoveryBatch,
+    EvidenceCapture,
     NativeSnapshot,
     NormalisedObservation,
     RetainedNativeRecord,
@@ -143,7 +144,10 @@ class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
         return CollectedObservation(
             native_schema=type(snapshot.payload).__name__,
             native_json=snapshot.payload.model_dump_json(),
-            normalised=self._adapter.normalise(snapshot),
+            normalised=self._with_default_source_url(
+                self._adapter.normalise(snapshot),
+                snapshot.evidence,
+            ),
             evidence=snapshot.evidence,
             observed_at=snapshot.observed_at,
         )
@@ -160,4 +164,22 @@ class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
             completeness=retained.completeness,
             evidence=retained.evidence,
         )
-        return self._adapter.normalise(snapshot)
+        return self._with_default_source_url(
+            self._adapter.normalise(snapshot),
+            snapshot.evidence,
+        )
+
+    @staticmethod
+    def _with_default_source_url(
+        normalised: NormalisedObservation,
+        evidence: tuple[EvidenceCapture, ...],
+    ) -> NormalisedObservation:
+        if normalised.metadata.source_url is not None or not evidence:
+            return normalised
+        return normalised.model_copy(
+            update={
+                "metadata": normalised.metadata.model_copy(
+                    update={"source_url": evidence[0].url}
+                )
+            }
+        )

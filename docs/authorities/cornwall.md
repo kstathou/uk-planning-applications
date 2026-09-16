@@ -39,3 +39,19 @@ The document index exposed all 16 rows on one page. Each row included publicatio
 ## Verification status
 
 `VERIFIED` for one weekly discovery page, one application summary, the visible section counts, and the complete 16-row document index. Further-detail, contact, date, constraint, map, related-case, decided-list, and incremental-refresh paths remain open.
+
+## Request contract capture
+
+The weekly-list request was rechecked on 16 September 2026. It posts to
+`weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
+`searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
+`searchType`. The observed date-type values were `DC_Validated` and
+`DC_Decided`.
+
+The live result used `li.searchresult` rows and published 34 records across
+four pages. Summary links carried the portal key in
+`applicationDetails.do?keyVal=...&activeTab=summary`; later pages used
+`pagedSearchResults.do?action=page&searchCriteria.page=...`. The result rows
+also exposed the human reference, proposal, address, validated date, and
+status. This confirms the request and pagination contract only; it does not
+close the open incremental and child-section checks above.

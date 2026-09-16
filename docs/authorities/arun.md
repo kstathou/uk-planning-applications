@@ -30,3 +30,22 @@ The application reference contains slashes and must be URL encoded. The detail p
 
 This walkthrough used a known decided reference. It did not run a bounded date search, inspect result pagination, enumerate an undecided comment flow, or test incremental changes.
 
+## Request contract capture
+
+The planning search was rechecked on 16 September 2026 at
+`/aplanning/OcellaWeb/planningSearch`; the bare `/OcellaWeb/` path returned 404
+and is not a collection route. The form posts to the current search URL. Its
+fields are `reference`, `location`, `OcellaPlanningSearch.postcode`, `area`,
+`applicant`, `agent`, `undecided`, `type`, `receivedFrom`, `receivedTo`,
+`decidedFrom`, and `decidedTo`. Dates use `DD-MM-YY`.
+
+A received-date search from 16 August through 16 September 2026 reported 92
+records. The first response deliberately displayed only 20 and offered a
+separate `Show all results` POST containing the prior search fields plus
+`showall`. Submitting it exposed all 92 detail links. Each result row contained
+the reference, location, proposal, and native status, and detail links used
+`planningDetails?reference=...&from=planningSearch`.
+
+This closes the previously open bounded-search and result-cap investigation for
+the observed received-date path. Decided searches, window splitting at larger
+caps, comment flows, and incremental changes remain open.

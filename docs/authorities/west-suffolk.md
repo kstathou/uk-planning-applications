@@ -32,3 +32,16 @@ An empty comments tab does not imply that no representations exist. The document
 
 This walkthrough covered one weekly validated list, one current record, and its document index. It did not prove decided searches, older open enumeration, pagination beyond one result page, related-case detail, retries, or incremental updates.
 
+## Request contract capture
+
+The weekly-list request was rechecked on 16 September 2026. It posts to
+`weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
+`searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
+`searchType`. The date-type values were `DC_Validated` and `DC_Decided`.
+
+The current validated response exposed three `li.searchresult` rows. Summary
+links carried the portal key in
+`applicationDetails.do?keyVal=...&activeTab=summary`; each row also published
+the human reference, proposal, address, received date, validated date, status,
+and comment-open marker. This confirms the current weekly request and row
+contract, not the open decided, older-open, retry, or incremental checks above.

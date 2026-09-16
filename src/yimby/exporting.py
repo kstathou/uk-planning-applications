@@ -52,6 +52,7 @@ PUBLIC_ALLOWLIST = (
     "documents",
     "comment_count",
     "source_url",
+    "source_reuse",
     "completeness",
 )
 
@@ -127,6 +128,10 @@ def _row(view: ApplicationView, profile: ExportProfile) -> dict[str, object]:
         ],
         "comment_count": len(application.comments),
         "source_url": None if metadata.source_url is None else str(metadata.source_url),
+        "source_reuse": (
+            "Verify the linked authority source's current reuse terms before "
+            "republishing."
+        ),
         "completeness": application.completeness.model_dump(mode="json"),
     }
     if profile == ExportProfile.PUBLIC:

@@ -12,6 +12,29 @@ from pydantic import HttpUrl, model_validator
 
 from yimby.domain import EvidenceCapture, EvidenceDigest, FrozenModel, TransportMode
 
+_ATTACHMENT_SUFFIXES = {
+    ".bmp",
+    ".doc",
+    ".docx",
+    ".gif",
+    ".heic",
+    ".jpeg",
+    ".jpg",
+    ".pdf",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".xls",
+    ".xlsx",
+    ".zip",
+}
+_ATTACHMENT_PATH_FRAGMENTS = (
+    "/document/download",
+    "/sfc/servlet.shepherd/document/download/",
+    "/downloadall",
+)
+
 
 class SourceUnavailableError(RuntimeError):
     """A fixture or live source could not return the requested resource."""
@@ -110,8 +133,11 @@ class FixtureSession:
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         """Return one fixture response after applying attachment policy."""
         url = str(request.url)
-        suffix = PurePosixPath(urlsplit(url).path).suffix.lower()
-        if suffix in {".doc", ".docx", ".pdf", ".xls", ".xlsx", ".zip"}:
+        path = urlsplit(url).path
+        lowered = path.casefold()
+        if PurePosixPath(path).suffix.lower() in _ATTACHMENT_SUFFIXES or any(
+            fragment in lowered for fragment in _ATTACHMENT_PATH_FRAGMENTS
+        ):
             self._attachment_body_requests += 1
             raise AttachmentBodyBlockedError(url)
         response = self._responses.get(url)
