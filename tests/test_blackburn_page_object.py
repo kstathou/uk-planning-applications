@@ -99,6 +99,22 @@ def _search_page() -> MagicMock:
     return page
 
 
+def _detail_page(*, count: int = 1) -> MagicMock:
+    page = MagicMock()
+    page.url = (
+        "https://online.blackburn.gov.uk/planning/"
+        "index.html?fa=getApplication&id=178041"
+    )
+    page.goto = AsyncMock()
+    page.content = AsyncMock(return_value="<div id='application_details'></div>")
+    application = MagicMock()
+    application.count = AsyncMock(return_value=count)
+    application.wait_for = AsyncMock()
+    page.locator.return_value = application
+    page.application = application
+    return page
+
+
 @pytest.mark.parametrize(
     ("kind", "start_name", "end_name"),
     [
@@ -155,17 +171,7 @@ def test_blackburn_page_object_submits_exact_hyphen_date_fields(
 
 
 def test_blackburn_page_object_opens_detail_without_document_actions() -> None:
-    page = MagicMock()
-    page.url = (
-        "https://online.blackburn.gov.uk/planning/"
-        "index.html?fa=getApplication&id=178041"
-    )
-    page.goto = AsyncMock()
-    page.content = AsyncMock(return_value="<div id='application_details'></div>")
-    application = MagicMock()
-    application.count = AsyncMock(return_value=1)
-    application.wait_for = AsyncMock()
-    page.locator.return_value = application
+    page = _detail_page()
     pause = AsyncMock()
     session = BlackburnPlaywrightSession(
         _InteractiveBoundary(cast("Page", page)),
@@ -186,7 +192,7 @@ def test_blackburn_page_object_opens_detail_without_document_actions() -> None:
     page.locator.assert_called_once_with(
         '#application_details[data-application-id="178041"]'
     )
-    application.wait_for.assert_awaited_once_with()
+    page.application.wait_for.assert_awaited_once_with()
     page.get_by_role.assert_not_called()
     assert pause.await_count == 1
     assert capture.body == b"<div id='application_details'></div>"
@@ -217,6 +223,71 @@ def test_blackburn_page_object_rejects_form_drift(
         asyncio.run(session.search(_query(BlackburnQueryKind.RECEIVED)))
 
 
+def test_blackburn_page_object_rejects_missing_form_controls() -> None:
+    def rejected(page: MagicMock) -> None:
+        session = BlackburnPlaywrightSession(
+            _InteractiveBoundary(cast("Page", page)),
+            pause=AsyncMock(),
+        )
+        with pytest.raises(blackburn_page.BlackburnPageObjectFormError):
+            asyncio.run(session.search(_query(BlackburnQueryKind.RECEIVED)))
+
+    missing_form = _search_page()
+    missing_form.form.count = AsyncMock(return_value=0)
+    rejected(missing_form)
+
+    missing_hidden = _search_page()
+    missing_hidden.controls['input[name="fa"]'].count = AsyncMock(return_value=0)
+    rejected(missing_hidden)
+
+    changed_hidden = _search_page()
+    changed_hidden.controls['input[name="submitted"]'].get_attribute = AsyncMock(
+        return_value="changed"
+    )
+    rejected(changed_hidden)
+
+    missing_date = _search_page()
+    missing_date.controls['input[name="received_date_from"]'].count = AsyncMock(
+        return_value=0
+    )
+    rejected(missing_date)
+
+    missing_button = _search_page()
+    missing_button.search.count = AsyncMock(return_value=0)
+    rejected(missing_button)
+
+
+def test_blackburn_page_object_rejects_ambiguous_detail_routes() -> None:
+    session = BlackburnPlaywrightSession(
+        _InteractiveBoundary(cast("Page", _detail_page())),
+        pause=AsyncMock(),
+    )
+    with pytest.raises(blackburn_page.BlackburnPageObjectRouteError):
+        asyncio.run(
+            session.application(
+                BlackburnLocatorV1(
+                    record_id="not-numeric",
+                    public_reference="10/26/0747",
+                )
+            )
+        )
+
+    ambiguous = _detail_page(count=2)
+    session = BlackburnPlaywrightSession(
+        _InteractiveBoundary(cast("Page", ambiguous)),
+        pause=AsyncMock(),
+    )
+    with pytest.raises(blackburn_page.BlackburnPageObjectRouteError):
+        asyncio.run(
+            session.application(
+                BlackburnLocatorV1(
+                    record_id="178041",
+                    public_reference="10/26/0747",
+                )
+            )
+        )
+
+
 def test_blackburn_page_object_factory_and_default_pause(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -225,7 +296,10 @@ def test_blackburn_page_object_factory_and_default_pause(
     create = AsyncMock(return_value=boundary)
     sleep = AsyncMock()
     monkeypatch.setattr(PlaywrightBoundary, "create", create)
-    monkeypatch.setattr(blackburn_page.asyncio, "sleep", sleep)
+    monkeypatch.setattr(
+        "yimby.authorities.blackburn_with_darwen.page_object.asyncio.sleep",
+        sleep,
+    )
 
     async def exercise() -> None:
         session = await BlackburnPlaywrightSession.create()
