@@ -379,7 +379,7 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
 
     batches = asyncio.run(discover_all())
 
-    assert [len(batch.references) for batch in batches] == [10, 1, 9, 1]
+    assert [len(batch.references) for batch in batches] == [0, 11, 0, 10]
     assert batches[-1].complete
     assert [
         (reference.reference, reference.locator)
@@ -646,7 +646,7 @@ def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> Non
     resume_session = _session(resume_mock)
 
     async def resume_after_detail() -> list[DurableDiscoveryBatch]:
-        await package.collect(resume_session, first.references[0])
+        await package.collect(resume_session, _live_reference())
         batches = [
             batch
             async for batch in package.discover(
@@ -660,7 +660,7 @@ def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> Non
 
     resumed = asyncio.run(resume_after_detail())
 
-    assert [len(batch.references) for batch in resumed] == [1, 9, 1]
+    assert [len(batch.references) for batch in resumed] == [11, 0, 10]
     assert resumed[-1].complete
     assert len(_pairs(resume_mock, DISCLAIMER_PATH)) == 1
     assert len(_pairs(resume_mock, RESULTS_PATH)) == 2
@@ -956,7 +956,7 @@ def test_dorset_live_received_only_and_incomplete_terminal_checkpoints() -> None
         return batches
 
     batches = asyncio.run(received_batches())
-    assert [len(batch.references) for batch in batches] == [10, 1]
+    assert [len(batch.references) for batch in batches] == [0, 11]
     assert len(_pairs(first_mock, ADVANCED_PATH)) == 1
 
     checkpoint = dorset_adapter.DorsetCheckpointV1(
@@ -1103,6 +1103,23 @@ def test_dorset_checkpoint_validation_accepts_repeated_identical_seen_reference(
                 next_allowed=False,
             ),
             "duplicate locator",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(
+                active_query="received-valid",
+                next_page=2,
+                total_pages=2,
+                active_references=(_live_reference(),),
+                seen_references=(_live_reference(),),
+            ),
+            dorset_adapter._ResultPage(
+                references=(_live_reference(),),
+                page=2,
+                total_pages=2,
+                form=(),
+                next_allowed=False,
+            ),
+            "repeated page reference",
         ),
         (
             dorset_adapter.DorsetCheckpointV1(completed_queries=("received-valid",)),
