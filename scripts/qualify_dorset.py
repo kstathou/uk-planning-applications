@@ -146,6 +146,7 @@ class DorsetQualificationReceiptV1(FrozenModel):
     created_at: datetime
     scope: DorsetQualificationScope
     query_inventory: tuple[str, str]
+    source_run_id: str = Field(min_length=1)
     terminal_checkpoint: DorsetCheckpointV1
     reference_agreement: DorsetReferenceAgreementV1
     counts: DorsetQualificationCounts
@@ -467,6 +468,14 @@ def _base_checks(
     return (
         DorsetQualificationCheck(name="terminal-checkpoint", ok=True),
         DorsetQualificationCheck(
+            name="live-source-cost",
+            ok=(
+                initial.fetch_calls > 0
+                and initial.fetch_calls == initial.successful_requests
+                and initial.transferred_bytes > 0
+            ),
+        ),
+        DorsetQualificationCheck(
             name="reference-agreement",
             ok=(
                 agreement.count > 0
@@ -631,7 +640,18 @@ async def _qualify(
     if config.restart_discovery:
         _restart_discovery_checkpoint(store, config.scope)
     prior_status_count = len(store.run_statuses())
-    initial = await _collect_once(collector, window, session_factory)
+    observed_initial = await _collect_once(collector, window, session_factory)
+    source_run_id, source_metrics = store.latest_successful_nonempty_run(_AUTHORITY_ID)
+    initial = (
+        DorsetQualificationCost(
+            fetch_calls=source_metrics.request_count,
+            successful_requests=source_metrics.request_count,
+            transferred_bytes=source_metrics.transferred_bytes,
+            attachment_body_requests=0,
+        )
+        if observed_initial.fetch_calls == 0
+        else observed_initial
+    )
     checkpoint = _terminal_checkpoint(store, config.scope)
     first_snapshot = store.qualification_snapshot(
         _AUTHORITY_ID,
@@ -681,6 +701,7 @@ async def _qualify(
         created_at=now(),
         scope=config.scope,
         query_inventory=_QUERY_INVENTORY,
+        source_run_id=source_run_id,
         terminal_checkpoint=final_checkpoint,
         reference_agreement=final_agreement,
         counts=_counts(final_snapshot),

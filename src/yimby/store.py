@@ -929,6 +929,39 @@ class SqliteStore:
             )
         )
 
+    def latest_successful_nonempty_run(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[str, RunMetrics]:
+        """Return the latest successful run that performed source requests."""
+        row = next(
+            self._connection.execute(
+                """
+                SELECT run.id, detail.request_count, detail.transferred_bytes,
+                    detail.duration_ms, detail.browser_time_ms,
+                    detail.storage_growth_bytes
+                FROM runs AS run
+                JOIN run_details AS detail ON detail.run_id = run.id
+                WHERE run.authority_id = ?
+                    AND detail.status = 'succeeded'
+                    AND detail.request_count > 0
+                ORDER BY run.started_at DESC
+                LIMIT 1
+                """,
+                (authority_id,),
+            )
+        )
+        return (
+            row["id"],
+            RunMetrics(
+                request_count=row["request_count"],
+                transferred_bytes=row["transferred_bytes"],
+                duration_ms=row["duration_ms"],
+                browser_time_ms=row["browser_time_ms"],
+                storage_growth_bytes=row["storage_growth_bytes"],
+            ),
+        )
+
     def qualification_snapshot(
         self,
         authority_id: AuthorityId,
