@@ -84,6 +84,8 @@ class BarnetCheckpointV1(FrozenModel):
     active_query: str | None = None
     next_page: int = 1
     query_row_count: int = 0
+    query_reported_count: int | None = None
+    active_query_references: tuple[str, ...] = ()
     seen_references: tuple[str, ...] = ()
     seen_locators: tuple[str | None, ...] = ()
     tracks_locators: bool = False
@@ -200,6 +202,8 @@ def _is_terminal_checkpoint(
         and checkpoint.active_query is None
         and checkpoint.next_page == 1
         and checkpoint.query_row_count == 0
+        and checkpoint.query_reported_count is None
+        and not checkpoint.active_query_references
         and len(checkpoint.seen_references) == len(set(checkpoint.seen_references))
         and len(checkpoint.seen_locators) <= len(checkpoint.seen_references)
         and (
@@ -315,7 +319,7 @@ class BarnetAdapter:
             complete=next_cursor == "complete",
         )
 
-    async def _discover_live(  # noqa: C901, PLR0912
+    async def _discover_live(  # noqa: C901, PLR0912, PLR0915
         self,
         session: PortalSession,
         window: DiscoveryWindow,
@@ -369,7 +373,14 @@ class BarnetAdapter:
                 else 0
             )
             if progress.active_query == weekly_query.key and page > 1:
-                await session.fetch(_weekly_request(form, weekly_query, 1))
+                first_page = _parse_search_page(
+                    (await session.fetch(_weekly_request(form, weekly_query, 1))).body
+                )
+                progress = _restore_query_progress(
+                    progress,
+                    weekly_query.key,
+                    first_page,
+                )
             while True:
                 capture = await session.fetch(_weekly_request(form, weekly_query, page))
                 search_page = _parse_search_page(capture.body)
@@ -418,7 +429,19 @@ class BarnetAdapter:
                 else 0
             )
             if progress.active_query == advanced_query.key and page > 1:
-                await session.fetch(_advanced_request(advanced_form, advanced_query, 1))
+                first_page = _parse_advanced_search_page(
+                    (
+                        await session.fetch(
+                            _advanced_request(advanced_form, advanced_query, 1)
+                        )
+                    ).body,
+                    page=1,
+                )
+                progress = _restore_query_progress(
+                    progress,
+                    advanced_query.key,
+                    first_page,
+                )
             while True:
                 capture = await session.fetch(
                     _advanced_request(advanced_form, advanced_query, page)
@@ -687,6 +710,15 @@ def _advance_checkpoint(
     search_page: _SearchPage,
     all_query_keys: tuple[str, ...],
 ) -> tuple[BarnetCheckpointV1, tuple[SourceReference, ...], bool]:
+    if (
+        progress.query_reported_count is not None
+        and progress.query_reported_count != search_page.reported
+    ):
+        raise BarnetCountMismatchError(
+            active_page.query_key,
+            progress.query_reported_count,
+            search_page.reported,
+        )
     next_row_count = active_page.row_count + len(search_page.references)
     if next_row_count > search_page.reported or (
         not search_page.references and next_row_count < search_page.reported
@@ -704,6 +736,16 @@ def _advance_checkpoint(
         next_row_count,
     ):
         _raise_parse("displayed result range")
+    active_references = _active_query_references(progress, active_page)
+    active_seen = set(active_references)
+    for reference in search_page.references:
+        if reference.reference in active_seen:
+            _raise_parse("duplicate search result identity")
+        active_seen.add(reference.reference)
+    next_active_references = (
+        *active_references,
+        *(reference.reference for reference in search_page.references),
+    )
     seen, locators, fresh = _reconcile_search_identities(
         progress,
         search_page.references,
@@ -717,6 +759,8 @@ def _advance_checkpoint(
                 "active_query": None,
                 "next_page": 1,
                 "query_row_count": 0,
+                "query_reported_count": None,
+                "active_query_references": (),
                 "seen_references": seen,
                 "seen_locators": locators,
                 "live_complete": len(completed_queries) == len(all_query_keys),
@@ -728,11 +772,72 @@ def _advance_checkpoint(
                 "active_query": active_page.query_key,
                 "next_page": active_page.page + 1,
                 "query_row_count": next_row_count,
+                "query_reported_count": search_page.reported,
+                "active_query_references": next_active_references,
                 "seen_references": seen,
                 "seen_locators": locators,
             }
         )
     return checkpoint, fresh, last_page
+
+
+def _active_query_references(
+    progress: BarnetCheckpointV1,
+    active_page: _ActivePage,
+) -> tuple[str, ...]:
+    if active_page.row_count == 0:
+        return ()
+    references = progress.active_query_references
+    if (
+        not references
+        and not progress.tracks_locators
+        and not progress.completed_queries
+        and active_page.row_count == len(progress.seen_references)
+    ):
+        references = progress.seen_references
+    if (
+        progress.active_query != active_page.query_key
+        or len(references) != active_page.row_count
+        or len(references) != len(set(references))
+    ):
+        checkpoint_error = "active query identities"
+        raise BarnetCheckpointError(checkpoint_error)
+    return references
+
+
+def _restore_query_progress(
+    progress: BarnetCheckpointV1,
+    query_key: str,
+    first_page: _SearchPage,
+) -> BarnetCheckpointV1:
+    active_page = _ActivePage(
+        query_key=query_key,
+        page=progress.next_page,
+        row_count=progress.query_row_count,
+    )
+    active_references = _active_query_references(progress, active_page)
+    first_references = tuple(reference.reference for reference in first_page.references)
+    if (
+        first_page.displayed_range != (1, len(first_references))
+        or first_references != active_references[: len(first_references)]
+        or progress.query_row_count > first_page.reported
+    ):
+        _raise_parse("resumed search result identity")
+    if (
+        progress.query_reported_count is not None
+        and progress.query_reported_count != first_page.reported
+    ):
+        raise BarnetCountMismatchError(
+            query_key,
+            progress.query_reported_count,
+            first_page.reported,
+        )
+    return progress.model_copy(
+        update={
+            "query_reported_count": first_page.reported,
+            "active_query_references": active_references,
+        }
+    )
 
 
 def _reconcile_search_identities(
@@ -787,6 +892,9 @@ def _parse_form(body: bytes) -> Tag:
     action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
     date_types = form.select('input[name="dateType"]')
     search_types = form.select('input[name="searchType"]')
+    submitted_search_types = tuple(
+        field.value for field in fields if field.name == "searchType"
+    )
     if (
         str(form.get("method", "")).casefold() != "post"
         or action != _WEEKLY_RESULTS_URL
@@ -794,6 +902,7 @@ def _parse_form(body: bytes) -> Tag:
         or len(form.select('select[name="week"]')) != 1
         or len(search_types) != 1
         or str(search_types[0].get("value", "")) != "Application"
+        or submitted_search_types != ("Application",)
         or len(date_types) != len(_DATE_TYPES)
         or any(
             str(control.get("type", "")).casefold() != "radio" for control in date_types
@@ -1102,13 +1211,7 @@ def _reported_count(
                 allow_empty_first_page_marker=allow_empty_first_page_marker,
             )
         )
-        numbered_pages = tuple(
-            int(value)
-            for link in soup.select('a[href*="pagedSearchResults.do"]')
-            for value in parse_qs(urlsplit(str(link.get("href", ""))).query).get(
-                "searchCriteria.page", ()
-            )
-        )
+        numbered_pages = _numbered_result_pages(soup)
         if (
             displayed_range[1] == displayed_range[2]
             and numbered_pages
@@ -1128,6 +1231,21 @@ def _reported_count(
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _numbered_result_pages(soup: BeautifulSoup) -> tuple[int, ...]:
+    pages = []
+    for link in soup.select('a[href*="pagedSearchResults.do"]'):
+        query = parse_qs(urlsplit(str(link.get("href", ""))).query)
+        actions = query.get("action", [])
+        values = query.get("searchCriteria.page", [])
+        if actions != ["page"] or len(values) != 1 or not values[0].isdigit():
+            _raise_parse("reported result count")
+        page = int(values[0])
+        if page < 1:
+            _raise_parse("reported result count")
+        pages.append(page)
+    return tuple(pages)
 
 
 def _showing_ranges(

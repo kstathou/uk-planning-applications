@@ -1194,6 +1194,46 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             all_query_keys=("weekly|2026-09-14|DC_Validated",),
         )
 
+    legacy_active = BarnetCheckpointV1(
+        cursor="live",
+        active_query="weekly|2026-09-14|DC_Validated",
+        next_page=2,
+        query_row_count=1,
+        seen_references=("A",),
+    )
+    active_page = barnet_adapter._ActivePage(
+        query_key="weekly|2026-09-14|DC_Validated",
+        page=2,
+        row_count=1,
+    )
+    assert barnet_adapter._active_query_references(legacy_active, active_page) == (
+        "A",
+    )
+    with pytest.raises(BarnetCheckpointError, match="active query identities"):
+        barnet_adapter._active_query_references(
+            legacy_active.model_copy(update={"active_query": "other"}),
+            active_page,
+        )
+
+    resumable_first_page = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 2",),
+        )
+    )
+    with pytest.raises(BarnetParseError, match="resumed search result identity"):
+        barnet_adapter._restore_query_progress(
+            legacy_active.model_copy(update={"seen_references": ("B",)}),
+            active_page.query_key,
+            resumable_first_page,
+        )
+    with pytest.raises(BarnetCountMismatchError, match="expected 3 actual 2"):
+        barnet_adapter._restore_query_progress(
+            legacy_active.model_copy(update={"query_reported_count": 3}),
+            active_page.query_key,
+            resumable_first_page,
+        )
+
     conflicting_identity = barnet_adapter._parse_search_page(
         _result_page((("A", "OTHER-KEY"),), count=1)
     )
@@ -1314,6 +1354,12 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             ("Showing 1-1 of 1",),
         )
         + b'<a href="pagedSearchResults.do?action=next">next</a>',
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+        )
+        + b'<a href="pagedSearchResults.do?action=page&amp;searchCriteria.page=0">'
+        b"zero</a>",
         _showing_result_page(
             (("A", "KEY"),),
             ("Showing 1-1 of 1",),

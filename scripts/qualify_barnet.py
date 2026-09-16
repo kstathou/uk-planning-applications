@@ -222,6 +222,8 @@ def _terminal_checkpoint(
         and checkpoint.active_query is None
         and checkpoint.next_page == 1
         and checkpoint.query_row_count == 0
+        and checkpoint.query_reported_count is None
+        and not checkpoint.active_query_references
         and bool(queued)
         and all(
             reference.source_id == CURRENT_SOURCE and reference.locator

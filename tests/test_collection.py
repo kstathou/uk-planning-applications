@@ -127,6 +127,7 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
             "payload_json": (
                 '{"cursor":"complete","live_scope":null,"completed_queries":[],'
                 '"active_query":null,"next_page":1,"query_row_count":0,'
+                '"query_reported_count":null,"active_query_references":[],'
                 '"seen_references":[],"seen_locators":[],'
                 '"tracks_locators":false,"live_complete":false}'
             ),
