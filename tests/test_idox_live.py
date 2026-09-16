@@ -221,6 +221,22 @@ def _uncounted_result_page(
     ).encode()
 
 
+def _paginated_result_page(
+    rows: tuple[tuple[str, str], ...],
+    count_text: str,
+) -> bytes:
+    pager = f'<p class="pager"><span class="showing">{count_text}</span></p>'
+    page = _uncounted_result_page(rows, capacity="10", numbered_page=2).decode()
+    return f"{pager}{page}{pager}".encode()
+
+
+def _ten_result_rows(case: _Case) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (f"{case.references[0]}-{index}", f"{case.locators[0]}-{index}")
+        for index in range(1, 11)
+    )
+
+
 def _summary(reference: str, authority_id: AuthorityId) -> bytes:
     extra = {
         AuthorityId("cornwall"): "<tr><th>Parish</th><td>Truro</td></tr>",
@@ -815,6 +831,49 @@ def test_authority_search_result_reference_labels(case: _Case, label: str) -> No
         )
     )
     assert parsed.references[0].reference == case.references[0]
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize(
+    ("separator", "suffix"),
+    [("-", ""), ("\N{EN DASH}", " results")],
+)
+def test_authority_accepts_explicit_showing_result_total(
+    case: _Case,
+    separator: str,
+    suffix: str,
+) -> None:
+    """A displayed Showing range remains the authority for paginated totals."""
+    parsed = getattr(case.module, "_parse_search_page")(
+        _paginated_result_page(
+            _ten_result_rows(case),
+            f"Showing 1{separator}10 of 14{suffix}",
+        )
+    )
+    assert len(parsed.references) == 10
+    assert parsed.reported == 14
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize(
+    "count_text",
+    [
+        "Showing one-10 of 14",
+        "Showing 1 to 10 of 14",
+        "Showing 1-10 of fourteen",
+        "Showing 1-10 from 14",
+    ],
+)
+def test_authority_rejects_malformed_showing_result_total(
+    case: _Case,
+    count_text: str,
+) -> None:
+    """Malformed Showing text cannot bypass pagination completeness checks."""
+    parse_error = _member(case, "ParseError")
+    with pytest.raises(parse_error, match="reported result count"):
+        getattr(case.module, "_parse_search_page")(
+            _paginated_result_page(_ten_result_rows(case), count_text)
+        )
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
