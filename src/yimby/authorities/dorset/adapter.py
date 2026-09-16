@@ -1015,6 +1015,7 @@ def _advanced_request(
     query: _LiveQuery,
     scope: DorsetDiscoveryScope,
 ) -> PortalRequest:
+    _require_outstanding_control(form)
     if query.key == "received-valid":
         overrides = {
             _RECEIVED_FROM: scope.start.isoformat(),
@@ -1023,7 +1024,6 @@ def _advanced_request(
             f"{_RECEIVED_TO}$dateInput": scope.end.strftime("%d/%m/%Y"),
         }
     else:
-        _require_outstanding_control(form)
         overrides = {
             _OUTSTANDING: "on",
             _RECEIVED_FROM: "",
@@ -1055,6 +1055,7 @@ def _require_outstanding_control(form: Tag) -> None:
         len(controls) != 1
         or str(controls[0].get("type", "")).casefold() != "checkbox"
         or controls[0].has_attr("disabled")
+        or controls[0].has_attr("checked")
     ):
         _raise_parse("advanced outstanding control")
 
