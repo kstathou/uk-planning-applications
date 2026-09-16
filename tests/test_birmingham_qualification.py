@@ -770,6 +770,32 @@ def test_birmingham_replay_rejects_unknown_receipt_claim(
         module.replay_persisted_state(data_dir)
 
 
+def test_birmingham_replay_rejects_changed_receipt_scope(
+    tmp_path: Path,
+) -> None:
+    """Keep the saved scope bound to the dates encoded by every query."""
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=lambda: _ArcgisSession(_arcgis_bodies()),
+            now=_current_clock,
+        )
+        == 1
+    )
+    receipt_path = data_dir / _RECEIPT_NAME
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["scope"]["start"] = "2026-01-01"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(
+        module.QualificationInvariantError, match="qualification-scope-mismatch"
+    ):
+        module.replay_persisted_state(data_dir)
+
+
 @pytest.mark.parametrize(
     "failure",
     [
