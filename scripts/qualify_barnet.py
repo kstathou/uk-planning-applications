@@ -373,6 +373,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
+    prior_receipt: BarnetQualificationReceiptV1 | None,
 ) -> BarnetQualificationReceiptV1:
     registry = AuthorityRegistry((BARNET_PACKAGE,))
     collector = Collector(registry, store)
@@ -417,7 +418,13 @@ async def _qualify(
         ),
     )
     _require(final_checks)
-    created_at = now()
+    created_at = (
+        prior_receipt.created_at
+        if prior_receipt is not None
+        and prior_receipt.scope == config.scope
+        and initial.request_count == 0
+        else now()
+    )
     return BarnetQualificationReceiptV1(
         created_at=created_at,
         scope=config.scope,
@@ -475,6 +482,15 @@ def _write_receipt(
             temporary.unlink(missing_ok=True)
 
 
+def _read_receipt(path: Path) -> BarnetQualificationReceiptV1 | None:
+    try:
+        return BarnetQualificationReceiptV1.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+
+
 def _default_session() -> HttpxPortalSession:
     return HttpxPortalSession(
         limiter=HostRateLimiter(_BARNET_MINIMUM_GAP_SECONDS),
@@ -504,13 +520,16 @@ def main(
     receipt_path = config.data_dir / _RECEIPT_NAME
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
+            prior_receipt = _read_receipt(receipt_path)
             receipt_path.unlink(missing_ok=True)
             store = SqliteStore(
                 config.data_dir / "yimby.sqlite3",
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt = asyncio.run(
+                    _qualify(store, config, session_factory, now, prior_receipt)
+                )
                 _write_receipt(receipt_path, receipt)
             finally:
                 store.close()
