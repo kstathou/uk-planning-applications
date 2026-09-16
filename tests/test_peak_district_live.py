@@ -1516,7 +1516,8 @@ def test_peak_district_qualification_resumes_interrupted_bootstrap_with_cumulati
     sessions: list[_Session] = []
 
     def interrupted(_request: PortalRequest) -> bytes:
-        raise SourceUnavailableError("interrupted")
+        interruption = "interrupted"
+        raise SourceUnavailableError(interruption)
 
     def session_factory() -> _Session:
         responder = interrupted if not sessions else _QualificationResponder()
@@ -1671,8 +1672,8 @@ def test_peak_district_qualification_refuses_changed_scope_before_network(
 @pytest.mark.parametrize(
     ("corruption", "failed_check"),
     [
-        ("historical-evidence", "evidence-integrity"),
-        ("succeeded-retry", "retry-inventory"),
+        ("historical-evidence", "bootstrap-provenance"),
+        ("succeeded-retry", "bootstrap-provenance"),
     ],
 )
 def test_peak_district_qualification_checks_all_evidence_and_retry_history(

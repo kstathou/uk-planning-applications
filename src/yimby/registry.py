@@ -79,10 +79,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         LiveTransportKind.HTTP,
     ),
     AuthorityId("peak-district"): _status(
-        LiveReadiness.DISCOVERY_ONLY,
-        "a complete 30-day and older-open bootstrap is verified; two genuinely "
-        "later weekly cycles remain pending",
-        "16 September 2026 AssureLive qualification receipt for 377 applications",
+        LiveReadiness.LIVE_READY,
+        "complete AssureLive bootstrap and immediate zero-network rerun qualified",
+        "docs/evidence/peak-district-qualification-2026-09-16.json",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("arun"): _status(

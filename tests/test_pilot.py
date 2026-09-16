@@ -83,6 +83,9 @@ _OPDC_CONTENT_DIGEST_SET_SHA256 = (
 _PEAK_DISTRICT_EVIDENCE_PATH = (
     "docs/evidence/peak-district-qualification-2026-09-16.json"
 )
+_PEAK_DISTRICT_APPLICATION_COUNT = 377
+_PEAK_DISTRICT_CAPTURE_ASSOCIATIONS = 1299
+_PEAK_DISTRICT_EVIDENCE_ROWS = 1560
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,18 +422,28 @@ def test_peak_district_live_status_points_to_sanitised_committed_receipt() -> No
     """Peak's live-ready proof is strict, reviewable, and privacy-safe."""
     receipt_path = Path(__file__).parents[1] / _PEAK_DISTRICT_EVIDENCE_PATH
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    receipt_model = _peak_district_qualification_module().PeakDistrictSanitizedQualificationReceiptV1
+    qualification = _peak_district_qualification_module()
+    receipt_model = qualification.PeakDistrictSanitizedQualificationReceiptV1
     validated = receipt_model.model_validate(receipt)
     manifest = pilot_registry().manifest(AuthorityId("peak-district"))
 
     assert "identities" not in receipt
-    assert validated.counts.applications == 377
-    assert validated.counts.discovered_references == 377
+    assert validated.counts.applications == _PEAK_DISTRICT_APPLICATION_COUNT
+    assert validated.counts.discovered_references == _PEAK_DISTRICT_APPLICATION_COUNT
     assert validated.costs.initial.request_count > 0
     assert validated.costs.initial.transferred_bytes > 0
     assert validated.costs.rerun.request_count == 0
-    assert validated.evidence_commitment.applications == 377
-    assert validated.evidence_commitment.capture_associations == 1560
+    assert (
+        validated.evidence_commitment.applications == _PEAK_DISTRICT_APPLICATION_COUNT
+    )
+    assert (
+        validated.evidence_commitment.capture_associations
+        == _PEAK_DISTRICT_CAPTURE_ASSOCIATIONS
+    )
+    assert (
+        validated.evidence_commitment.retained_evidence_rows
+        == _PEAK_DISTRICT_EVIDENCE_ROWS
+    )
     assert validated.evidence_commitment.missing_paths == 0
     assert validated.evidence_commitment.invalid_paths == 0
     assert all(check.ok for check in validated.checks)

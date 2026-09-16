@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "authority_id": "peak-district",
+  "source_contract": "assure-live-v1",
+  "created_at": "2026-09-16T12:18:32.299174Z",
+  "scope": {
+    "start": "2026-08-18",
+    "end": "2026-09-16",
+    "include_open": true
+  },
+  "query_inventory": [
+    {
+      "kind": "bounded-date",
+      "field": "Received",
+      "value": "18/08/2026..16/09/2026"
+    },
+    {
+      "kind": "bounded-date",
+      "field": "Validated",
+      "value": "18/08/2026..16/09/2026"
+    },
+    {
+      "kind": "bounded-date",
+      "field": "Decided",
+      "value": "18/08/2026..16/09/2026"
+    },
+    {
+      "kind": "older-open",
+      "field": "AdvanceSearch.SelectedApplicationStatus",
+      "value": "REGISTERED"
+    },
+    {
+      "kind": "older-open",
+      "field": "AdvanceSearch.SelectedApplicationStatus",
+      "value": "APPEAL LODGED"
+    }
+  ],
+  "retry_policy": {
+    "max_attempts": 1
+  },
+  "counts": {
+    "applications": 377,
+    "discovered_references": 377,
+    "native_versions": 484,
+    "application_versions": 472,
+    "document_versions": 472,
+    "comment_versions": 0,
+    "pending_retries": 0,
+    "retry_entries": 0,
+    "failed_sections": 0,
+    "unmapped_records": 0
+  },
+  "costs": {
+    "initial": {
+      "request_count": 1696,
+      "transferred_bytes": 45867984,
+      "attachment_body_requests": 0
+    },
+    "rerun": {
+      "request_count": 0,
+      "transferred_bytes": 0,
+      "attachment_body_requests": 0
+    }
+  },
+  "run_statuses": [
+    "succeeded",
+    "succeeded"
+  ],
+  "checks": [
+    {
+      "name": "terminal-checkpoint",
+      "ok": true
+    },
+    {
+      "name": "exact-query-inventory",
+      "ok": true
+    },
+    {
+      "name": "reference-application-agreement",
+      "ok": true
+    },
+    {
+      "name": "pending-retries",
+      "ok": true
+    },
+    {
+      "name": "retry-inventory",
+      "ok": true
+    },
+    {
+      "name": "failed-sections",
+      "ok": true
+    },
+    {
+      "name": "attachment-policy",
+      "ok": true
+    },
+    {
+      "name": "database-integrity",
+      "ok": true
+    },
+    {
+      "name": "authority-readiness",
+      "ok": true
+    },
+    {
+      "name": "evidence-paths",
+      "ok": true
+    },
+    {
+      "name": "evidence-integrity",
+      "ok": true
+    },
+    {
+      "name": "application-evidence",
+      "ok": true
+    },
+    {
+      "name": "application-count",
+      "ok": true
+    },
+    {
+      "name": "unmapped-records",
+      "ok": true
+    },
+    {
+      "name": "idempotent-rerun",
+      "ok": true
+    },
+    {
+      "name": "terminal-rerun-requests",
+      "ok": true
+    },
+    {
+      "name": "run-statuses",
+      "ok": true
+    }
+  ],
+  "evidence_commitment": {
+    "canonicalization": "sha256-canonical-json-v1",
+    "applications": 377,
+    "capture_associations": 1299,
+    "content_digests": 1292,
+    "retained_evidence_rows": 1560,
+    "minimum_captures_per_application": 2,
+    "maximum_captures_per_application": 78,
+    "missing_paths": 0,
+    "invalid_paths": 0,
+    "application_capture_sha256": "sha256:9891d72444200ea3036bb89692b846b18f5f760e5d525cc10f674ac1825d14d4",
+    "content_digest_set_sha256": "sha256:057ecd1b333f065e8bc4c68b8b7051440e471f3adad12c69a07ce4b9c2726829",
+    "retained_evidence_sha256": "sha256:41286c00537abfddf467784078175ec366cbb5d94f072ccb6bd7c6cc05359a4b"
+  },
+  "weekly_cycles": [
+    {
+      "cycle": 1,
+      "eligible_on": "2026-09-23",
+      "status": "pending"
+    },
+    {
+      "cycle": 2,
+      "eligible_on": "2026-09-30",
+      "status": "pending"
+    }
+  ]
+}
