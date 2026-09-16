@@ -470,6 +470,7 @@ class _LeedsDetailMock:
         transient_document_failures: int = 0,
         compact_documents: bool = False,
         document_header_drift: bool = False,
+        restricted_documents: bool = False,
     ) -> None:
         self.reference = reference
         self.blank_optional = blank_optional
@@ -483,6 +484,7 @@ class _LeedsDetailMock:
         self.transient_document_failures = transient_document_failures
         self.compact_documents = compact_documents
         self.document_header_drift = document_header_drift
+        self.restricted_documents = restricted_documents
         self.tabs: list[str] = []
         self.attachment_paths: list[str] = []
 
@@ -509,6 +511,15 @@ class _LeedsDetailMock:
                     ),
                 )
             if tab == "documents":
+                if self.restricted_documents:
+                    return httpx.Response(
+                        200,
+                        content=(
+                            b"<title>Error</title><h1>Error</h1>"
+                            b"<h3>Permission Denied</h3>"
+                            b"<p>You do not have permission to view the page.</p>"
+                        ),
+                    )
                 if self.transient_document_failures:
                     self.transient_document_failures -= 1
                     return httpx.Response(
@@ -606,6 +617,14 @@ def test_leeds_accepts_the_live_compact_document_table() -> None:
     assert snapshot.payload.documents[0].document_type == "Plan"
     assert snapshot.payload.documents[0].drawing_number is None
     assert snapshot.payload.documents[0].description == "Tree location plan"
+
+
+def test_leeds_preserves_restricted_documents_as_unavailable() -> None:
+    """The official permission-denied page is explicit source unavailability."""
+    snapshot = asyncio.run(_fetch(_LeedsDetailMock(restricted_documents=True)))
+
+    assert snapshot.payload.documents == ()
+    assert isinstance(snapshot.completeness.documents, UnavailableSection)
 
 
 def test_leeds_rejects_unrecognised_document_selection_text() -> None:
