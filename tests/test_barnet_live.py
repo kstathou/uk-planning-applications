@@ -355,7 +355,7 @@ def test_live_discovery_pages_deduplicates_and_resumes() -> None:
         "TCP/0002/26",
     ]
     assert [reference.locator for reference in first.references] == ["KEY-1", "KEY-2"]
-    assert first.next_checkpoint.active_query == "14/09/2026|DC_Validated"
+    assert first.next_checkpoint.active_query == "weekly|2026-09-14|DC_Validated"
     assert first.next_checkpoint.next_page == 2
 
     resumed_mock = _BarnetMock(multi_page=True)
