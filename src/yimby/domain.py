@@ -429,6 +429,7 @@ class RunMetrics(FrozenModel):
     transferred_bytes: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
     browser_time_ms: int = Field(default=0, ge=0)
+    attachment_body_requests: int = Field(default=0, ge=0)
     storage_growth_bytes: int = Field(ge=0)
 
 

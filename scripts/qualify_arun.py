@@ -23,15 +23,20 @@ from yimby.authorities.arun.adapter import (
     ArunApplicationV1,
     ArunCheckpointV1,
     ArunComplete,
+    ArunCompletedQuery,
     ArunDiscoveryScope,
     ArunLiveCursor,
     ArunQuery,
     _canonical_query_plan,
+    _parse_search_form,
+    _parse_search_results,
 )
 from yimby.collection import Collector
 from yimby.domain import (
     AuthorityId,
     DiscoveryWindow,
+    EvidenceCapture,
+    EvidenceDigest,
     FrozenModel,
     LiveReadiness,
     QualificationSnapshot,
@@ -45,7 +50,7 @@ from yimby.store import SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("arun")
-_RECEIPT_NAME = "arun-qualification-v1.json"
+_RECEIPT_NAME = "arun-qualification-v2.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -55,6 +60,7 @@ _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
 _EVIDENCE_PER_APPLICATION = 2
+_REQUIRED_SUCCESSFUL_RUNS = 2
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -74,6 +80,8 @@ class QualificationQuery(FrozenModel):
     query: ArunQuery
     reported_count: int = Field(ge=0, lt=200)
     enumerated_count: int = Field(ge=0, lt=200)
+    initial_evidence_digest: EvidenceDigest
+    expanded_evidence_digest: EvidenceDigest | None = None
 
 
 class QualificationReferences(FrozenModel):
@@ -87,8 +95,10 @@ class QualificationReferences(FrozenModel):
 class QualificationEvidence(FrozenModel):
     """Recomputed evidence inventory retained for the qualified records."""
 
-    capture_count: int = Field(ge=0)
-    digests: tuple[str, ...]
+    application_capture_count: int = Field(ge=0)
+    application_digests: tuple[EvidenceDigest, ...]
+    search_capture_count: int = Field(ge=0)
+    search_digests: tuple[EvidenceDigest, ...]
 
 
 class QualificationCounts(FrozenModel):
@@ -114,9 +124,10 @@ class QualificationCost(FrozenModel):
 
 
 class QualificationCosts(FrozenModel):
-    """First collection and immediate terminal-rerun costs."""
+    """Cumulative bootstrap, final attempt, and terminal-rerun costs."""
 
-    initial: QualificationCost
+    bootstrap_total: QualificationCost
+    final_resume_attempt: QualificationCost
     rerun: QualificationCost
 
 
@@ -134,16 +145,17 @@ class WeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class ArunQualificationReceiptV1(FrozenModel):
+class ArunQualificationReceiptV2(FrozenModel):
     """Versioned result of a complete local Arun bootstrap qualification."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     authority_id: Literal["arun"] = "arun"
     created_at: datetime
     scope: QualificationScope
     bootstrap_status: Literal["proved"] = "proved"
     operational_status: Literal["pending-weekly-refreshes"] = "pending-weekly-refreshes"
     registry_readiness: Literal["discovery-only"] = "discovery-only"
+    search_form_evidence_digest: EvidenceDigest
     query_inventory: tuple[QualificationQuery, ...]
     references: QualificationReferences
     evidence: QualificationEvidence
@@ -163,13 +175,30 @@ class _Config(FrozenModel):
 class _QualificationState(FrozenModel):
     snapshot: QualificationSnapshot
     query_inventory: tuple[QualificationQuery, ...]
+    search_form_evidence_digest: EvidenceDigest | None
     references: QualificationReferences
     evidence: QualificationEvidence
     semantic_fingerprint: str
     terminal_checkpoint: bool
     reference_sets_agree: bool
     evidence_integrity: bool
+    search_evidence_integrity: bool
     current_sections_complete: bool
+
+
+class _TerminalDiscoveryProof(FrozenModel):
+    """Revalidated terminal query inventory and retained search evidence."""
+
+    inventory: tuple[QualificationQuery, ...]
+    search_form_evidence_digest: EvidenceDigest
+    search_digests: tuple[EvidenceDigest, ...]
+
+
+class _ValidatedQueryEvidence(FrozenModel):
+    """One completed query reparsed from its retained response bodies."""
+
+    inventory: QualificationQuery
+    digests: tuple[EvidenceDigest, ...]
 
 
 class QualificationConfigError(ValueError):
@@ -245,10 +274,10 @@ async def _collect_once(
         await session.aclose()
 
 
-def _terminal_inventory(
+def _terminal_inventory(  # noqa: PLR0911
     store: SqliteStore,
     scope: QualificationScope,
-) -> tuple[QualificationQuery, ...] | None:
+) -> _TerminalDiscoveryProof | None:
     state = store.discovery_state(_AUTHORITY_ID)
     stored = state.checkpoint
     if stored is None or stored.schema_version != 1:
@@ -265,21 +294,90 @@ def _terminal_inventory(
         or cursor.scope != expected_scope
         or cursor.plan != expected_plan
         or not isinstance(cursor.progress, ArunComplete)
+        or cursor.search_form_evidence is None
         or set(cursor.progress.seen_references) != set(state.references)
         or len(cursor.progress.seen_references) != len(state.references)
     ):
         return None
-    return tuple(
-        QualificationQuery(
-            query=query,
-            reported_count=completed.reported_count,
-            enumerated_count=completed.enumerated_count,
-        )
+    try:
+        form_capture = store.evidence_capture(cursor.search_form_evidence)
+        if form_capture is None or not _capture_is_valid(form_capture):
+            return None
+        _parse_search_form(form_capture.body)
+        inventory = []
+        search_digests = [cursor.search_form_evidence]
         for query, completed in zip(
             cursor.plan,
             cursor.progress.completed,
             strict=True,
+        ):
+            validated = _validate_query_evidence(store, query, completed)
+            if validated is None:
+                return None
+            inventory.append(validated.inventory)
+            search_digests.extend(validated.digests)
+    except (OSError, ValueError):
+        return None
+    return _TerminalDiscoveryProof(
+        inventory=tuple(inventory),
+        search_form_evidence_digest=cursor.search_form_evidence,
+        search_digests=tuple(search_digests),
+    )
+
+
+def _capture_is_valid(capture: EvidenceCapture) -> bool:
+    return sha256(capture.body).hexdigest() == str(capture.digest)
+
+
+def _validate_query_evidence(  # noqa: PLR0911
+    store: SqliteStore,
+    query: ArunQuery,
+    completed: ArunCompletedQuery,
+) -> _ValidatedQueryEvidence | None:
+    initial = store.evidence_capture(completed.initial_evidence)
+    if initial is None or not _capture_is_valid(initial):
+        return None
+    parsed_initial = _parse_search_results(initial.body)
+    if (
+        parsed_initial.reported != completed.reported_count
+        or len(parsed_initial.references) > completed.reported_count
+    ):
+        return None
+    digests = [completed.initial_evidence]
+    parsed_final = parsed_initial
+    if completed.expanded_evidence is None:
+        if parsed_initial.has_show_all:
+            return None
+    else:
+        if not parsed_initial.has_show_all:
+            return None
+        expanded = store.evidence_capture(completed.expanded_evidence)
+        if expanded is None or not _capture_is_valid(expanded):
+            return None
+        parsed_final = _parse_search_results(
+            expanded.body,
+            expected_reported=completed.reported_count,
         )
+        digests.append(completed.expanded_evidence)
+        if parsed_final.has_show_all:
+            return None
+    final_references = tuple(
+        reference.reference for reference in parsed_final.references
+    )
+    if (
+        parsed_final.reported != completed.reported_count
+        or final_references != completed.references
+    ):
+        return None
+    return _ValidatedQueryEvidence(
+        inventory=QualificationQuery(
+            query=query,
+            reported_count=completed.reported_count,
+            enumerated_count=completed.enumerated_count,
+            initial_evidence_digest=completed.initial_evidence,
+            expanded_evidence_digest=completed.expanded_evidence,
+        ),
+        digests=tuple(digests),
     )
 
 
@@ -306,7 +404,7 @@ def _references(store: SqliteStore) -> QualificationReferences:
 
 def _evidence_and_sections(
     store: SqliteStore,
-) -> tuple[QualificationEvidence, bool, bool]:
+) -> tuple[int, tuple[EvidenceDigest, ...], bool, bool]:
     retained = tuple(
         record
         for record in store.retained_native_records()
@@ -329,10 +427,8 @@ def _evidence_and_sections(
             and all(document.source_links for document in native.documents)
         )
     return (
-        QualificationEvidence(
-            capture_count=len(captures),
-            digests=tuple(sorted(str(capture.digest) for capture in captures)),
-        ),
+        len(captures),
+        tuple(sorted(capture.digest for capture in captures)),
         integrity,
         sections_complete,
     )
@@ -372,24 +468,37 @@ def _fingerprint(store: SqliteStore, snapshot: QualificationSnapshot) -> str:
 
 def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState:
     snapshot = store.qualification_snapshot(_AUTHORITY_ID)
-    inventory = _terminal_inventory(store, scope)
+    terminal = _terminal_inventory(store, scope)
     references = _references(store)
-    evidence, evidence_integrity, current_sections_complete = _evidence_and_sections(
-        store
-    )
+    (
+        application_capture_count,
+        application_digests,
+        evidence_integrity,
+        current_sections_complete,
+    ) = _evidence_and_sections(store)
+    search_digests = () if terminal is None else terminal.search_digests
     return _QualificationState(
         snapshot=snapshot,
-        query_inventory=inventory or (),
+        query_inventory=() if terminal is None else terminal.inventory,
+        search_form_evidence_digest=(
+            None if terminal is None else terminal.search_form_evidence_digest
+        ),
         references=references,
-        evidence=evidence,
+        evidence=QualificationEvidence(
+            application_capture_count=application_capture_count,
+            application_digests=application_digests,
+            search_capture_count=len(search_digests),
+            search_digests=search_digests,
+        ),
         semantic_fingerprint=_fingerprint(store, snapshot),
-        terminal_checkpoint=inventory is not None,
+        terminal_checkpoint=terminal is not None,
         reference_sets_agree=(
             bool(references.discovered)
             and references.discovered == references.retained_native
             and references.discovered == references.applications
         ),
         evidence_integrity=evidence_integrity,
+        search_evidence_integrity=terminal is not None,
         current_sections_complete=current_sections_complete,
     )
 
@@ -398,7 +507,7 @@ def _base_checks(
     store: SqliteStore,
     state: _QualificationState,
     scope: QualificationScope,
-    initial: QualificationCost,
+    bootstrap_cost: QualificationCost,
     registry: AuthorityRegistry,
 ) -> tuple[QualificationCheck, ...]:
     snapshot = state.snapshot
@@ -409,7 +518,7 @@ def _base_checks(
         QualificationCheck(name="failed-sections", ok=snapshot.failed_sections == 0),
         QualificationCheck(
             name="attachment-policy",
-            ok=initial.attachment_body_requests == 0,
+            ok=bootstrap_cost.attachment_body_requests == 0,
         ),
         QualificationCheck(
             name="database-integrity",
@@ -419,12 +528,27 @@ def _base_checks(
             name="evidence-paths",
             ok=not store.missing_evidence_paths(),
         ),
-        QualificationCheck(name="evidence-digests", ok=state.evidence_integrity),
         QualificationCheck(
-            name="evidence-capture-count",
+            name="application-evidence-digests",
+            ok=state.evidence_integrity,
+        ),
+        QualificationCheck(
+            name="search-evidence-digests",
+            ok=state.search_evidence_integrity,
+        ),
+        QualificationCheck(
+            name="application-evidence-capture-count",
             ok=(
-                state.evidence.capture_count == snapshot.applications * 2
+                state.evidence.application_capture_count
+                == snapshot.applications * 2
                 and snapshot.applications > 0
+            ),
+        ),
+        QualificationCheck(
+            name="search-evidence-capture-count",
+            ok=(
+                state.evidence.search_capture_count
+                >= len(state.query_inventory) + 1
             ),
         ),
         QualificationCheck(
@@ -450,6 +574,15 @@ def _base_checks(
                 == LiveReadiness.DISCOVERY_ONLY
             ),
         ),
+        QualificationCheck(
+            name="durable-registry-status",
+            ok=any(
+                item.manifest.id == _AUTHORITY_ID
+                and item.manifest.live_status
+                == registry.manifest(_AUTHORITY_ID).live_status
+                for item in store.authority_states()
+            ),
+        ),
     )
 
 
@@ -470,7 +603,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> ArunQualificationReceiptV1:
+) -> ArunQualificationReceiptV2:
     registry = AuthorityRegistry((ARUN_PACKAGE,), PILOT_LIVE_STATUS)
     collector = Collector(registry, store)
     window = DiscoveryWindow(
@@ -478,27 +611,32 @@ async def _qualify(
         end=config.scope.end,
         include_open=True,
     )
-    prior_status_count = len(store.run_statuses())
     initial_cost = await _collect_once(collector, window, session_factory)
+    totals = store.metrics_totals()
+    bootstrap_cost = QualificationCost(
+        request_count=totals.request_count,
+        transferred_bytes=totals.transferred_bytes,
+        attachment_body_requests=totals.attachment_body_requests,
+    )
     initial_state = _state(store, config.scope)
     initial_checks = _base_checks(
         store,
         initial_state,
         config.scope,
-        initial_cost,
+        bootstrap_cost,
         registry,
     )
     _require(initial_checks)
 
     rerun_cost = await _collect_once(collector, window, session_factory)
     final_state = _state(store, config.scope)
-    run_statuses = store.run_statuses()[prior_status_count:]
+    run_statuses = store.run_statuses()
     final_checks = (
         *_base_checks(
             store,
             final_state,
             config.scope,
-            initial_cost,
+            bootstrap_cost,
             registry,
         ),
         QualificationCheck(
@@ -519,19 +657,32 @@ async def _qualify(
         ),
         QualificationCheck(
             name="run-statuses",
-            ok=run_statuses == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED),
+            ok=(
+                len(run_statuses) >= _REQUIRED_SUCCESSFUL_RUNS
+                and run_statuses[-_REQUIRED_SUCCESSFUL_RUNS:]
+                == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED)
+                and RunStatus.RUNNING not in run_statuses
+                and RunStatus.INTERRUPTED not in run_statuses
+            ),
         ),
     )
     _require(final_checks)
-    return ArunQualificationReceiptV1(
+    if final_state.search_form_evidence_digest is None:
+        raise QualificationFailedError(("search-form-evidence",))
+    return ArunQualificationReceiptV2(
         created_at=now(),
         scope=config.scope,
+        search_form_evidence_digest=final_state.search_form_evidence_digest,
         query_inventory=final_state.query_inventory,
         references=final_state.references,
         evidence=final_state.evidence,
         counts=_counts(final_state.snapshot),
         semantic_fingerprint=final_state.semantic_fingerprint,
-        costs=QualificationCosts(initial=initial_cost, rerun=rerun_cost),
+        costs=QualificationCosts(
+            bootstrap_total=bootstrap_cost,
+            final_resume_attempt=initial_cost,
+            rerun=rerun_cost,
+        ),
         run_statuses=run_statuses,
         weekly_cycles=(
             WeeklyCycle(target_date=config.scope.end + timedelta(days=7)),
@@ -541,7 +692,7 @@ async def _qualify(
     )
 
 
-def _write_receipt(path: Path, receipt: ArunQualificationReceiptV1) -> None:
+def _write_receipt(path: Path, receipt: ArunQualificationReceiptV2) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:

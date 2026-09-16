@@ -254,6 +254,7 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
         "transferred_bytes": 21,
         "duration_ms": 3,
         "browser_time_ms": 0,
+        "attachment_body_requests": 0,
         "storage_growth_bytes": 5,
     }
     states = store.authority_states(datetime(2020, 1, 1, tzinfo=UTC))
@@ -723,7 +724,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -759,7 +760,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()

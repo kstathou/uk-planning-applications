@@ -105,21 +105,22 @@ class Collector:
             )
             raise
         retrieved_attachment_urls = attachment_urls.intersection(session.requested_urls)
+        attachment_body_requests = session.attachment_body_requests + len(
+            retrieved_attachment_urls
+        )
         self._store.finish_run(
             run_id,
             authority_id,
             RunOutcome(
                 status=RunStatus.SUCCEEDED,
-                metrics=self._metrics(context),
+                metrics=self._metrics(context, attachment_body_requests),
                 transport_mode=session.mode,
             ),
         )
         return CollectionReport(
             applications=tuple(application_ids),
             requested_urls=session.requested_urls,
-            attachment_body_requests=(
-                session.attachment_body_requests + len(retrieved_attachment_urls)
-            ),
+            attachment_body_requests=attachment_body_requests,
         )
 
     def _finish_failed_run(
@@ -147,18 +148,26 @@ class Collector:
             context.authority_id,
             RunOutcome(
                 status=status,
-                metrics=self._metrics(context),
+                metrics=self._metrics(
+                    context,
+                    context.session.attachment_body_requests,
+                ),
                 transport_mode=context.session.mode,
                 failure_message=error_name,
             ),
         )
 
-    def _metrics(self, context: _RunContext) -> RunMetrics:
+    def _metrics(
+        self,
+        context: _RunContext,
+        attachment_body_requests: int,
+    ) -> RunMetrics:
         return RunMetrics(
             request_count=len(context.session.requested_urls),
             transferred_bytes=context.session.transferred_bytes,
             duration_ms=max(0, round((monotonic() - context.started) * 1000)),
             browser_time_ms=context.session.browser_time_ms,
+            attachment_body_requests=attachment_body_requests,
             storage_growth_bytes=max(
                 0,
                 self._store.storage_bytes() - context.storage_before,
