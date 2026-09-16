@@ -64,6 +64,7 @@ from yimby.domain import (
     SourceReference,
     StoredCheckpoint,
     TransportMode,
+    UnavailableSection,
 )
 from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.exporting import (
@@ -408,6 +409,69 @@ def test_semantic_ordering_does_not_create_false_changes(tmp_path: Path) -> None
         "Application form",
         "Decision notice",
     ]
+    store.close()
+
+
+def test_current_events_replace_obsolete_values_and_capabilities_do_not_downgrade(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    original = _rich_observation()
+    first_run = store.begin_run(AuthorityId("barnet"))
+    application_id = store.commit_observation(first_run, original)
+
+    replacement_event = ApplicationEvent(
+        event_type="decision",
+        event_at=datetime(2026, 9, 8, tzinfo=UTC),
+        details="Amended",
+    )
+    changed = original.model_copy(
+        update={
+            "native_json": '{"native":"changed-event"}',
+            "normalised": original.normalised.model_copy(
+                update={
+                    "metadata": original.normalised.metadata.model_copy(
+                        update={"events": (replacement_event,)}
+                    )
+                }
+            ),
+            "observed_at": datetime(2026, 9, 8, tzinfo=UTC),
+        }
+    )
+    second_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(second_run, changed)
+    assert store.application_view(application_id).metadata.events == (
+        replacement_event,
+    )
+
+    unavailable_reference = SourceReference(
+        source_id=SourceId("barnet-public-access"),
+        reference="RICH-2026-2",
+        locator="https://example.test/application/RICH-2026-2",
+    )
+    unavailable = original.model_copy(
+        update={
+            "native_json": '{"native":"documents-unavailable"}',
+            "normalised": original.normalised.model_copy(
+                update={
+                    "reference": unavailable_reference,
+                    "documents": (),
+                    "completeness": original.normalised.completeness.model_copy(
+                        update={
+                            "documents": UnavailableSection(
+                                reason="not exposed for this record"
+                            )
+                        }
+                    ),
+                }
+            ),
+        }
+    )
+    third_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(third_run, unavailable)
+    state = store.authority_states(datetime(2020, 1, 1, tzinfo=UTC))[0]
+    assert state.manifest.capabilities.documents == CapabilityState.SUPPORTED
     store.close()
 
 
@@ -992,7 +1056,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -1028,7 +1092,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()

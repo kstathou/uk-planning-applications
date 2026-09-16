@@ -364,15 +364,15 @@ def _devon_appeal_detail(reference: str = "APP/J1155/W/22/3299799") -> bytes:
     return f"""
     <dl class="details-grid">
       <dt>Planning Ref</dt><dd>DCC/3945/2017</dd>
-      <dt>Enforcement Ref</dt><dd>-</dd>
+      <dt>Enforcement Ref</dt><dd>ENF/0997/2019</dd>
       <dt>Location</dt><dd>Straitgate Farm, Exeter Road</dd>
       <dt>UPRN</dt><dd>-</dd>
       <dt>Site</dt><dd>MD/500901/M</dd>
       <dt>Proposal</dt><dd>Minerals appeal</dd>
       <dt>Type</dt><dd>s78 Appeal</dd>
       <dt>Appeal Method</dt><dd>Inquiry</dd>
-      <dt>Appellant</dt><dd>Appeal Company</dd>
-      <dt>Agent</dt><dd>Appeal Agent</dd>
+      <dt>Appellant</dt><dd>-</dd>
+      <dt>Agent</dt><dd>-</dd>
       <dt>Appellant Address</dt><dd>Appellant House, Devon</dd>
       <dt>Agents Address</dt><dd>Agent House, Devon</dd>
     </dl>
@@ -405,8 +405,8 @@ def _devon_appeal_detail(reference: str = "APP/J1155/W/22/3299799") -> bytes:
       <dt>Decision Date</dt><dd>-</dd>
       <dt>In Abeyance</dt><dd>-</dd>
       <dt>Abeyance Date</dt><dd>-</dd>
-      <dt>Appeal Decision</dt><dd>-</dd>
-      <dt>Decision</dt><dd>-</dd>
+      <dt>Appeal Decision</dt><dd>Withdrawn</dd>
+      <dt>Decision</dt><dd>Applicant</dd>
     </dl>
     <dl class="details-grid">
       <dt>Council Applied</dt><dd>-</dd>
@@ -785,7 +785,7 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
 def test_devon_collects_exact_appeal_route_and_native_fields() -> None:
     adapter = devon.DevonAdapter()
     reference = SourceReference(
-        source_id=devon.SOURCE,
+        source_id=devon.APPEAL_SOURCE,
         reference="APP/J1155/W/22/3299799",
         locator=(f"{devon.BASE_URL}/Appeals/Display/APP/J1155/W/22/3299799"),
     )
@@ -800,8 +800,18 @@ def test_devon_collects_exact_appeal_route_and_native_fields() -> None:
     )
     assert snapshot.payload.documents[0].category == "APPEAL DOCUMENTS"
     normalised = adapter.normalise(snapshot)
-    assert normalised.status == "appeal"
+    assert normalised.status == "withdrawn"
     assert normalised.metadata.application_type == "s78 Appeal"
+    assert normalised.metadata.decision == "Withdrawn"
+    assert normalised.metadata.aliases == ("3299799",)
+    assert normalised.metadata.published_parties == ()
+    assert {
+        (item.relationship_type, item.related_reference)
+        for item in normalised.metadata.relationships
+    } == {
+        ("appeal-of-planning", "DCC/3945/2017"),
+        ("appeal-of-enforcement", "ENF/0997/2019"),
+    }
     assert normalised.metadata.received_date == date(2022, 6, 21)
     assert normalised.metadata.location is not None
     assert normalised.metadata.location.bng_easting == 307500
@@ -812,6 +822,22 @@ def test_devon_collects_exact_appeal_route_and_native_fields() -> None:
         "proof-of-evidence-due",
         "inquiry",
     }
+
+    class _RedirectedAppealSession(_Session):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            capture = await super().fetch(request)
+            return capture.model_copy(
+                update={
+                    "url": HttpUrl(
+                        f"{devon.BASE_URL}/Appeals/Display/DIFFERENT/REFERENCE"
+                    )
+                }
+            )
+
+    with pytest.raises(devon.DevonReferenceMismatchError):
+        asyncio.run(
+            adapter.fetch(_RedirectedAppealSession(_DevonMock(direct=True)), reference)
+        )
 
 
 def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
@@ -1281,6 +1307,23 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     scope = devon.DevonDiscoveryScope(
         start=window.start, end=window.end, include_open=False
     )
+    distinct_routes = devon.DevonCheckpointV1(
+        result_page="live",
+        live_scope=scope,
+        seen_references=(
+            SourceReference(
+                source_id=devon.PLANNING_SOURCE,
+                reference="DCC/1",
+                locator=f"{devon.BASE_URL}/Planning/Display/DCC/1",
+            ),
+            SourceReference(
+                source_id=devon.APPEAL_SOURCE,
+                reference="DCC/1",
+                locator=f"{devon.BASE_URL}/Appeals/Display/DCC/1",
+            ),
+        ),
+    )
+    assert len(distinct_routes.seen_references) == 2
     terminal = devon.DevonCheckpointV1(
         result_page="live",
         live_scope=scope,
@@ -1318,6 +1361,25 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         expected_page=1,
     )
     assert fallback.references[0].reference == "DCC/1"
+    appeal_result = devon._parse_discovery_page(
+        _devon_results(("DCC/1",), route="Appeals"), expected_page=1
+    )
+    assert fallback.references[0].source_id == devon.PLANNING_SOURCE
+    assert appeal_result.references[0].source_id == devon.APPEAL_SOURCE
+    assert fallback.references[0].reference == appeal_result.references[0].reference
+    appeal_singleton = devon._parse_discovery_page(
+        _devon_appeal_detail("DCC/1"),
+        expected_page=1,
+        expected_source=devon.APPEAL_SOURCE,
+        response_url=HttpUrl(f"{devon.BASE_URL}/Appeals/Display/DCC/1"),
+    )
+    assert appeal_singleton.references == (
+        SourceReference(
+            source_id=devon.APPEAL_SOURCE,
+            reference="DCC/1",
+            locator=f"{devon.BASE_URL}/Appeals/Display/DCC/1",
+        ),
+    )
     assert (
         devon._parse_discovery_page(b"<p>No records</p>", expected_page=1).references
         == ()
@@ -1935,10 +1997,10 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         == 0
     )
     output = json.loads(capsys.readouterr().out)
-    receipt_path = data_dir / "devon-qualification-v3.json"
+    receipt_path = data_dir / "devon-qualification-v4.json"
     receipt = json.loads(receipt_path.read_text())
     assert output == receipt
-    assert receipt["schema_version"] == 3
+    assert receipt["schema_version"] == 4
     assert receipt["authority_id"] == "devon"
     assert receipt["scope"] == {
         "start": "2026-08-18",
@@ -2021,6 +2083,7 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         "attachment-policy",
         "database-integrity",
         "evidence-integrity",
+        "discovery-evidence",
         "unmapped-records",
         "idempotent-rerun",
         "terminal-rerun-network-io",
@@ -2030,7 +2093,7 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     assert len(sessions) == 2
     assert sessions[0].requested_urls
     assert sessions[1].requested_urls == ()
-    assert not (data_dir / ".devon-qualification-v3.json.tmp").exists()
+    assert not (data_dir / ".devon-qualification-v4.json.tmp").exists()
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         retained_status = next(
             connection.execute(
@@ -2038,6 +2101,25 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
                 "WHERE authority_id = 'devon'"
             )
         )
+        discovery_pages = tuple(
+            connection.execute(
+                "SELECT DISTINCT query_key, page FROM discovery_evidence "
+                "ORDER BY query_key, page"
+            )
+        )
+        source_counts = tuple(
+            connection.execute(
+                "SELECT source_id, COUNT(*) FROM applications "
+                "GROUP BY source_id ORDER BY source_id"
+            )
+        )
+        retained_evidence = next(connection.execute("SELECT COUNT(*) FROM evidence"))[0]
+    assert len(discovery_pages) == 11
+    assert retained_evidence > receipt["counts"]["applications"]
+    assert source_counts == (
+        ("devon-appeal-register", 1),
+        ("devon-planning-register", 58),
+    )
     assert retained_status == (
         "discovery-only",
         (
