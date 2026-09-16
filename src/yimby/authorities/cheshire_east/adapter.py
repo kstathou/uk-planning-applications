@@ -683,7 +683,10 @@ def _style_declarations(element: Tag) -> dict[str, str]:
     for declaration in str(element.get("style", "")).split(";"):
         name, separator, value = declaration.partition(":")
         if separator:
-            declarations[name.strip().casefold()] = value.strip().casefold()
+            normalised_name = name.strip().casefold()
+            if normalised_name in declarations:
+                _raise_parse("duplicate inline style declaration")
+            declarations[normalised_name] = value.strip().casefold()
     return declarations
 
 
