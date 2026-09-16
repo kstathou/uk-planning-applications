@@ -136,7 +136,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         AuthorityId("camden"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("haringey"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("devon"): LiveReadiness.DISCOVERY_ONLY,
-        AuthorityId("peak-district"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("peak-district"): LiveReadiness.LIVE_READY,
         AuthorityId("arun"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("opdc"): LiveReadiness.LIVE_READY,
         AuthorityId("dorset"): LiveReadiness.BROWSER_ONLY,
@@ -169,7 +169,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
     assert snapshot.coverage_implemented == 15
-    assert snapshot.live_ready == 2
+    assert snapshot.live_ready == 3
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
