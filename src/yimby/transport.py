@@ -35,6 +35,28 @@ _ATTACHMENT_PATH_FRAGMENTS = (
     "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
 )
+_SOURCE_DOCUMENT_MEDIA_TYPES = frozenset(
+    {
+        "application/json",
+        "application/ld+json",
+        "application/problem+json",
+        "application/xhtml+xml",
+        "application/xml",
+        "text/html",
+        "text/plain",
+        "text/xml",
+    }
+)
+
+
+def canonical_source_media_type(value: str) -> str:
+    """Return the case-folded media type without response parameters."""
+    return value.partition(";")[0].strip().casefold()
+
+
+def is_source_document_media_type(value: str) -> bool:
+    """Accept only the bounded textual source-document media set."""
+    return canonical_source_media_type(value) in _SOURCE_DOCUMENT_MEDIA_TYPES
 
 
 class SourceUnavailableError(RuntimeError):

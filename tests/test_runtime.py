@@ -418,44 +418,6 @@ def test_http_session_blocks_redirect_to_attachment_path() -> None:
     assert session.attachment_body_requests == 1
 
 
-@pytest.mark.parametrize(
-    "media_type",
-    ("application/x-pdf", "Application/X-PDF; charset=binary", "application/x-bin"),
-)
-def test_http_session_rejects_unknown_binary_media_before_body_read(
-    media_type: str,
-) -> None:
-    body_reads = 0
-
-    class ForbiddenStream(httpx.AsyncByteStream):
-        async def __aiter__(self) -> AsyncIterator[bytes]:
-            nonlocal body_reads
-            body_reads += 1
-            yield b"must not be read"
-
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            headers={"content-type": media_type},
-            stream=ForbiddenStream(),
-        )
-
-    session = HttpxPortalSession(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        limiter=HostRateLimiter(0),
-    )
-
-    async def exercise() -> None:
-        with pytest.raises(AttachmentBodyBlockedError, match="example.test"):
-            await session.fetch(_request("https://example.test/search"))
-        await session.aclose()
-
-    asyncio.run(exercise())
-    assert body_reads == 0
-    assert session.transferred_bytes == 0
-    assert session.attachment_body_requests == 1
-
-
 def test_http_session_retry_after_and_transport_failures() -> None:
     """Retries are bounded and honor numeric and dated Retry-After values."""
     attempts = 0

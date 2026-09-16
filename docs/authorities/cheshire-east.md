@@ -31,8 +31,10 @@ The search form is named `form`, uses `POST`, and submits to
   `decision_issued_date_to`
 
 The implementation serialises the successful controls in source order and
-overrides both valid-date bounds for an exact request. The qualification scope
-was the inclusive 30-day range 18 August through 16 September 2026.
+overrides both valid-date bounds for an exact request. Browser-effective
+disabled fieldsets, including the first-legend exception, are applied before a
+control can be validated or submitted. The qualification scope was the
+inclusive 30-day range 18 August through 16 September 2026.
 
 The browser returned an explicit no-results response for that valid-date
 request. It also returned no results when `decision_type_id` was set to the
@@ -44,7 +46,8 @@ enumeration of the requested recent or active records.
 The parser treats only the rendered `strong.text-danger` value `No Results
 Found.` inside the unique `div.application-list > div.push-30-t` result
 boundary as terminal for that zero response. Hidden, duplicated, unscoped, or
-mixed result boundaries fail closed. A positive result table publishes no
+mixed result boundaries fail closed, including non-rendering ancestors. The
+same rendered-boundary check applies to a positive table. A positive result table publishes no
 result total, pagination boundary, or all-results-loaded marker, so a non-empty
 page remains explicitly unproved rather than being treated as the complete
 30-day inventory.
@@ -63,7 +66,8 @@ The current default list displayed four rows. A request for the week beginning
 no total, next-page link, or all-results-loaded marker. There is no source fact
 that distinguishes a complete 50-row week from a truncated response, so this
 route cannot prove an exhaustive historical partition or all older active
-applications.
+applications. Generic button or status text is not accepted as a terminal
+marker because no exact source marker has been verified.
 
 ## Detail and documents
 
@@ -84,8 +88,10 @@ requested.
 The parser verifies the numeric locator and public reference before accepting
 the detail. It accepts document metadata only when exactly one document
 section contains exactly one table, disabled all-loaded marker, and hidden
-show-more control with the exact table columns. Duplicate or out-of-section
-controls fail closed. Attachment URLs remain metadata.
+show-more control with the exact labels and table columns. The section, table,
+and all-loaded marker must be rendered, while the show-more control must have
+the verified hidden state. Duplicate or out-of-section controls fail closed.
+Attachment URLs remain metadata.
 
 ## Automated qualification result
 
@@ -104,9 +110,11 @@ immediate `--resume` rerun read only the receipt and evidence. The intended
 recent, weekly-form, historical-week, and direct-detail requests are recorded
 as pending rather than falsely reported as run. Any later parser drift also
 retains every completed response in an offline-resumable typed blocker. Resume
-reparses each retained form, result, detail, and document-metadata body and
-requires the reconstructed contract to equal the receipt. `--resume` without
-its receipt fails during configuration before a portal session is constructed.
+reparses each retained form, every complete result and weekly row, the detail
+including grid coordinates, and each document-metadata row, then requires the
+reconstructed contract to equal the receipt. Blocker explanations are fixed by
+their typed codes. `--resume` without its receipt fails during configuration
+before a portal session is constructed.
 
 ## Verification status
 

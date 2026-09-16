@@ -13,9 +13,11 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 from bs4 import BeautifulSoup
 from bs4.element import Tag
+from pydantic import HttpUrl
 
 import yimby.authorities.cheshire_east.adapter as cheshire
 from yimby.domain import (
@@ -26,9 +28,16 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
 )
-from yimby.transport import PortalRequest, RequestMethod
+from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+from yimby.transport import (
+    AttachmentBodyBlockedError,
+    PortalRequest,
+    RequestIntent,
+    RequestMethod,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from types import ModuleType
 
 
@@ -250,6 +259,48 @@ class _NonHtmlQualificationSession(_QualificationSession):
         return capture.model_copy(update={"media_type": "application/xhtml+xml"})
 
 
+@pytest.mark.parametrize(
+    "media_type",
+    ["application/x-pdf", "Application/X-PDF; charset=binary", "application/x-bin"],
+)
+def test_cheshire_http_transport_rejects_unknown_media_before_body_read(
+    media_type: str,
+) -> None:
+    body_reads = 0
+
+    class ForbiddenStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal body_reads
+            body_reads += 1
+            yield b"must not be read"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": media_type},
+            stream=ForbiddenStream(),
+        )
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        request = PortalRequest(
+            url=HttpUrl("https://example.test/search"),
+            intent=RequestIntent.SEARCH,
+        )
+        with pytest.raises(AttachmentBodyBlockedError, match=r"example\.test"):
+            await session.fetch(request)
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert body_reads == 0
+    assert session.transferred_bytes == 0
+    assert session.attachment_body_requests == 1
+
+
 def test_cheshire_replays_exact_successful_search_controls() -> None:
     form = cheshire.parse_search_form(_search_form())
     request = cheshire.valid_date_request(
@@ -277,8 +328,8 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
     legend_form = cheshire.parse_search_form(
         _search_form().replace(
             b'<input name="valid_date_from" value="">',
-            b'<fieldset disabled><legend><input name="valid_date_from" value="">'
-            b"</legend></fieldset>",
+            b'<fieldset disabled><legend><fieldset><input name="valid_date_from" '
+            b'value=""></fieldset></legend></fieldset>',
         )
     )
     legend_request = cheshire.valid_date_request(
@@ -441,8 +492,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         ),
         _search_form().replace(
             b'<input name="valid_date_from" value="">',
-            b'<fieldset disabled><input name="valid_date_from" value="">'
-            b"</fieldset>",
+            b'<fieldset disabled><input name="valid_date_from" value=""></fieldset>',
         ),
         _search_form().replace(b'type="hidden" name="fa"', b'type="submit" name="fa"'),
         _search_form().replace(

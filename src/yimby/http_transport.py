@@ -22,6 +22,8 @@ from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalRequest,
     SourceUnavailableError,
+    canonical_source_media_type,
+    is_source_document_media_type,
 )
 
 if TYPE_CHECKING:
@@ -50,16 +52,6 @@ _ATTACHMENT_PATH_FRAGMENTS = (
     "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
 )
-_ATTACHMENT_MEDIA_TYPES = {
-    "application/msword",
-    "application/octet-stream",
-    "application/pdf",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/zip",
-}
-_ATTACHMENT_MEDIA_PREFIXES = ("audio/", "image/", "video/")
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _SUCCESS_MIN = 200
 _SUCCESS_MAX = 300
@@ -203,14 +195,16 @@ class HttpxPortalSession:
                         final_url = urlsplit(str(response.url))
                         if _is_attachment_path(
                             final_url.path
-                        ) or _is_attachment_response(response):
+                        ) or _response_is_forbidden(response):
                             self._attachment_body_requests += 1
                             raise _attachment_error(final_url.hostname or host)
                         body = await response.aread()
-                        media_type = response.headers.get(
-                            "content-type", "application/octet-stream"
+                        media_type = canonical_source_media_type(
+                            response.headers.get(
+                                "content-type", "application/octet-stream"
+                            )
                         )
-                        return body, media_type.partition(";")[0].strip().lower()
+                        return body, media_type
                     finally:
                         if response is not None:
                             await response.aclose()
@@ -251,14 +245,12 @@ class HttpxPortalSession:
         await self._client.aclose()
 
 
-def _is_attachment_response(response: httpx.Response) -> bool:
-    disposition = response.headers.get("content-disposition", "").lower()
-    media_type = response.headers.get("content-type", "").partition(";")[0].lower()
+def _response_is_forbidden(response: httpx.Response) -> bool:
+    disposition = response.headers.get("content-disposition", "").casefold()
     return (
         "attachment" in disposition
         or "filename=" in disposition
-        or media_type in _ATTACHMENT_MEDIA_TYPES
-        or media_type.startswith(_ATTACHMENT_MEDIA_PREFIXES)
+        or not is_source_document_media_type(response.headers.get("content-type", ""))
     )
 
 

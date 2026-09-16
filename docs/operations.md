@@ -141,7 +141,9 @@ retains the official source evidence and atomically writes the receipt. A
 subsequent `--resume` validates that receipt and its compressed evidence
 without constructing a portal session. Validation reparses the retained source
 bodies and binds the reconstructed forms, result boundaries, detail, and
-document metadata to the recorded contract. A missing receipt makes
+document metadata to the recorded contract. Complete parsed result rows,
+locators, weekly rows, detail coordinates, and code-specific blocker text are
+included in that equality. A missing receipt makes
 `--resume` fail before source I/O. The command exits with status 1 for the
 recorded blocker and does not create an operational SQLite store. The authority
 must remain blocked until both enumeration gaps and automated source access are
@@ -149,9 +151,10 @@ resolved, followed by a complete bootstrap and two real weekly cycles.
 
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
-request. It rejects attachment media types or content dispositions before
-consuming a response body. Adapters retain only document metadata and source
-links.
+request. HTTP response bodies are read only for a small positive allowlist of
+canonical textual source-document media types; parameters and case are
+normalised, and dispositions or any other media type are rejected before body
+consumption. Adapters retain only document metadata and source links.
 
 ## Inspect, rebuild, and export
 

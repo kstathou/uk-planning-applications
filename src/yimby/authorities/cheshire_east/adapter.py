@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
 
-"""Cheshire East-owned fixture and valid-date search adapter."""
-
 from __future__ import annotations
 
 import re
@@ -283,9 +281,22 @@ def _unique_named_control(form: Tag, name: str) -> Tag:
 
 def _enabled_named_control(form: Tag, name: str) -> Tag:
     control = _unique_named_control(form, name)
-    if control.has_attr("disabled"):
+    if _is_effectively_disabled(control):
         _raise_parse(name)
     return control
+
+
+def _is_effectively_disabled(control: Tag) -> bool:
+    if control.has_attr("disabled"):
+        return True
+    for fieldset in control.find_parents("fieldset"):
+        if not fieldset.has_attr("disabled"):
+            continue
+        first_legend = fieldset.find("legend", recursive=False)
+        if isinstance(first_legend, Tag) and first_legend in control.parents:
+            continue
+        return True
+    return False
 
 
 def valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
@@ -312,7 +323,7 @@ def _successful_form_fields(
 ) -> tuple[FormField, ...]:
     fields: list[FormField] = []
     for control in form.select("input[name], select[name], textarea[name]"):
-        if control.has_attr("disabled"):
+        if _is_effectively_disabled(control):
             continue
         name = str(control["name"])
         if name in overrides:
@@ -405,6 +416,7 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
             or set(map(str, container.get_attribute_list("class")))
             != {"centered", "application-list"}
             or container.select("div.push-30-t > strong.text-danger")
+            or _has_hidden_ancestor(tables[0])
         ):
             _raise_parse("search result boundary")
         return CheshireEastSearchBoundaryV1(
@@ -445,16 +457,31 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
 
 
 def _has_hidden_ancestor(element: Tag) -> bool:
-    for candidate in (element, *element.parents):
-        style = str(candidate.get("style", "")).replace(" ", "").casefold()
-        if (
-            candidate.has_attr("hidden")
-            or str(candidate.get("aria-hidden", "")).casefold() == "true"
-            or "display:none" in style
-            or "visibility:hidden" in style
-        ):
-            return True
-    return False
+    return any(
+        _is_hidden_markup(candidate) for candidate in (element, *element.parents)
+    )
+
+
+def _is_hidden_markup(element: Tag) -> bool:
+    style = "".join(str(element.get("style", "")).casefold().split())
+    return (
+        element.name
+        in {
+            "head",
+            "input",
+            "noscript",
+            "option",
+            "script",
+            "select",
+            "style",
+            "template",
+            "title",
+        }
+        or element.has_attr("hidden")
+        or str(element.get("aria-hidden", "")).strip().casefold() == "true"
+        or "display:none" in style
+        or "visibility:hidden" in style
+    )
 
 
 def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
@@ -513,16 +540,11 @@ def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
     total = _reported_total(boundary)
     if total is not None and total < len(rows):
         _raise_parse("reported result total")
-    terminal_marker = any(
-        _normalise_label(element.get_text(" ", strip=True))
-        in {"all applications loaded", "all results loaded"}
-        for element in boundary.select("button, [role='status']")
-    )
     return CheshireEastWeeklyBoundaryV1(
         rows=tuple(rows),
         reported_total=total,
         pagination_links=pagination_links,
-        terminal_marker=terminal_marker,
+        terminal_marker=False,
     )
 
 
@@ -649,6 +671,14 @@ def _parse_document_metadata(
         or len(show_more_controls) != 1
         or len(section_show_more_controls) != 1
         or show_more_controls[0] is not section_show_more_controls[0]
+        or _normalise_label(loaded_controls[0].get_text(" ", strip=True))
+        != "all documents loaded"
+        or _normalise_label(show_more_controls[0].get_text(" ", strip=True))
+        != "show more"
+        or _has_hidden_ancestor(section)
+        or _has_hidden_ancestor(tables[0])
+        or _has_hidden_ancestor(loaded_controls[0])
+        or any(_is_hidden_markup(parent) for parent in show_more_controls[0].parents)
         or "display:none"
         not in str(show_more_controls[0].get("style", "")).replace(" ", "").casefold()
     ):

@@ -30,6 +30,7 @@ from yimby.transport import (
     PortalSession,
     RequestMethod,
     SourceUnavailableError,
+    is_source_document_media_type,
 )
 
 _RECEIPT_NAME = "cheshire-east-qualification-blocker-v2.json"
@@ -49,19 +50,6 @@ _EXACT_WINDOW_REQUIRED = "exact-30-day-window-required"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
 _RECEIPT_REQUIRED = "receipt-required"
-_ATTACHMENT_MEDIA_TYPES = frozenset(
-    {
-        "application/msword",
-        "application/octet-stream",
-        "application/pdf",
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/zip",
-    }
-)
-_ATTACHMENT_MEDIA_PREFIXES = ("audio/", "image/", "video/")
-
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
 
@@ -115,13 +103,16 @@ class RecentContractV1(FrozenModel):
 
     explicit_zero: bool
     visible_references: tuple[str, ...]
+    results: tuple[cheshire.CheshireEastSearchResultV1, ...]
     reported_total: int | None
     pagination_links: tuple[str, ...]
     terminal_marker: bool
 
     @model_validator(mode="after")
     def _zero_agrees_with_references(self) -> Self:
-        if self.explicit_zero == bool(self.visible_references):
+        if self.visible_references != tuple(
+            result.public_reference for result in self.results
+        ) or self.explicit_zero == bool(self.results):
             _raise_invariant("recent-result-mismatch")
         if self.explicit_zero and (
             self.reported_total != 0
@@ -141,13 +132,16 @@ class WeeklyContractV1(FrozenModel):
 
     week: date
     row_count: int = Field(ge=0)
+    rows: tuple[cheshire.CheshireEastWeeklyRowV1, ...]
     reported_total: int | None
     pagination_links: tuple[str, ...]
     terminal_marker: bool
 
     @model_validator(mode="after")
     def _total_covers_rows(self) -> Self:
-        if self.reported_total is not None and self.reported_total < self.row_count:
+        if self.row_count != len(self.rows) or (
+            self.reported_total is not None and self.reported_total < self.row_count
+        ):
             _raise_invariant("weekly-total-mismatch")
         return self
 
@@ -168,6 +162,7 @@ class DetailContractV1(FrozenModel):
     locator: str
     application_status: str
     valid_date: date
+    grid_reference: tuple[float, float]
     document_count: int = Field(ge=0)
     documents: tuple[DocumentContractV1, ...]
 
@@ -253,6 +248,34 @@ def _source_blocker_facts(
     return tuple(codes), recent_contradicted, recent_unproved, weekly_unproved
 
 
+_BLOCKER_EXPLANATIONS = {
+    "official-search-form-unavailable": (
+        "the official HTTP response did not expose the recorded search form, "
+        "so no search or detail query was attempted"
+    ),
+    "official-source-contract-drift": (
+        "an official response no longer matched the recorded source contract; "
+        "every completed response was retained"
+    ),
+    "recent-window-fidelity-contradicted": (
+        "a direct detail valid inside the requested window was absent from the "
+        "valid-date result"
+    ),
+    "recent-window-terminality-unproven": (
+        "the valid-date result does not publish a complete result count or "
+        "terminal boundary"
+    ),
+    "weekly-list-terminality-unproven": (
+        "the historical weekly page does not publish an internally consistent "
+        "terminal boundary"
+    ),
+    "older-open-inventory-unproven": (
+        "the official portal exposes no complete active-status query or proven "
+        "exhaustive historical partition"
+    ),
+}
+
+
 class QualificationBlockerV1(FrozenModel):
     """One completeness fact preventing live qualification."""
 
@@ -265,6 +288,12 @@ class QualificationBlockerV1(FrozenModel):
         "older-open-inventory-unproven",
     ]
     explanation: str
+
+    @model_validator(mode="after")
+    def _explanation_matches_code(self) -> Self:
+        if self.explanation != _BLOCKER_EXPLANATIONS[self.code]:
+            _raise_invariant("blocker-explanation-mismatch")
+        return self
 
 
 class QualificationCheckV1(FrozenModel):
@@ -621,6 +650,7 @@ def _source_contract_from_boundaries(
             visible_references=tuple(
                 result.public_reference for result in recent.results
             ),
+            results=recent.results,
             reported_total=recent.reported_total,
             pagination_links=recent.pagination_links,
             terminal_marker=recent.terminal_marker,
@@ -628,6 +658,7 @@ def _source_contract_from_boundaries(
         weekly=WeeklyContractV1(
             week=_HISTORICAL_WEEK,
             row_count=len(weekly.rows),
+            rows=weekly.rows,
             reported_total=weekly.reported_total,
             pagination_links=weekly.pagination_links,
             terminal_marker=weekly.terminal_marker,
@@ -637,6 +668,7 @@ def _source_contract_from_boundaries(
             locator=_DETAIL_LOCATOR,
             application_status=detail.application_status,
             valid_date=detail.valid_date,
+            grid_reference=detail.grid_reference,
             document_count=len(detail.documents),
             documents=tuple(
                 DocumentContractV1.model_validate(document.model_dump())
@@ -752,17 +784,10 @@ def _validate_evidence_bindings(
             or evidence_url.netloc != request_url.netloc
             or evidence_url.path != request_url.path
             or evidence_url.query not in {"", request_url.query}
-            or _is_attachment_media_type(item.media_type)
+            or not is_source_document_media_type(item.media_type)
             or (item.media_type != "text/html" and not final_blocker_media)
         ):
             _raise_invariant("request-evidence-mismatch")
-
-
-def _is_attachment_media_type(media_type: str) -> bool:
-    canonical = media_type.partition(";")[0].strip().casefold()
-    return canonical in _ATTACHMENT_MEDIA_TYPES or canonical.startswith(
-        _ATTACHMENT_MEDIA_PREFIXES
-    )
 
 
 class _RetainedEvidenceReplay:
