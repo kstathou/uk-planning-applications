@@ -16,6 +16,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
+import httpx
 from pydantic import Field
 
 from yimby.authorities.dorset import DORSET_PACKAGE
@@ -52,6 +53,10 @@ _RESUME_REQUIRED = "resume-required"
 _QUERY_INVENTORY = ("received-valid", "outstanding")
 _SCOPE_START = date(2026, 8, 18)
 _SCOPE_END = date(2026, 9, 16)
+_HTTP_HEADERS = {
+    "accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+    "user-agent": "yimby/0.1 (+local planning research; contact via source repository)",
+}
 
 
 SessionFactory = Callable[[], PortalSession]
@@ -577,7 +582,14 @@ def _write_receipt(path: Path, receipt: DorsetQualificationReceiptV1) -> None:
 
 
 def _default_session() -> HttpxPortalSession:
-    return HttpxPortalSession(max_attempts=1)
+    return HttpxPortalSession(
+        client=httpx.AsyncClient(
+            follow_redirects=False,
+            headers=_HTTP_HEADERS,
+            timeout=httpx.Timeout(30.0),
+        ),
+        max_attempts=1,
+    )
 
 
 def _default_clock() -> datetime:

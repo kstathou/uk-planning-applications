@@ -1023,6 +1023,7 @@ def _advanced_request(
             f"{_RECEIVED_TO}$dateInput": scope.end.strftime("%d/%m/%Y"),
         }
     else:
+        _require_outstanding_control(form)
         overrides = {
             _OUTSTANDING: "on",
             _RECEIVED_FROM: "",
@@ -1046,6 +1047,16 @@ def _advanced_request(
             *fields,
         ),
     )
+
+
+def _require_outstanding_control(form: Tag) -> None:
+    controls = form.select(f'input[name="{_OUTSTANDING}"]')
+    if (
+        len(controls) != 1
+        or str(controls[0].get("type", "")).casefold() != "checkbox"
+        or controls[0].has_attr("disabled")
+    ):
+        _raise_parse("advanced outstanding control")
 
 
 def _telerik_client_state(fields: tuple[FormField, ...]) -> dict[str, str]:
