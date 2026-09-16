@@ -961,6 +961,40 @@ def test_dorset_qualification_terminal_validation_retains_live_cost(
     assert validated.costs.rerun.fetch_calls == 0
 
 
+def test_dorset_qualification_terminal_validation_requires_prior_live_proof(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A zero-fetch resume cannot synthesize historical attachment accounting."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+    session_factory = lambda: _session(_DorsetMock())  # noqa: E731
+
+    assert module.main(arguments, session_factory=session_factory) == 0
+    capsys.readouterr()
+    receipt_path = tmp_path / "dorset-qualification-v1.json"
+    receipt_path.unlink()
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=session_factory,
+        )
+        == 1
+    )
+    error = json.loads(capsys.readouterr().err)
+    assert error == {
+        "error": "qualification-failed",
+        "failed_checks": ["live-source-proof"],
+    }
+    assert not receipt_path.exists()
+
+
 def test_dorset_qualification_spaces_every_redirect_hop() -> None:
     """Each automatic redirect remains a separate Dorset host-limiter turn."""
     module = _qualification_module()
