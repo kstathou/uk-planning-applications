@@ -206,7 +206,7 @@ def _documents_page(
     )
     pages = (reported + page_size - 1) // page_size
     links = "".join(
-        f'<a onclick="PagingClick(\'{index}\')">{index + 1}</a>'
+        f"<a onclick=\"PagingClick('{index}')\">{index + 1}</a>"
         for index in range(pages)
     )
     return f"""
@@ -630,16 +630,14 @@ def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
         "Plans and Drawings Planning Application",
     ]
     assert all(
-        document.published_date is not None
-        for document in snapshot.payload.documents
+        document.published_date is not None for document in snapshot.payload.documents
     )
     assert snapshot.completeness.documents.kind == "complete"
     assert snapshot.completeness.comments.kind == "unavailable"
     assert len(snapshot.evidence) == 3
     assert len(session.requests) == 3
     assert all(
-        "OnlineDisplayDocument" not in str(request.url)
-        for request in session.requests
+        "OnlineDisplayDocument" not in str(request.url) for request in session.requests
     )
     assert [document.title for document in normalised.documents] == [
         "Application Form.pdf",
