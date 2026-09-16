@@ -195,6 +195,8 @@ class DevonCheckpointV1(FrozenModel):
                 _raise_checkpoint("terminal-incoherent")
             return self
         if self.active_query is None:
+            if self.completed_queries == keys:
+                _raise_checkpoint("terminal-flag-required")
             if self.next_page != 1 or self.active_pages:
                 _raise_checkpoint("inactive-page-progress")
             return self

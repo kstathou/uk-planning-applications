@@ -236,7 +236,8 @@ class HttpxPortalSession:
     ) -> AsyncIterator[httpx.Response]:
         """Rate-limit and validate every physical request in a redirect chain."""
         current = request
-        for redirect_count in range(_MAX_REDIRECTS + 1):
+        redirect_count = 0
+        while True:
             host = urlsplit(str(current.url)).hostname or ""
             async with self._limiter.turn(host):
                 response = await self._client.send(
@@ -260,8 +261,8 @@ class HttpxPortalSession:
                         raise _redirect_limit_error(_safe_url(str(request.url)))
                 finally:
                     await response.aclose()
+            redirect_count += 1
             current = next_request
-        raise AssertionError  # pragma: no cover
 
     @property
     def requested_urls(self) -> tuple[str, ...]:

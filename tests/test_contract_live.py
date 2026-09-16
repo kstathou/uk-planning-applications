@@ -1697,6 +1697,21 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
     )
     rejected("terminal-incoherent", live_complete=True)
     rejected(
+        "terminal-flag-required",
+        completed_queries=keys,
+        query_summaries=tuple(
+            devon.DevonQuerySummaryV1(
+                query_key=query_key,
+                row_count=1,
+                page_count=1,
+            )
+            for query_key in keys
+        ),
+        active_query=None,
+        next_page=1,
+        active_pages=(),
+    )
+    rejected(
         "inactive-page-progress",
         active_query=None,
         next_page=2,
