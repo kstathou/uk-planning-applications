@@ -1085,6 +1085,44 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             barnet_adapter._parse_search_page(body)
 
 
+def test_barnet_parses_live_div_comment_layouts() -> None:
+    """Live public and consultee comment cards reconcile with displayed counts."""
+    public, public_state = barnet_adapter._parse_comments(
+        b'<h2>Public Comments (1)</h2><div id="comments">'
+        b'<div class="comment"><h1><span class="consultationName">Redacted</span>'
+        b'<span class="consultationAddress">Redacted</span>'
+        b'<span class="consultationStance">Neutral</span></h1>'
+        b'<div class="comment-wrapper"><h2>Comment submitted date: 28/08/2026</h2>'
+        b'<div class="comment-text"><p>Support recorded.<br></p></div>'
+        b'<div class="comment-report-button"></div></div></div></div>',
+        "public",
+        ("public comments", "neighbour comments"),
+    )
+    assert [comment.text for comment in public] == ["Support recorded."]
+    assert public[0].comment_id == "public-1"
+    assert public_state.kind == "complete"
+
+    consultee, consultee_state = barnet_adapter._parse_comments(
+        b'<h2>Consultee Comments (2)</h2><div id="comments">'
+        b'<div class="comment"><h1>Trees &amp; Landscape</h1>'
+        b'<div class="commentText"><h2>Consultation Date: 24/08/2026</h2></div>'
+        b'</div><div class="comment"><h1>Ecology</h1>'
+        b'<div class="commentText"><h2>Consultation Date: 25/08/2026</h2></div>'
+        b"</div></div>",
+        "consultee",
+        ("consultee comments", "consultee responses"),
+    )
+    assert [comment.text for comment in consultee] == [
+        "Trees & Landscape Consultation Date: 24/08/2026",
+        "Ecology Consultation Date: 25/08/2026",
+    ]
+    assert [comment.comment_id for comment in consultee] == [
+        "consultee-1",
+        "consultee-2",
+    ]
+    assert consultee_state.kind == "complete"
+
+
 def test_barnet_advanced_detail_redirect_boundaries() -> None:
     """A one-record advanced redirect has one table, locator, and reference."""
     detail = (
