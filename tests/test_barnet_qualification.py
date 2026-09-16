@@ -9,6 +9,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -227,6 +228,11 @@ def test_barnet_qualification_requires_exact_safe_scope(
 
     short_scope = _args(tmp_path / "short")
     short_scope[6] = "2026-09-15"
+    invalid_date = _args(tmp_path / "invalid-date")
+    invalid_date[4] = "not-a-date"
+    reversed_scope = _args(tmp_path / "reversed")
+    reversed_scope[4] = END
+    reversed_scope[6] = START
     cases = (
         (
             [
@@ -241,6 +247,8 @@ def test_barnet_qualification_requires_exact_safe_scope(
             "include-open-required",
         ),
         (short_scope, "thirty-day-window-required"),
+        (invalid_date, "invalid-date"),
+        (reversed_scope, "invalid-window"),
     )
     for arguments, expected in cases:
         assert module.main(arguments, session_factory=session_factory) == 2
@@ -253,6 +261,13 @@ def test_barnet_qualification_requires_exact_safe_scope(
     assert module.main(_args(occupied), session_factory=session_factory) == 2
     assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
     assert (occupied / "existing").read_text(encoding="utf-8") == "preserve"
+    assert created == 0
+
+    file_target = tmp_path / "file-target"
+    file_target.write_text("preserve", encoding="utf-8")
+    assert module.main(_args(file_target), session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "data-dir-not-directory"
+    assert file_target.read_text(encoding="utf-8") == "preserve"
     assert created == 0
 
 
@@ -341,6 +356,45 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert not (data_dir / ".barnet-qualification-v1.json.tmp").exists()
 
+    sessions.clear()
+    mocks.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=session_factory,
+            now=lambda: now,
+        )
+        == 0
+    )
+    resumed = json.loads(capsys.readouterr().out)
+    assert len(sessions) == 2
+    assert all(session.requested_urls == () for session in sessions)
+    assert resumed["costs"]["initial"]["request_count"] == 0
+    assert resumed["costs"]["rerun"]["request_count"] == 0
+
+
+def test_barnet_qualification_rejects_failed_current_sections(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A malformed current section prevents any success receipt."""
+    module = _qualification_module()
+    data_dir = tmp_path / "failed-sections"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_BarnetQualificationMock(failed_documents=True))
+        sessions.append(session)
+        return session
+
+    assert module.main(_args(data_dir), session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "failed-sections" in error["failed_checks"]
+    assert len(sessions) == 1
+    assert sessions[0].closed
+    assert not (data_dir / "barnet-qualification-v1.json").exists()
+
 
 @pytest.mark.parametrize(
     "corruption",
@@ -367,10 +421,11 @@ def test_barnet_qualification_invalidates_stale_receipt_on_corruption(
         evidence_path.write_bytes(b"not-gzip")
         expected_check = "evidence-integrity"
     else:
-        with sqlite3.connect(data_dir / "yimby.sqlite3") as connection:
+        with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
             connection.execute(
-                "UPDATE applications SET locator = 'CORRUPTED' WHERE rowid = 1"
+                "UPDATE discovery_queue SET locator = 'CORRUPTED' WHERE rowid = 1"
             )
+            connection.commit()
         expected_check = "reference-application-agreement"
 
     assert (
