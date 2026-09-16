@@ -39,6 +39,8 @@ from yimby.domain import (
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
+    LiveReadiness,
+    LiveTransportKind,
     SourceReference,
     TransportMode,
     Wgs84Coordinate,
@@ -850,6 +852,9 @@ def test_opdc_qualification_persists_typed_proof_and_zero_network_rerun(
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
     assert all(check["ok"] for check in receipt["checks"])
     store = _store(data_dir)
+    authority = store.authority_states()[0]
+    assert authority.manifest.live_status.readiness == LiveReadiness.LIVE_READY
+    assert authority.manifest.live_status.transport == LiveTransportKind.HTTP
     for record in store.retained_native_records():
         locator = record.reference.locator
         assert locator is not None
