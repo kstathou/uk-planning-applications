@@ -657,8 +657,11 @@ def _is_hidden_markup(element: Tag) -> bool:
             "template",
             "title",
         }
+        or (element.name == "dialog" and not element.has_attr("open"))
+        or (element.name == "details" and not element.has_attr("open"))
         or element.has_attr("hidden")
-        or bool(classes & {"d-none", "hidden", "invisible"})
+        or bool(classes & {"d-none", "hide", "hidden", "invisible"})
+        or ("collapse" in classes and not classes & {"in", "show"})
         or str(element.get("aria-hidden", "")).strip().casefold() == "true"
         or _css_value(style.get("display")) == "none"
         or _css_value(style.get("visibility")) in {"hidden", "collapse"}
