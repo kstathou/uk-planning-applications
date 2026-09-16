@@ -425,6 +425,24 @@ def test_birmingham_qualification_rejects_nonempty_data_dir(
     assert sentinel.read_text(encoding="utf-8") == "caller-owned"
 
 
+def test_birmingham_qualification_rejects_a_different_30_day_window(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Keep the declared scope identical to the dated query inventory."""
+    module = _qualification_module()
+    args = _args(tmp_path / "shifted")
+    args[args.index("2026-08-18")] = "2026-08-17"
+    args[args.index("2026-09-16")] = "2026-09-15"
+
+    result = module.main(args, session_factory=lambda: _ArcgisSession(()))
+
+    assert result == _CONFIG_ERROR
+    assert json.loads(capsys.readouterr().err)["error"] == (
+        "exact-30-day-window-required"
+    )
+
+
 def _query(url: str) -> dict[str, list[str]]:
     return parse_qs(urlsplit(url).query)
 
