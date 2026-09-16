@@ -55,6 +55,24 @@ _RECENT_DAYS = 7
 _DATE_FORMATS = ("%d/%m/%Y", "%d %B %Y", "%d %b %Y", "%Y-%m-%d")
 
 
+class HaringeyCompletedQueryV1(FrozenModel):
+    """One durable, count-reconciled discovery query."""
+
+    key: str = Field(min_length=1)
+    advertised_count: int = Field(ge=0)
+    observed_count: int = Field(ge=0)
+    unique_count: int = Field(ge=0)
+
+
+class HaringeyLegacyResolutionV1(FrozenModel):
+    """Official identity evidence resolving one legacy map PKID."""
+
+    pkid: str = Field(min_length=1)
+    public_reference: str = Field(pattern=r"^HGY/\d{4}/\d+$")
+    salesforce_record_id: str = Field(min_length=1)
+    evidence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class HaringeyCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable Salesforce result-page progress."""
 
@@ -67,7 +85,10 @@ class HaringeyCheckpointV1(FrozenModel):
     observed_result_count: int = Field(default=0, ge=0)
     seen_references: tuple[str, ...] = ()
     quick_link_complete: bool = False
-    older_open_complete: bool = False
+    completed_queries: tuple[HaringeyCompletedQueryV1, ...] = ()
+    legacy_current_pkids: tuple[str, ...] = ()
+    legacy_resolutions: tuple[HaringeyLegacyResolutionV1, ...] = ()
+    ambiguous_legacy_pkids: tuple[str, ...] = ()
 
 
 class HaringeySearchHitV1(FrozenModel):

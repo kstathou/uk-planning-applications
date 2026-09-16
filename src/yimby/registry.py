@@ -65,8 +65,8 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("haringey"): _status(
         LiveReadiness.BROWSER_ONLY,
-        "the rolling seven-day browser journey is implemented; advanced and "
-        "older-open enumeration remain unresolved",
+        "complete collection is blocked by the missing deterministic legacy-PKID "
+        "to HGY and Salesforce crosswalk",
         "captured Arcus quick-link, pagination, detail, comments, and "
         "file-tab selectors",
         LiveTransportKind.BROWSER,

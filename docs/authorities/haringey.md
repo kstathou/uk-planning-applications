@@ -241,8 +241,7 @@ emitted.
 
 ## Authority qualification command
 
-Haringey now has the same explicit, resumable qualification boundary as the
-live-ready pilot tooling:
+Haringey now has an explicit, resumable, fail-closed qualification boundary:
 
 ```sh
 uv run python scripts/qualify_haringey.py \
@@ -254,17 +253,33 @@ uv run python scripts/qualify_haringey.py \
   --resume
 ```
 
-The command requires explicit live confirmation, an all-open scope, and
-`--resume` before reusing a non-empty target. It persists collection state and
-can write only the typed, atomic `haringey-qualification-v1.json` receipt after
-terminal-checkpoint coherence, count agreement, zero pending or failed work,
-SQLite and evidence integrity, the attachment policy, and an immediate
-zero-request idempotence rerun all pass.
+The command requires explicit live confirmation, exactly 30 inclusive days,
+an all-open scope, and `--resume` before reusing a non-empty target. The
+production package is fixed and cannot be replaced through the command's test
+seams. A terminal checkpoint must contain the exact five overlapping weekly
+queries plus the Arcus-current, legacy-current, and legacy-decided map queries,
+with advertised, observed, and unique counts reconciled for each. Every legacy
+current PKID must also have an official HGY reference, Salesforce record ID,
+and retained evidence digest, with no unresolved or ambiguous PKIDs. A single
+completion boolean cannot certify that inventory.
 
-The production command was run at 10:56 UTC on 16 September 2026. It persisted
-one failed run and returned `qualification-failed` with failed checks
+The typed schema-v1 receipt additionally records the two still-pending,
+genuinely later refresh obligations at least 7 and 14 days after bootstrap. It
+can be written only after terminal-checkpoint coherence, durable count
+agreement, zero pending or failed work, SQLite integrity, decompression and
+digest verification of every retained evidence body, the attachment policy,
+and an immediate zero-request idempotence rerun all pass. Receipt output uses
+an exclusive randomized temporary file, file `fsync`, atomic replacement, and
+directory `fsync`.
+
+The remediated production command was run at 12:13 UTC on 16 September 2026.
+It added a second durable failed run and returned `qualification-failed` with
+failed checks
 `bounded-30-day-discovery` and `complete-older-open-inventory`, sourced from
 `HaringeyWindowUnavailableError`. The adapter rejected the unsupported scope
-before opening a browser. Neither the final receipt nor its temporary path was
-created. The tool therefore makes the current source boundary reproducible; it
-does not relax it.
+before opening a browser. Neither the final receipt nor any randomized
+temporary receipt was created. The sanitized blocker evidence is committed as
+`docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`; its SHA-256
+is `18af4e6f81dc603edab049f1027d9ae5f1a3ee51fd434b8ef1564159b215a36b`.
+The tool therefore makes the current source boundary reproducible; it does not
+relax it.

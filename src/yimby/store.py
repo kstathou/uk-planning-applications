@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import sqlite3
 from contextlib import closing
@@ -1081,6 +1082,22 @@ class SqliteStore:
             )
             if not (self.evidence_root / row["path"]).exists()
         )
+
+    def invalid_evidence_paths(self) -> tuple[str, ...]:
+        """Return missing, unreadable, or digest-mismatched evidence paths."""
+        invalid: list[str] = []
+        for row in self._connection.execute(
+            "SELECT digest, path FROM evidence ORDER BY path"
+        ):
+            candidate = self.evidence_root / row["path"]
+            try:
+                body = gzip.decompress(candidate.read_bytes())
+            except (EOFError, OSError):
+                invalid.append(row["path"])
+                continue
+            if sha256(body).hexdigest() != row["digest"]:
+                invalid.append(row["path"])
+        return tuple(invalid)
 
     def migration_versions(self) -> tuple[int, ...]:
         """Return applied migration versions in order."""

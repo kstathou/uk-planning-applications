@@ -24,7 +24,7 @@ requirement.
 |---|---|---|---|---|---|
 | Barnet | Verified | Weekly, detail, and child routes recorded; older-open result cap recorded | Bounded weekly adapter; smoke reached paged discovery before HTTP 429 | Open | Open |
 | Camden | Verified | Detail and 16-row document index recorded; comments open | Exact-reference JSF, Northgate detail, and document-index adapter; bounded discovery explicitly unavailable | Open | Open |
-| Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
+| Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | `BROWSER_ONLY`; rolling seven-day path implemented, complete collection blocked by the missing deterministic legacy-PKID to HGY/Salesforce crosswalk | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
 | Peak District National Park Authority | Verified | Migrated discovery and detail routes recorded; child sections partial | Rolling-week legacy adapter; client-loaded child sections explicitly failed | Open | Open |
 | Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
@@ -110,3 +110,14 @@ the structured failed checks `bounded-30-day-discovery` and
 created neither a final nor temporary receipt. This gives the blocker a
 repeatable operational test without converting partial discovery evidence into
 bootstrap or weekly-cycle credit.
+
+The qualifier was subsequently tightened to accept only the exact inclusive
+30-day scope, require the exact durable weekly and three-map query inventory,
+and require an official evidenced resolution for every legacy-current PKID.
+The trusted older-open completion bit and injectable synthetic success package
+were removed. Retained evidence is now decompressed and checked against its
+content digest, receipt staging uses an exclusive random temporary file, and
+the typed receipt records both pending genuinely later refresh obligations.
+The remediated production run remained fail-closed with the same two source
+errors and no receipt. Sanitized evidence is tracked in
+`docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`.

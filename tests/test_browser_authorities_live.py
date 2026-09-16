@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, E501, PLR0913, PLR0917, PLR2004, SLF001
+# ruff: noqa: ANN401, D103, E501, PLR2004, SLF001
 
 """Live boundaries for Cheshire East and Haringey's browser register."""
 
@@ -563,9 +563,12 @@ def test_haringey_receipt_schema_and_atomic_writer_resist_predictable_symlink(
 
     assert victim.read_text(encoding="utf-8") == "preserve"
     assert predictable.is_symlink()
-    assert json.loads(receipt_path.read_text(encoding="utf-8"))[
-        "weekly_refresh_obligations"
-    ] == obligations
+    assert (
+        json.loads(receipt_path.read_text(encoding="utf-8"))[
+            "weekly_refresh_obligations"
+        ]
+        == obligations
+    )
     assert tuple(tmp_path.glob(".haringey-qualification-v1.json.*.tmp")) == ()
 
 

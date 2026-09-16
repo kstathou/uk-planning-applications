@@ -11,17 +11,16 @@ import json
 import os
 import sys
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Literal
 
 from pydantic import Field
 
-from yimby.adapters import AuthorityPackage
 from yimby.authorities.haringey import HARINGEY_PACKAGE
 from yimby.authorities.haringey.adapter import (
     HaringeyApplicationPagesV1,
-    HaringeyApplicationV1,
     HaringeyCheckpointV1,
     HaringeyLocatorV1,
     HaringeyOlderOpenUnavailableError,
@@ -51,12 +50,17 @@ _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
 _INVALID_WINDOW = "invalid-window"
+_EXACT_WINDOW_REQUIRED = "30-day-window-required"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
+_MAP_QUERY_INVENTORY = (
+    "map|mapsources/AllMaps|planning_current_apps",
+    "map|mapsources/WebTeam|curr_planning_apps_solo",
+    "map|mapsources/WebTeam|decided_planning_apps_solo",
+)
 
 SessionFactory = Callable[[], Awaitable[PortalSession]]
 Clock = Callable[[], datetime]
-Package = AuthorityPackage[HaringeyApplicationV1, HaringeyCheckpointV1]
 
 
 class QualificationScope(FrozenModel):
@@ -103,6 +107,16 @@ class QualificationCheck(FrozenModel):
     ok: bool
 
 
+class WeeklyRefreshObligationV1(FrozenModel):
+    """One genuinely later run still required after bootstrap."""
+
+    ordinal: Literal[1, 2]
+    minimum_days_after_bootstrap: Literal[7, 14]
+    due_at: datetime
+    status: Literal["pending"] = "pending"
+    requires_genuinely_later_run: Literal[True] = True
+
+
 class HaringeyQualificationReceiptV1(FrozenModel):
     """Versioned result of a complete local live qualification."""
 
@@ -114,6 +128,10 @@ class HaringeyQualificationReceiptV1(FrozenModel):
     costs: QualificationCosts
     run_statuses: tuple[RunStatus, ...]
     checks: tuple[QualificationCheck, ...]
+    weekly_refresh_obligations: tuple[
+        WeeklyRefreshObligationV1,
+        WeeklyRefreshObligationV1,
+    ]
 
 
 class _Config(FrozenModel):
@@ -220,6 +238,8 @@ def _config(argv: Sequence[str]) -> _Config:
         raise QualificationConfigError(_INVALID_DATE) from error
     if start > end:
         raise QualificationConfigError(_INVALID_WINDOW)
+    if end - start != timedelta(days=29):
+        raise QualificationConfigError(_EXACT_WINDOW_REQUIRED)
     data_dir = Path(arguments.data_dir).expanduser()
     if data_dir.exists() and not data_dir.is_dir():
         raise QualificationConfigError(_DATA_DIR_NOT_DIRECTORY)
@@ -283,7 +303,6 @@ def _terminal_checkpoint(store: SqliteStore, scope: QualificationScope) -> bool:
         and checkpoint.window_start == scope.start
         and checkpoint.window_end == scope.end
         and checkpoint.quick_link_complete
-        and (not scope.include_open or checkpoint.older_open_complete)
         and checkpoint.reported_page_count is not None
         and checkpoint.reported_result_count is not None
         and checkpoint.next_page == checkpoint.reported_page_count + 1
@@ -291,6 +310,44 @@ def _terminal_checkpoint(store: SqliteStore, scope: QualificationScope) -> bool:
         and bool(durable)
         and len(seen) == len(set(seen))
         and set(seen) == set(durable)
+        and _checkpoint_inventory_complete(checkpoint, scope, durable)
+    )
+
+
+def _expected_query_inventory(scope: QualificationScope) -> tuple[str, ...]:
+    weekly: list[str] = []
+    query_start = scope.start
+    while query_start <= scope.end:
+        query_end = min(query_start + timedelta(days=7), scope.end)
+        weekly.append(f"weekly|{query_start.isoformat()}|{query_end.isoformat()}")
+        query_start += timedelta(days=7)
+    return (*weekly, *_MAP_QUERY_INVENTORY)
+
+
+def _checkpoint_inventory_complete(
+    checkpoint: HaringeyCheckpointV1,
+    scope: QualificationScope,
+    durable_references: tuple[str, ...],
+) -> bool:
+    completed = checkpoint.completed_queries
+    query_keys = tuple(query.key for query in completed)
+    legacy_pkids = checkpoint.legacy_current_pkids
+    resolutions = checkpoint.legacy_resolutions
+    resolved_pkids = tuple(resolution.pkid for resolution in resolutions)
+    durable = set(durable_references)
+    return (
+        query_keys == _expected_query_inventory(scope)
+        and len(query_keys) == len(set(query_keys))
+        and all(
+            query.advertised_count == query.observed_count == query.unique_count
+            for query in completed
+        )
+        and bool(legacy_pkids)
+        and len(legacy_pkids) == len(set(legacy_pkids))
+        and not checkpoint.ambiguous_legacy_pkids
+        and len(resolved_pkids) == len(set(resolved_pkids))
+        and set(resolved_pkids) == set(legacy_pkids)
+        and all(resolution.public_reference in durable for resolution in resolutions)
     )
 
 
@@ -322,8 +379,8 @@ def _base_checks(
             ok=store.database_integrity() == "ok",
         ),
         QualificationCheck(
-            name="evidence-paths",
-            ok=not store.missing_evidence_paths(),
+            name="evidence-integrity",
+            ok=not store.invalid_evidence_paths(),
         ),
         QualificationCheck(
             name="application-count",
@@ -350,9 +407,8 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-    package: Package,
 ) -> HaringeyQualificationReceiptV1:
-    collector = Collector(AuthorityRegistry((package,)), store)
+    collector = Collector(AuthorityRegistry((HARINGEY_PACKAGE,)), store)
     window = DiscoveryWindow(
         start=config.scope.start,
         end=config.scope.end,
@@ -383,24 +439,56 @@ async def _qualify(
         ),
     )
     _require(final_checks)
+    created_at = now()
     return HaringeyQualificationReceiptV1(
-        created_at=now(),
+        created_at=created_at,
         scope=config.scope,
         counts=_counts(final_snapshot),
         costs=QualificationCosts(initial=initial, rerun=rerun),
         run_statuses=run_statuses,
         checks=final_checks,
+        weekly_refresh_obligations=_pending_weekly_obligations(created_at),
+    )
+
+
+def _pending_weekly_obligations(
+    bootstrap_at: datetime,
+) -> tuple[WeeklyRefreshObligationV1, WeeklyRefreshObligationV1]:
+    return (
+        WeeklyRefreshObligationV1(
+            ordinal=1,
+            minimum_days_after_bootstrap=7,
+            due_at=bootstrap_at + timedelta(days=7),
+        ),
+        WeeklyRefreshObligationV1(
+            ordinal=2,
+            minimum_days_after_bootstrap=14,
+            due_at=bootstrap_at + timedelta(days=14),
+        ),
     )
 
 
 def _write_receipt(path: Path, receipt: HaringeyQualificationReceiptV1) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
-    with temporary.open("w", encoding="utf-8") as output:
-        output.write(payload)
-        output.flush()
-        os.fsync(output.fileno())
-    temporary.replace(path)
+    temporary_path: Path | None = None
+    try:
+        with NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as output:
+            temporary_path = Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary_path.replace(path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     directory = os.open(path.parent, os.O_RDONLY)
     try:
         os.fsync(directory)
@@ -426,7 +514,6 @@ def main(
     *,
     session_factory: SessionFactory = _default_session,
     now: Clock = _default_clock,
-    package: Package = HARINGEY_PACKAGE,
 ) -> int:
     """Run explicit live qualification and emit its atomic receipt."""
     try:
@@ -440,9 +527,7 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                receipt = asyncio.run(
-                    _qualify(store, config, session_factory, now, package)
-                )
+                receipt = asyncio.run(_qualify(store, config, session_factory, now))
                 _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
             finally:
                 store.close()

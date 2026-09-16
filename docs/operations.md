@@ -130,7 +130,8 @@ does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
 Haringey's full qualification boundary is separately available and remains
-fail-closed while arbitrary windows and older-open enumeration are unsupported:
+fail-closed while the exact 30-day window and complete older-open collection
+are unsupported:
 
 ```sh
 uv run python scripts/qualify_haringey.py \
@@ -138,10 +139,14 @@ uv run python scripts/qualify_haringey.py \
   --start 2026-08-18 --end 2026-09-16 --include-open --resume
 ```
 
-The command persists the failed run for audit but writes no qualification
-receipt unless every completeness, integrity, count, attachment-policy, and
-idempotence check passes. Reusing any non-empty data directory requires
-`--resume`.
+The command accepts only exactly 30 inclusive days, persists the failed run for
+audit, and writes no qualification receipt unless the complete durable weekly
+and map query inventory, official zero-ambiguity PKID crosswalk, count and
+section checks, decompressed evidence digests, attachment policy, and
+idempotence checks pass. The typed receipt carries pending genuinely later
+refresh obligations at +7 and +14 days. Receipt staging uses an exclusive
+random filename before atomic replacement. Reusing any non-empty data
+directory requires `--resume`.
 
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a

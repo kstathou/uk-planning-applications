@@ -1,0 +1,368 @@
+{
+  "schema_version": 1,
+  "artifact_type": "qualification-blocker",
+  "authority_id": "haringey",
+  "observed_at": "2026-09-16T09:15:29Z",
+  "scope": {
+    "start": "2026-08-18",
+    "end": "2026-09-16",
+    "include_open": true
+  },
+  "status": "blocked",
+  "live_ready": false,
+  "qualification_receipt": null,
+  "official_portal_observations": [
+    {
+      "url": "https://londonboroughofharingey.my.site.com/pr/s/",
+      "title": "Widget",
+      "visible_text": "Looks like the site is temporarily unavailable\n\n\n\n\nPlease try again in a bit."
+    },
+    {
+      "url": "https://londonboroughofharingey.my.site.com/pr/s/detail/a0iP200000J0F49IAF?c__r=Arcus_BE_Public_Register",
+      "title": "Widget",
+      "visible_text": "Looks like the site is temporarily unavailable\n\n\n\n\nPlease try again in a bit."
+    }
+  ],
+  "earlier_register_observation": {
+    "observed_at": "2026-09-16T08:42:44Z",
+    "visible_text": "Something went wrong\nThe system was unable to load any registers.",
+    "console_source": "https://londonboroughofharingey.my.site.com/pr/s/sfsites/auraFW/javascript/WUdfaXlIZDNDQ0lZLWNFZDMtVGZ3d2tVMjdnTGFERUU2S3FfSVdrcU92bkExNC4xOTIuODM4ODYwOA/aura_prod.js"
+  },
+  "recovered_portal_observations": {
+    "register_controls": {
+      "quick_links": [
+        "Planning Applications Validated in last 7 days",
+        "Planning Major Applications"
+      ],
+      "weekly_lists": [
+        "User Defined Weekly List"
+      ],
+      "open_application_route": null
+    },
+    "user_defined_weekly_list": {
+      "search_term": "2026-08-18",
+      "visible_help": "Including records for 7 days from the chosen date",
+      "reported_result_count": 61,
+      "reported_page_count": 7,
+      "first_page_date_valid": "2026-08-25",
+      "last_page_date_valid": "2026-08-18",
+      "interval_semantics": "inclusive start through start plus seven days"
+    },
+    "advanced_search": {
+      "criteria": [
+        "Application Reference",
+        "Site Address",
+        "Postcode",
+        "Proposal",
+        "Application Type",
+        "Ward Name",
+        "Date Valid From",
+        "Date Valid To",
+        "Decision Date From",
+        "Decision Date To",
+        "Planning Portal No."
+      ],
+      "application_status_criterion": false,
+      "broad_search_reported_more_than_limit": true,
+      "visible_result_limit": 250,
+      "visible_page_limit": 25
+    },
+    "current_map_layer": {
+      "official_page_url": "https://haringey.gov.uk/planning-building-control/planning/planning-applications/current-planning-applications/map-current-planning-applications",
+      "official_page_claim": "all current planning applications in Haringey",
+      "layer": "planning_current_apps",
+      "map_source": "mapsources/AllMaps",
+      "wfs_url": "https://my.haringey.gov.uk/GetOWS.ashx",
+      "feature_info_url": "https://my.haringey.gov.uk/MapGetImage.aspx",
+      "whole_borough_bounds": {
+        "minimum_easting": 522831,
+        "minimum_northing": 182787,
+        "maximum_easting": 539720,
+        "maximum_northing": 195900
+      },
+      "wfs_advertised_feature_count": 1445,
+      "shape_feature_count": 1445,
+      "unique_application_link_count": 1445,
+      "shape_response_bytes": 1781204,
+      "shape_response_sha256": "943f5fea06a34112a5b813e3392b3b3df77722ed6089ab562442a8428ade2d7d",
+      "response_format_issue": "The response is labelled GeoJSON but contains an unescaped quotation mark in at least one proposal and is not valid JSON.",
+      "counterexample": {
+        "feature_id": 1,
+        "salesforce_record_id": "a0i8d000005eGQMAA2",
+        "public_reference": "HGY/2023/2916",
+        "status": "Decision Made",
+        "decision_date": "2023-11-28",
+        "decision": "No Objection"
+      },
+      "conclusion": "The requests prove complete enumeration of the named map layer, but the decided counterexample proves that the layer is not an exact open-case inventory. The later legacy-layer follow-up establishes a credible cross-era discovery union, but not a collectable identity boundary."
+    },
+    "legacy_current_map_layer": {
+      "observed_at": "2026-09-16T09:51:50Z",
+      "official_lite_map_url": "https://my.haringey.gov.uk/custom/haringeyLiteMap.html?layer=curr_planning_apps_solo&easting=531722&northing=189602&zoom=5000&mapsource=mapsources/WebTeam&addsearch=true",
+      "layer": "curr_planning_apps_solo",
+      "separate_decided_layer": "decided_planning_apps_solo",
+      "map_source": "mapsources/WebTeam",
+      "whole_borough_bounds": {
+        "minimum_easting": 522831,
+        "minimum_northing": 182787,
+        "maximum_easting": 539720,
+        "maximum_northing": 195900
+      },
+      "wfs_advertised_feature_count": 826,
+      "shape_feature_count": 826,
+      "unique_pkid_count": 826,
+      "shape_response_bytes": 905495,
+      "shape_response_sha256": "674aa270bdee2ed262be44d5933c962395a1cc912319559e53042450aee752b3",
+      "published_fields": [
+        "address",
+        "proposal",
+        "legacy detail link containing PKID"
+      ],
+      "legacy_detail_host": "www.planningservices.haringey.gov.uk",
+      "legacy_detail_host_state": "does not resolve",
+      "current_register_pkid_probe": {
+        "search_term": "19085",
+        "result": "No results found"
+      },
+      "arcus_public_payload_probe": {
+        "salesforce_record_id": "a0i8d000002GPH8AAO",
+        "public_reference": "HGY/2022/2811",
+        "legacy_pkid_present": false,
+        "published_external_id_field": "arcusbuiltenv__External_Id__c",
+        "rendered_external_id_label": "Planning Portal Reference",
+        "service_external_id_label": "External Record Reference",
+        "published_external_id_value": "",
+        "full_layout_fields": [
+          "CreatedBy.Id",
+          "CreatedBy.Name",
+          "CreatedById",
+          "CreatedDate",
+          "Id",
+          "LastModifiedBy.Id",
+          "LastModifiedBy.Name",
+          "LastModifiedById",
+          "LastModifiedDate",
+          "Name",
+          "Owner.Id",
+          "Owner.Name",
+          "OwnerId",
+          "RecordTypeId",
+          "SystemModstamp"
+        ],
+        "full_layout_custom_field_count": 0,
+        "guest_object_info_http_status": 403
+      },
+      "stale_snapshot_examples": [
+        {
+          "pkid": "19085",
+          "map_address": "70 Tetherdown",
+          "map_proposal": "Erection of sattelite dish on front of property.",
+          "content_matched_public_reference": "HGY/1999/0250",
+          "content_matched_salesforce_record_id": "a0i8d000002Flr2AAC",
+          "status": "Decision Made",
+          "decision_date": "2023-01-09",
+          "decision": "Disposed"
+        },
+        {
+          "pkid": "442757",
+          "map_address": "59 Creighton Road",
+          "map_proposal": "Erection of single storey extension which extends beyond the rear wall of the original house by 6m, for which the maximum height would be 3.7m and for which the height of the eaves would be 2.9m",
+          "content_matched_public_reference": "HGY/2022/2811",
+          "content_matched_salesforce_record_id": "a0i8d000002GPH8AAO",
+          "status": "Decision Made",
+          "decision_date": "2022-12-05",
+          "decision": "Refuse"
+        }
+      ],
+      "identity_rule": "Address and proposal content matches are diagnostic only and are not accepted as a PKID-to-HGY/Salesforce identity crosswalk.",
+      "conclusion": "The separately named current layers form a credible cross-era discovery boundary, but all 826 legacy PKIDs remain unresolved as official application identities. Complete collection is not verified."
+    },
+    "legacy_decided_map_layer": {
+      "observed_at": "2026-09-16T10:26:57Z",
+      "layer": "decided_planning_apps_solo",
+      "map_source": "mapsources/WebTeam",
+      "collection_method": "Sixteen row-major 4-by-4 whole-borough shape tiles with at least 2.1 seconds between requests to the host.",
+      "wfs_advertised_feature_count": 13974,
+      "tile_pair_counts": [
+        0,
+        0,
+        0,
+        0,
+        18,
+        3528,
+        3229,
+        0,
+        0,
+        3267,
+        3932,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "unique_pkid_count": 13974,
+      "unique_pkid_reference_pair_count": 13974,
+      "ambiguous_pkid_count": 0,
+      "legacy_current_overlap_pkid_count": 0,
+      "unmapped_legacy_current_pkid_count": 826,
+      "response_bytes": 13023218,
+      "framed_response_sha256": "b4d7d2461397c9c1d119747cda731a4bc4fe0a9cba56a890c82f94ab41d9882a",
+      "digest_framing": "For each tile in row-major order, the ASCII row:column:response-byte-count plus newline was hashed immediately before the raw response body.",
+      "conclusion": "The decided layer is a complete unambiguous PKID-to-HGY mapping for its advertised population, but its zero intersection with the 826 legacy-current PKIDs means it supplies none of the required cutover identity crosswalk."
+    }
+  },
+  "live_smoke": {
+    "command": "uv run python scripts/smoke_haringey.py --confirm-live",
+    "ok": true,
+    "reported_results": 61,
+    "reported_pages": 7,
+    "visible_references": 10,
+    "requests": 1,
+    "transferred_bytes": 119220,
+    "attachment_body_requests": 0,
+    "scope": "implemented rolling seven-day quick link only"
+  },
+  "qualification_tool": {
+    "observed_at": "2026-09-16T12:13:37Z",
+    "command": "uv run python scripts/qualify_haringey.py --confirm-live --data-dir .yimby/qualification-haringey-2026-09-16 --start 2026-08-18 --end 2026-09-16 --include-open --resume",
+    "exit_status": 1,
+    "error": "qualification-failed",
+    "failed_checks": [
+      "bounded-30-day-discovery",
+      "complete-older-open-inventory"
+    ],
+    "source_error": "HaringeyWindowUnavailableError",
+    "durable_run_statuses": [
+      "failed",
+      "failed"
+    ],
+    "browser_launched": false,
+    "qualification_receipt": null,
+    "temporary_receipt": null
+  },
+  "receipt_contract": {
+    "schema_version": 1,
+    "exact_inclusive_window_days": 30,
+    "required_query_inventory": [
+      "weekly|2026-08-18|2026-08-25",
+      "weekly|2026-08-25|2026-09-01",
+      "weekly|2026-09-01|2026-09-08",
+      "weekly|2026-09-08|2026-09-15",
+      "weekly|2026-09-15|2026-09-16",
+      "map|mapsources/AllMaps|planning_current_apps",
+      "map|mapsources/WebTeam|curr_planning_apps_solo",
+      "map|mapsources/WebTeam|decided_planning_apps_solo"
+    ],
+    "query_completion_requires": "advertised, observed, and unique counts must agree for every exact query",
+    "legacy_identity_requires": "every legacy-current PKID must have an official HGY reference, Salesforce record ID, and retained evidence digest, with no unresolved or ambiguous PKIDs",
+    "current_legacy_identity_state": {
+      "legacy_current_pkids": 826,
+      "officially_resolved_pkids": 0,
+      "unresolved_pkids": 826
+    },
+    "evidence_validation": "every retained gzip body must exist, decompress, and match its database content digest",
+    "receipt_write": "exclusive randomized temporary file, file fsync, atomic replace, and directory fsync",
+    "weekly_refresh_obligations": [
+      {
+        "ordinal": 1,
+        "minimum_days_after_bootstrap": 7,
+        "status": "pending",
+        "requires_genuinely_later_run": true
+      },
+      {
+        "ordinal": 2,
+        "minimum_days_after_bootstrap": 14,
+        "status": "pending",
+        "requires_genuinely_later_run": true
+      }
+    ]
+  },
+  "required_checks": [
+    {
+      "name": "user-defined-weekly-contract",
+      "state": "proved"
+    },
+    {
+      "name": "bounded-30-day-discovery",
+      "state": "failed",
+      "reason": "The production qualifier rejected the requested 2026-08-18 through 2026-09-16 interval with HaringeyWindowUnavailableError before opening a browser."
+    },
+    {
+      "name": "complete-older-open-inventory",
+      "state": "failed",
+      "reason": "The implemented live adapter supports only the rolling seven-day quick link and cannot certify the requested older-open inventory."
+    },
+    {
+      "name": "current-map-layer-count-reconciliation",
+      "state": "proved"
+    },
+    {
+      "name": "legacy-current-map-layer-count-reconciliation",
+      "state": "proved"
+    },
+    {
+      "name": "legacy-decided-map-layer-count-reconciliation",
+      "state": "proved"
+    },
+    {
+      "name": "legacy-current-decided-pkid-overlap",
+      "state": "failed",
+      "reason": "All 13,974 decided-layer PKIDs were paired unambiguously with HGY references, but their intersection with the 826 legacy-current PKIDs was empty."
+    },
+    {
+      "name": "legacy-pkid-identity-crosswalk",
+      "state": "failed",
+      "reason": "The official legacy links are dead, the current map publishes no HGY reference, the complete decided map has zero PKID overlap, PKID is not searchable in Arcus, and neither the FULL guest layout nor the configured public detail payload exposes a legacy identifier."
+    },
+    {
+      "name": "terminal-checkpoint-coherence",
+      "state": "not-run"
+    },
+    {
+      "name": "durable-reference-application-agreement",
+      "state": "not-run"
+    },
+    {
+      "name": "pending-retries",
+      "state": "not-run"
+    },
+    {
+      "name": "failed-current-sections",
+      "state": "not-run"
+    },
+    {
+      "name": "sqlite-and-evidence-integrity",
+      "state": "not-run"
+    },
+    {
+      "name": "unmapped-records",
+      "state": "not-run"
+    },
+    {
+      "name": "zero-attachment-body-requests",
+      "state": "not-run"
+    },
+    {
+      "name": "immediate-zero-network-rerun",
+      "state": "not-run"
+    }
+  ],
+  "weekly_refresh_cycles": [
+    {
+      "ordinal": 1,
+      "minimum_days_after_bootstrap": 7,
+      "status": "pending",
+      "requires_genuinely_later_run": true,
+      "reason": "requires a successful live bootstrap and a genuinely later run"
+    },
+    {
+      "ordinal": 2,
+      "minimum_days_after_bootstrap": 14,
+      "status": "pending",
+      "requires_genuinely_later_run": true,
+      "reason": "requires a successful live bootstrap and a second genuinely later run"
+    }
+  ],
+  "blocker": "The portal recovered and proved an inclusive user-defined weekly interval. Separately named and independently reconcilable legacy and Arcus current-map layers now provide a credible cross-era older-open discovery boundary, even though both are stale supersets. Full collection still cannot be qualified: all 826 legacy features identify applications only by PKID on a council host that no longer resolves; the current map publishes no HGY reference; the independently reconciled 13,974-record decided map has zero PKID overlap; Arcus does not search by PKID; and neither its FULL guest layout nor its configured public detail payload exposes a legacy identifier. Address/proposal matching is not accepted as identity evidence. The 30-day-plus-older-open bootstrap and all dependent qualification checks therefore remain stopped."
+}
