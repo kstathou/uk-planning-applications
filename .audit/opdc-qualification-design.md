@@ -78,3 +78,11 @@ Evidence reads recompute SHA-256 after decompression, qualification requires the
 three exact application URLs, and each completed search checkpoint carries its
 exact identity inventory. The canonical qualification directory was recreated
 from an empty target after these changes.
+
+A second independent review found that this recreated store still registered the
+package-default blocked manifest even though the pilot registry was promoted.
+That otherwise valid dataset remains recoverable as
+`.yimby/qualification-opdc-2026-09-16.invalid-pre-readiness-fix/`. The qualifier
+now registers the promoted pilot status and makes `LIVE_READY` plus HTTP
+transport a named receipt predicate. The canonical directory was again
+recreated from empty so its initial-cost proof and persisted manifest agree.
