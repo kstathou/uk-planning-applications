@@ -1,8 +1,10 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
+# ruff: noqa: D103, PLR2004, SLF001
 
 """Arun live discovery and qualification contracts."""
 
 from datetime import date, timedelta
+from itertools import pairwise
 
 import yimby.authorities.arun.adapter as arun
 
@@ -31,7 +33,7 @@ def test_arun_canonical_query_plan_is_complete_and_non_overlapping() -> None:
     assert open_queries[-1].key == "open-received|2026-09-01|2026-09-16"
     assert all(
         left.end + timedelta(days=1) == right.start
-        for left, right in zip(open_queries, open_queries[1:], strict=True)
+        for left, right in pairwise(open_queries)
     )
 
 

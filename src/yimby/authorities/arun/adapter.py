@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from html import unescape
 from typing import TYPE_CHECKING, Literal, NoReturn
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
@@ -48,6 +48,96 @@ BASE_URL = "https://www1.arun.gov.uk/aplanning/OcellaWeb"
 _SEARCH_URL = f"{BASE_URL}/planningSearch"
 _DATE_FORMATS = ("%d-%m-%y", "%d/%m/%Y", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
+_OPEN_HISTORY_START = date(1948, 1, 1)
+_OPEN_ANNUAL_END = date(2023, 12, 31)
+_DECEMBER = 12
+
+
+class ArunDiscoveryScope(FrozenModel):
+    """Exact inclusive discovery request owning resumable Arun progress."""
+
+    start: date
+    end: date
+    include_open: bool
+
+
+class ArunReceivedQuery(FrozenModel):
+    """Applications received inside the requested first-pass window."""
+
+    kind: Literal["received"] = "received"
+    start: date
+    end: date
+
+    @property
+    def key(self) -> str:
+        """Return the stable checkpoint and receipt identity."""
+        return f"{self.kind}|{self.start.isoformat()}|{self.end.isoformat()}"
+
+
+class ArunDecidedQuery(FrozenModel):
+    """Applications decided inside the requested first-pass window."""
+
+    kind: Literal["decided"] = "decided"
+    start: date
+    end: date
+
+    @property
+    def key(self) -> str:
+        """Return the stable checkpoint and receipt identity."""
+        return f"{self.kind}|{self.start.isoformat()}|{self.end.isoformat()}"
+
+
+class ArunOpenReceivedQuery(FrozenModel):
+    """Undecided applications received inside one complete partition."""
+
+    kind: Literal["open-received"] = "open-received"
+    start: date
+    end: date
+
+    @property
+    def key(self) -> str:
+        """Return the stable checkpoint and receipt identity."""
+        return f"{self.kind}|{self.start.isoformat()}|{self.end.isoformat()}"
+
+
+type ArunQuery = ArunReceivedQuery | ArunDecidedQuery | ArunOpenReceivedQuery
+
+
+def _canonical_query_plan(scope: ArunDiscoveryScope) -> tuple[ArunQuery, ...]:
+    plan: list[ArunQuery] = [
+        ArunReceivedQuery(start=scope.start, end=scope.end),
+        ArunDecidedQuery(start=scope.start, end=scope.end),
+    ]
+    if not scope.include_open:
+        return tuple(plan)
+    plan.append(
+        ArunOpenReceivedQuery(
+            start=_OPEN_HISTORY_START,
+            end=date(1999, 12, 31),
+        )
+    )
+    plan.extend(
+        ArunOpenReceivedQuery(
+            start=date(year, 1, 1),
+            end=date(year, 12, 31),
+        )
+        for year in range(2000, _OPEN_ANNUAL_END.year + 1)
+    )
+    cursor = _OPEN_ANNUAL_END + timedelta(days=1)
+    while cursor <= scope.end:
+        next_month = (
+            date(cursor.year + 1, 1, 1)
+            if cursor.month == _DECEMBER
+            else date(cursor.year, cursor.month + 1, 1)
+        )
+        plan.append(
+            ArunOpenReceivedQuery(
+                start=cursor,
+                end=min(scope.end, next_month - timedelta(days=1)),
+            )
+        )
+        cursor = next_month
+    return tuple(plan)
 
 
 class ArunCheckpointV1(FrozenModel):
