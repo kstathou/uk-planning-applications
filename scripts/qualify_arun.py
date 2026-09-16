@@ -33,20 +33,16 @@ from yimby.authorities.arun.adapter import (
     ArunQuery,
     ArunQueryReplayError,
     ArunReferenceMismatchError,
-    ArunRequestEvidence,
+    ArunRequestContract,
     ArunResultCapError,
     ArunRoutingError,
     ArunSearchForm,
     _canonical_query_plan,
     _initial_search_request,
-    _optional_field,
-    _parse_appeal_fields,
-    _parse_document_index,
-    _parse_labelled_fields,
+    _parse_application_pages,
     _parse_search_form,
     _parse_search_results,
     _request_evidence,
-    _required_field,
     _show_all_request,
 )
 from yimby.collection import Collector
@@ -106,8 +102,8 @@ class QualificationQuery(FrozenModel):
     references: tuple[str, ...]
     initial_evidence_digest: EvidenceDigest
     expanded_evidence_digest: EvidenceDigest | None = None
-    initial_request: ArunRequestEvidence | None = None
-    expanded_request: ArunRequestEvidence | None = None
+    initial_request: ArunRequestContract | None = None
+    expanded_request: ArunRequestContract | None = None
 
 
 class QualificationReferences(FrozenModel):
@@ -222,6 +218,7 @@ class _QualificationState(FrozenModel):
     search_evidence_integrity: bool
     current_sections_complete: bool
     native_evidence_agreement: bool
+    normalised_evidence_agreement: bool
     native_coverage: QualificationNativeCoverage
 
 
@@ -408,13 +405,13 @@ def _validate_query_evidence(  # noqa: PLR0911
     expected_initial_request = _request_evidence(_initial_search_request(form, query))
     if (
         parsed_initial.reported != completed.reported_count
-        or completed.initial_request != expected_initial_request
+        or completed.initial_request not in (None, expected_initial_request)
     ):
         return None
     digests = [completed.initial_evidence]
     parsed_final = parsed_initial
     if completed.expanded_evidence is None:
-        if parsed_initial.has_show_all:
+        if parsed_initial.has_show_all or completed.expanded_request is not None:
             return None
     else:
         if not parsed_initial.has_show_all:
@@ -429,7 +426,12 @@ def _validate_query_evidence(  # noqa: PLR0911
             or parsed_final.has_show_all
             or parsed_final.reported not in (None, parsed_initial.reported)
             or completed.expanded_request
-            != _request_evidence(_show_all_request(parsed_initial.show_all_form, query))
+            not in (
+                None,
+                _request_evidence(
+                    _show_all_request(parsed_initial.show_all_form, query)
+                ),
+            )
         ):
             return None
     final_references = tuple(
@@ -448,8 +450,14 @@ def _validate_query_evidence(  # noqa: PLR0911
             references=final_references,
             initial_evidence_digest=completed.initial_evidence,
             expanded_evidence_digest=completed.expanded_evidence,
-            initial_request=completed.initial_request,
-            expanded_request=completed.expanded_request,
+            initial_request=expected_initial_request,
+            expanded_request=(
+                None
+                if completed.expanded_evidence is None
+                else _request_evidence(
+                    _show_all_request(parsed_initial.show_all_form, query)
+                )
+            ),
         ),
         digests=tuple(digests),
     )
@@ -484,6 +492,7 @@ def _evidence_and_sections(
     bool,
     bool,
     bool,
+    bool,
     QualificationNativeCoverage,
 ]:
     retained = tuple(
@@ -497,6 +506,7 @@ def _evidence_and_sections(
     )
     sections_complete = True
     native_evidence_agreement = True
+    normalised_evidence_agreement = True
     native_rows = []
     for record in retained:
         native = ArunApplicationV1.model_validate_json(record.native_json)
@@ -504,6 +514,9 @@ def _evidence_and_sections(
         current = store.get_application(record.application_id)
         native_evidence_agreement = (
             native_evidence_agreement and _native_evidence_agrees(record, native)
+        )
+        normalised_evidence_agreement = (
+            normalised_evidence_agreement and _normalised_evidence_agrees(store, record)
         )
         sections_complete = sections_complete and (
             record.completeness.application.kind == "complete"
@@ -519,6 +532,7 @@ def _evidence_and_sections(
         integrity,
         sections_complete,
         native_evidence_agreement,
+        normalised_evidence_agreement,
         QualificationNativeCoverage(
             applications=len(native_rows),
             appeal_references=sum(
@@ -541,20 +555,77 @@ def _native_evidence_agrees(
 ) -> bool:
     if len(record.evidence) != _EVIDENCE_PER_APPLICATION:
         return False
-    source_fields = _parse_labelled_fields(record.evidence[0].body)
-    source_appeal = _parse_appeal_fields(record.evidence[0].body)
-    source_documents = _parse_document_index(record.evidence[1].body)
+    try:
+        expected = _parse_application_pages(
+            record.evidence[0].body,
+            record.evidence[1].body,
+            record.reference.reference,
+        )
+    except ArunReferenceMismatchError:
+        return False
+    return native == expected
+
+
+def _normalised_evidence_agrees(
+    store: SqliteStore,
+    record: RetainedNativeRecord,
+) -> bool:
+    expected = ARUN_PACKAGE.rebuild(record)
+    view = store.application_view(record.application_id)
+    metadata = expected.metadata.model_copy(
+        update={
+            "aliases": tuple(sorted(expected.metadata.aliases)),
+            "published_parties": tuple(sorted(expected.metadata.published_parties)),
+            "constraints": tuple(sorted(expected.metadata.constraints)),
+            "conditions": tuple(sorted(expected.metadata.conditions)),
+            "consultations": tuple(sorted(expected.metadata.consultations)),
+            "events": tuple(
+                sorted(
+                    expected.metadata.events,
+                    key=lambda event: (
+                        event.event_at,
+                        event.event_type,
+                        event.details or "",
+                    ),
+                )
+            ),
+            "relationships": tuple(
+                sorted(
+                    expected.metadata.relationships,
+                    key=lambda relationship: (
+                        relationship.relationship_type,
+                        relationship.related_reference,
+                    ),
+                )
+            ),
+        }
+    )
+    application = view.application
     return (
-        native.ocella_reference == record.reference.reference
-        and native.ocella_reference
-        == _required_field(source_fields, "reference", "application reference")
-        and native.application_type
-        == _optional_field(source_fields, "application type")
-        and native.appeal_reference == source_appeal.reference
-        and native.appeal_status == source_appeal.status
-        and native.appeal_lodged_date == source_appeal.lodged_date
-        and native.appeal_decision_date == source_appeal.decision_date
-        and native.documents == source_documents
+        application.id == record.application_id
+        and application.authority_id == expected.authority_id
+        and application.reference == expected.reference.reference
+        and application.proposal == expected.proposal
+        and application.status == expected.status
+        and application.documents
+        == tuple(
+            sorted(
+                expected.documents,
+                key=lambda document: (document.title, str(document.url)),
+            )
+        )
+        and application.comments
+        == tuple(
+            sorted(
+                expected.comments,
+                key=lambda comment: (comment.comment_id, comment.text),
+            )
+        )
+        and application.completeness == expected.completeness
+        and view.metadata == metadata
+        and view.normaliser_version == expected.normaliser_version
+        and view.observed_at == record.observed_at
+        and not view.suppressed
     )
 
 
@@ -600,6 +671,7 @@ def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState
         evidence_integrity,
         current_sections_complete,
         native_evidence_agreement,
+        normalised_evidence_agreement,
         native_coverage,
     ) = _evidence_and_sections(store)
     search_digests = () if terminal is None else terminal.search_digests
@@ -627,6 +699,7 @@ def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState
         search_evidence_integrity=terminal is not None,
         current_sections_complete=current_sections_complete,
         native_evidence_agreement=native_evidence_agreement,
+        normalised_evidence_agreement=normalised_evidence_agreement,
         native_coverage=native_coverage,
     )
 
@@ -682,6 +755,10 @@ def _base_checks(
         QualificationCheck(
             name="native-evidence-agreement",
             ok=state.native_evidence_agreement,
+        ),
+        QualificationCheck(
+            name="normalised-evidence-agreement",
+            ok=state.normalised_evidence_agreement,
         ),
         QualificationCheck(
             name="application-count",

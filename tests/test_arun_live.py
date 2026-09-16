@@ -157,6 +157,21 @@ def _document_index() -> bytes:
     )
 
 
+def _document_filter() -> bytes:
+    return (
+        b'<select name="selectedtype"><option value="" selected>All</option></select>'
+    )
+
+
+def _empty_document_index() -> bytes:
+    return (
+        _document_filter()
+        + b"<strong>Documents</strong><table><tr><td>"
+        + b"There are no documents for this section"
+        + b"</td></tr></table>"
+    )
+
+
 def _headerless_document_index() -> bytes:
     return (
         b"""
@@ -1193,6 +1208,10 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
         retained,
         snapshot.payload.model_copy(update={"ocella_reference": "OTHER/1"}),
     )
+    assert not agrees(
+        retained,
+        snapshot.payload.model_copy(update={"proposal_text": "Different proposal"}),
+    )
 
 
 def test_arun_appeal_block_is_preserved_without_becoming_application_type() -> None:
@@ -1318,11 +1337,7 @@ def test_arun_fetch_accepts_an_application_without_a_parish_label() -> None:
                 b"<tr><th>Parish</th><td>Bognor Regis</td></tr>",
                 b"",
             )
-        return (
-            b"<strong>Documents</strong><table><tr><td>"
-            b"There are no documents for this section"
-            b"</td></tr></table>"
-        )
+        return _empty_document_index()
 
     snapshot = asyncio.run(arun.ArunAdapter().fetch(_Session(responder), reference))
 
@@ -1384,8 +1399,22 @@ def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> Non
                 b'<option value="PLAN" selected>Plan</option>',
             )
         )
+    with pytest.raises(arun.ArunParseError, match="document filter"):
+        arun._parse_document_index(
+            _document_index().replace(_document_filter(), b"", 1)
+        )
+    with pytest.raises(arun.ArunParseError, match="document filter"):
+        arun._parse_document_index(
+            _document_index().replace(
+                _document_filter(),
+                _document_filter() + _document_filter(),
+                1,
+            )
+        )
     with pytest.raises(arun.ArunParseError, match="document table"):
-        arun._parse_document_index(b"No documents found in unrelated help text")
+        arun._parse_document_index(
+            _document_filter() + b"No documents found in unrelated help text"
+        )
 
 
 def test_arun_document_index_accepts_the_official_headerless_table() -> None:
@@ -1398,11 +1427,7 @@ def test_arun_document_index_accepts_the_official_headerless_table() -> None:
 
 
 def test_arun_document_index_accepts_the_official_empty_section() -> None:
-    documents = arun._parse_document_index(
-        b"<strong>Documents</strong><table><tr><td>"
-        b"There are no documents for this section"
-        b"</td></tr></table>"
-    )
+    documents = arun._parse_document_index(_empty_document_index())
 
     assert documents == ()
 
@@ -1410,15 +1435,14 @@ def test_arun_document_index_accepts_the_official_empty_section() -> None:
 def test_arun_document_index_rejects_ambiguous_empty_and_link_shapes() -> None:
     with pytest.raises(arun.ArunParseError, match="document rows"):
         arun._parse_document_index(
-            b"<strong>Documents</strong><table>"
+            _document_filter() + b"<strong>Documents</strong><table>"
             b"<tr><th>Type</th><th>Date</th></tr></table>"
         )
-    official_empty = (
-        b"<strong>Documents</strong><table><tr><td>"
-        b"There are no documents for this section</td></tr></table>"
-    )
+    official_empty = _empty_document_index()
     with pytest.raises(arun.ArunParseError, match="document empty state"):
-        arun._parse_document_index(official_empty + _document_index())
+        arun._parse_document_index(
+            official_empty + _document_index().replace(_document_filter(), b"", 1)
+        )
     ambiguous = _document_index().replace(
         b"Decision</a>",
         (
@@ -1463,6 +1487,17 @@ def test_arun_appeal_block_rejects_ambiguous_or_incomplete_shapes() -> None:
         )
     with pytest.raises(arun.ArunParseError, match="appeal block"):
         arun._parse_appeal_fields(block.replace(b"<th>Type</th>", b"<th>State</th>"))
+
+
+def test_arun_detail_fields_reject_duplicate_normalised_labels() -> None:
+    detail = _detail_with_documents("BR/1/26/PL").replace(
+        b"<tr><th>Status</th><td>Undecided</td></tr>",
+        b"<tr><th>Status</th><td>Undecided</td></tr>"
+        b"<tr><th> status </th><td>Different</td></tr>",
+    )
+
+    with pytest.raises(arun.ArunParseError, match="duplicate labelled detail field"):
+        arun._parse_labelled_fields(detail)
 
 
 @pytest.mark.parametrize(
@@ -1516,12 +1551,15 @@ def test_arun_document_index_rejects_invalid_attachment_links(href: str) -> None
 
 def test_arun_document_index_rejects_incomplete_tables_and_dates() -> None:
     with pytest.raises(arun.ArunParseError, match="document table"):
-        arun._parse_document_index(b"unknown document response")
+        arun._parse_document_index(_document_filter() + b"unknown document response")
     with pytest.raises(arun.ArunParseError, match="document table"):
-        arun._parse_document_index(_document_index() + _document_index())
+        arun._parse_document_index(
+            _document_index() + _document_index().replace(_document_filter(), b"", 1)
+        )
     with pytest.raises(arun.ArunParseError, match="document row"):
         arun._parse_document_index(
-            b"<table><tr><th>Type</th><th>Date</th></tr><tr><td>Only</td></tr></table>"
+            _document_filter() + b"<table><tr><th>Type</th><th>Date</th></tr>"
+            b"<tr><td>Only</td></tr></table>"
         )
     with pytest.raises(arun.ArunParseError, match="document row"):
         arun._parse_document_index(
@@ -1533,7 +1571,7 @@ def test_arun_document_index_rejects_incomplete_tables_and_dates() -> None:
         )
     with pytest.raises(arun.ArunParseError, match="document link"):
         arun._parse_document_index(
-            b"<table><tr><th>Type</th><th>Date</th></tr>"
+            _document_filter() + b"<table><tr><th>Type</th><th>Date</th></tr>"
             b"<tr><td>Type</td><td></td><td></td><td></td><td></td></tr></table>"
         )
     blank_date = arun._parse_document_index(
@@ -1841,6 +1879,122 @@ def test_arun_qualification_rejects_checkpoint_request_tampering(
     error = json.loads(capsys.readouterr().err)
     assert error["error"] == "qualification-failed"
     assert "terminal-checkpoint" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
+
+
+def test_arun_qualification_accepts_legacy_terminal_request_contracts(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "legacy-request-contracts"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    sessions: list[_Session] = []
+
+    def factory() -> _Session:
+        session = _Session(_QualificationResponder())
+        sessions.append(session)
+        return session
+
+    assert module.main(args, session_factory=factory) == 0
+    capsys.readouterr()
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM checkpoints WHERE authority_id = 'arun'"
+            ).fetchone()[0]
+        )
+        for completed in payload["cursor"]["progress"]["completed"]:
+            completed.pop("initial_request")
+            completed.pop("expanded_request")
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'arun'",
+            (json.dumps(payload, separators=(",", ":")),),
+        )
+        connection.commit()
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert all(
+        item["initial_request"] is not None for item in receipt["query_inventory"]
+    )
+    assert sessions[-1].requested_urls == sessions[-2].requested_urls == ()
+
+
+@pytest.mark.parametrize(
+    "tamper_sql",
+    [
+        """
+        UPDATE semantic_versions
+        SET payload_json = json_set(payload_json, '$.proposal', 'tampered')
+        WHERE id = (
+            SELECT current.version_id
+            FROM section_current AS current
+            JOIN applications AS application
+                ON application.id = current.application_id
+            WHERE application.authority_id = 'arun'
+                AND current.section = 'application'
+            ORDER BY application.reference
+            LIMIT 1
+        )
+        """,
+        """
+        INSERT INTO suppression_corrections (
+            application_id,
+            suppressed,
+            reason,
+            corrected_at
+        )
+        SELECT id, 1, 'tampered', '2026-09-16T00:00:00+00:00'
+        FROM applications
+        WHERE authority_id = 'arun'
+        ORDER BY reference
+        LIMIT 1
+        """,
+    ],
+)
+def test_arun_qualification_rejects_normalised_state_tampering(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+    tamper_sql: str,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "normalised-tampering"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    def factory() -> _Session:
+        return _Session(_QualificationResponder())
+
+    assert module.main(args, session_factory=factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(tamper_sql)
+        connection.commit()
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "normalised-evidence-agreement" in error["failed_checks"]
     assert receipt_path.read_text(encoding="utf-8") == original
 
 

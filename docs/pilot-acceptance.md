@@ -44,7 +44,7 @@ As of 16 September 2026, Arun has completed a verified live bootstrap. Its
 schema-version-3 receipt reconciles 648 unique portal references and persisted
 records, including three source-published test/dummy records, plus 73
 search captures, 1,296 application captures, zero pending retries, zero failed
-current sections, zero unmapped records, and a zero-network-I/O immediate
+current sections, zero unmapped records, and a zero-network immediate terminal
 rerun. It remains discovery-only
 because the two later weekly cycles are pending. The Barnet smoke is incomplete
 because the source returned HTTP 429 during pagination; its saved checkpoint

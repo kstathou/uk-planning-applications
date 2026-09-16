@@ -54,12 +54,14 @@ The canonical plan is also the source for checkpoint validation and the receipt
 query inventory. Completed query summaries retain the query key, exact
 reference membership, optional source-reported count, enumerated count, and
 initial and expanded result-evidence digests. They also retain the exact POST
-URL, method, and ordered form fields that produced each capture. Qualification
-reconstructs those requests from the retained search/result forms and rejects
-any checkpoint mismatch, so even a complete result page with no echoed query
-fields remains bound to its canonical query. The final receipt retains the full
-typed inventory and all exact durable reference sets rather than only aggregate
-counts or a digest.
+URL, method, and ordered form fields expected for each capture. Qualification
+reconstructs that contract from the retained search/result forms and rejects a
+stored mismatch. Legacy terminal checkpoints without those additive fields are
+still qualified by replaying retained result evidence and serialising the
+reconstructed contract. These reconstructed fields prove deterministic request
+construction, not which historical transport envelope produced a response. The
+final receipt retains the full typed inventory and all exact durable reference
+sets rather than only aggregate counts or a digest.
 
 ## Portal form boundary
 
@@ -116,9 +118,9 @@ schema-version-3 receipt atomically. The receipt proves:
   integrity, including reparsing every retained result capture against its
   recorded query membership;
 - exact checkpoint/source-count equality, including null source totals, and
-  exact request-to-result binding for every query, plus exact native reference,
-  appeal/application-type, and document agreement with retained detail and
-  document-index evidence;
+  agreement with each reconstructed expected request contract, plus exact
+  agreement between the complete native and normalised persisted models and
+  their retained detail and document-index evidence;
 - complete current application and document sections for every retained record;
 - a successful completed run plus an immediate successful rerun with a
   byte-for-byte semantic fingerprint match; all historical run outcomes and
@@ -132,7 +134,8 @@ it and validate it against retained source evidence.
 
 The exact 648-record portal population includes the source-published test/dummy
 references `DUMMY_P`, `H/1/18/PL`, and `H/5/26/PL`. They remain in the source
-inventory and are labelled as portal records rather than ordinary applications.
+inventory as ordinary unsuppressed stored application rows and are identified
+explicitly as source test/dummy records in the receipt and documentation.
 
 Two weekly refresh targets remain explicitly pending. The registry stays
 `DISCOVERY_ONLY`; a successful bootstrap receipt does not promote Arun to
@@ -142,10 +145,12 @@ Two weekly refresh targets remain explicitly pending. The registry stays
 
 Tests cover canonical plan construction and scope clipping, exact form payloads,
 Show All replay, explicit multi-row completion, count/cap failure,
-mid-query resume, terminal zero-network-I/O behavior, exact same-host routing,
+mid-query resume, terminal zero-transport behavior, exact same-host routing,
 reference identity, document metadata without attachment fetches, receipt set
-agreement, application and search-evidence tampering, pending cycles, atomic
-replacement, and rerun semantic stability.
+agreement, complete native and normalised application evidence, duplicate
+detail labels, exact document-filter ownership, legacy checkpoint qualification,
+search-evidence tampering, pending cycles, atomic replacement, and rerun
+semantic stability.
 
 ## Architecture arena
 

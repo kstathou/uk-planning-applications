@@ -126,8 +126,8 @@ type ArunQuery = Annotated[
 ]
 
 
-class ArunRequestEvidence(FrozenModel):
-    """Exact request metadata binding one result capture to its query."""
+class ArunRequestContract(FrozenModel):
+    """Expected request contract for one query result capture."""
 
     url: HttpUrl
     method: RequestMethod
@@ -188,8 +188,8 @@ class ArunCompletedQuery(FrozenModel):
     references: tuple[str, ...]
     initial_evidence: EvidenceDigest
     expanded_evidence: EvidenceDigest | None = None
-    initial_request: ArunRequestEvidence | None = None
-    expanded_request: ArunRequestEvidence | None = None
+    initial_request: ArunRequestContract | None = None
+    expanded_request: ArunRequestContract | None = None
 
     @model_validator(mode="after")
     def counts_agree(self) -> Self:
@@ -225,7 +225,7 @@ class ArunAwaitingShowAll(FrozenModel):
     reported_count: int = Field(gt=0, lt=_RESULT_CAP)
     initial_references: tuple[str, ...] = Field(min_length=1)
     initial_evidence: EvidenceDigest
-    initial_request: ArunRequestEvidence | None = None
+    initial_request: ArunRequestContract | None = None
     seen_references: tuple[str, ...] = ()
 
 
@@ -652,7 +652,7 @@ class ArunAdapter:
                     expanded.references,
                     (
                         progress.initial_evidence,
-                        cast("ArunRequestEvidence", progress.initial_request),
+                        cast("ArunRequestContract", progress.initial_request),
                     ),
                     (expanded_capture.digest, expanded_request_evidence),
                 ),
@@ -717,7 +717,7 @@ class ArunAdapter:
             payload=payload,
             completeness=Completeness(
                 application=CompleteSection(item_count=1),
-                documents=collection_state(len(documents)),
+                documents=collection_state(len(payload.documents)),
                 comments=UnavailableSection(reason="pdf-only-unavailable"),
             ),
             evidence=(detail,),
@@ -746,36 +746,17 @@ class ArunAdapter:
         detail = await session.fetch(
             PortalRequest(url=HttpUrl(url), intent=RequestIntent.DETAIL)
         )
-        fields = _parse_labelled_fields(detail.body)
-        appeal = _parse_appeal_fields(detail.body)
-        published = _required_field(fields, "reference", "application reference")
-        if published != reference.reference:
-            raise ArunReferenceMismatchError(reference.reference, published)
+        _published_reference(
+            _parse_labelled_fields(detail.body),
+            reference.reference,
+        )
         document_index = await session.fetch(
             _document_request(detail.body, reference.reference)
         )
-        documents = _parse_document_index(document_index.body)
-        payload = ArunApplicationV1(
-            ocella_reference=published,
-            proposal_text=_required_field(fields, "proposal", "description"),
-            decision_status=_required_field(fields, "status"),
-            parish_name=_optional_field(fields, "parish"),
-            documents=documents,
-            site_address=_optional_field(fields, "location", "address"),
-            application_type=_optional_field(fields, "application type"),
-            received_date=_optional_date(fields, "received", "received date"),
-            validated_date=_optional_date(fields, "validated", "validated date"),
-            decision_by_date=_optional_date(fields, "decision by"),
-            comment_by_date=_optional_date(fields, "comment by"),
-            target_committee_date=_optional_date(fields, "target cmte"),
-            decision_date=_optional_date(fields, "decided", "decision date"),
-            case_officer=_optional_field(fields, "case officer"),
-            applicant=_optional_field(fields, "applicant"),
-            agent=_optional_field(fields, "agent"),
-            appeal_reference=appeal.reference,
-            appeal_status=appeal.status,
-            appeal_lodged_date=appeal.lodged_date,
-            appeal_decision_date=appeal.decision_date,
+        payload = _parse_application_pages(
+            detail.body,
+            document_index.body,
+            reference.reference,
         )
         return NativeSnapshot(
             reference=reference,
@@ -783,7 +764,7 @@ class ArunAdapter:
             payload=payload,
             completeness=Completeness(
                 application=CompleteSection(item_count=1),
-                documents=collection_state(len(documents)),
+                documents=collection_state(len(payload.documents)),
                 comments=UnavailableSection(
                     reason="Ocella does not expose a bounded comment text index"
                 ),
@@ -1009,9 +990,9 @@ def _show_all_request(
     )
 
 
-def _request_evidence(request: PortalRequest) -> ArunRequestEvidence:
-    """Retain the exact ordered request that produced result evidence."""
-    return ArunRequestEvidence(
+def _request_evidence(request: PortalRequest) -> ArunRequestContract:
+    """Describe the exact ordered request expected for a query."""
+    return ArunRequestContract(
         url=request.url,
         method=request.method,
         form=request.form,
@@ -1286,14 +1267,16 @@ def _parse_document_index(  # noqa: C901
     soup = BeautifulSoup(body, "html.parser")
     if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
         _raise_parse("document pagination")
-    for selected_type in soup.select('select[name="selectedtype"]'):
-        selected_options = tuple(selected_type.select("option[selected]"))
-        options = tuple(selected_type.select("option"))
-        if len(selected_options) > 1 or not options:
-            _raise_parse("document filter")
-        effective = selected_options[0] if selected_options else options[0]
-        if str(effective.get("value", "")):
-            _raise_parse("document filter")
+    selected_types = tuple(soup.select('select[name="selectedtype"]'))
+    if len(selected_types) != 1:
+        _raise_parse("document filter")
+    selected_options = tuple(selected_types[0].select("option[selected]"))
+    options = tuple(selected_types[0].select("option"))
+    if len(selected_options) > 1 or not options:
+        _raise_parse("document filter")
+    effective = selected_options[0] if selected_options else options[0]
+    if str(effective.get("value", "")):
+        _raise_parse("document filter")
     empty_markers = _document_empty_markers(soup)
     if _is_explicit_empty_document_page(soup, empty_markers):
         return ()
@@ -1411,21 +1394,37 @@ def _parse_document_row(cells: list[Tag]) -> ArunDocumentV1:
 def _parse_labelled_fields(body: bytes) -> dict[str, str]:
     soup = BeautifulSoup(body, "html.parser")
     fields: dict[str, str] = {}
-    for row in soup.select("tr"):
-        cells = row.find_all(["th", "td"], recursive=False)
-        if len(cells) >= _MINIMUM_LABELLED_CELLS:
-            fields[_normalise_label(cells[0].get_text(" ", strip=True))] = cells[
-                -1
-            ].get_text(" ", strip=True)
+    for table in soup.select("table"):
+        rows = tuple(table.find_all("tr", recursive=False))
+        for row in rows:
+            cells = row.find_all(["th", "td"], recursive=False)
+            if len(cells) < _MINIMUM_LABELLED_CELLS:
+                continue
+            label = _normalise_label(cells[0].get_text(" ", strip=True))
+            if label == "appeal":
+                break
+            _store_unique_field(
+                fields,
+                label,
+                cells[-1].get_text(" ", strip=True),
+            )
     for term in soup.select("dt"):
         value = term.find_next_sibling("dd")
         if isinstance(value, Tag):
-            fields[_normalise_label(term.get_text(" ", strip=True))] = value.get_text(
-                " ", strip=True
+            _store_unique_field(
+                fields,
+                _normalise_label(term.get_text(" ", strip=True)),
+                value.get_text(" ", strip=True),
             )
     if not fields:
         _raise_parse("labelled detail fields")
     return fields
+
+
+def _store_unique_field(fields: dict[str, str], label: str, value: str) -> None:
+    if label in fields:
+        _raise_parse("duplicate labelled detail field")
+    fields[label] = value
 
 
 class _ArunAppealFields(FrozenModel):
@@ -1480,6 +1479,46 @@ def _parse_appeal_fields(body: bytes) -> _ArunAppealFields:
         lodged_date=_optional_date_text(values["lodged"]),
         decision_date=_optional_date_text(values["decision"]),
     )
+
+
+def _parse_application_pages(
+    detail_body: bytes,
+    document_body: bytes,
+    expected_reference: str,
+) -> ArunApplicationV1:
+    """Rebuild the complete Arun-native model from its retained source pages."""
+    fields = _parse_labelled_fields(detail_body)
+    appeal = _parse_appeal_fields(detail_body)
+    published = _published_reference(fields, expected_reference)
+    return ArunApplicationV1(
+        ocella_reference=published,
+        proposal_text=_required_field(fields, "proposal", "description"),
+        decision_status=_required_field(fields, "status"),
+        parish_name=_optional_field(fields, "parish"),
+        documents=_parse_document_index(document_body),
+        site_address=_optional_field(fields, "location", "address"),
+        application_type=_optional_field(fields, "application type"),
+        received_date=_optional_date(fields, "received", "received date"),
+        validated_date=_optional_date(fields, "validated", "validated date"),
+        decision_by_date=_optional_date(fields, "decision by"),
+        comment_by_date=_optional_date(fields, "comment by"),
+        target_committee_date=_optional_date(fields, "target cmte"),
+        decision_date=_optional_date(fields, "decided", "decision date"),
+        case_officer=_optional_field(fields, "case officer"),
+        applicant=_optional_field(fields, "applicant"),
+        agent=_optional_field(fields, "agent"),
+        appeal_reference=appeal.reference,
+        appeal_status=appeal.status,
+        appeal_lodged_date=appeal.lodged_date,
+        appeal_decision_date=appeal.decision_date,
+    )
+
+
+def _published_reference(fields: dict[str, str], expected_reference: str) -> str:
+    published = _required_field(fields, "reference", "application reference")
+    if published != expected_reference:
+        raise ArunReferenceMismatchError(expected_reference, published)
+    return published
 
 
 def _fresh(
@@ -1537,8 +1576,8 @@ def _completed_query(
     query: ArunQuery,
     reported_count: int | None,
     references: tuple[SourceReference, ...],
-    initial: tuple[EvidenceDigest, ArunRequestEvidence],
-    expanded: tuple[EvidenceDigest, ArunRequestEvidence] | None,
+    initial: tuple[EvidenceDigest, ArunRequestContract],
+    expanded: tuple[EvidenceDigest, ArunRequestContract] | None,
 ) -> ArunCompletedQuery:
     return ArunCompletedQuery(
         key=query.key,

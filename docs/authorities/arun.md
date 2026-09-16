@@ -47,9 +47,12 @@ count. Each membership link must occur in exactly one validated result-table
 row; matching links outside the table fail closed. All search form and result
 HTML used for the qualification is retained by digest, and the receipt reparses
 it against the exact per-query reference membership and checkpoint count. Each
-digest is also paired with the exact POST URL, method, and ordered form fields;
-qualification reconstructs that request from the retained source forms and
-rejects any mismatch.
+digest is also paired with the POST URL, method, and ordered form fields that
+the retained source forms require for that query. Qualification reconstructs
+this expected request contract and rejects a stored mismatch. Because the
+canonical fields were reconstructed offline, they prove deterministic request
+construction rather than contemporaneous binding to the historical transport
+envelope that returned each response.
 
 ## Application and document records
 
@@ -84,7 +87,8 @@ are disjoint. All 648 portal records were materialised with two evidence
 captures each (detail and document index), for 1,296 verified content digests.
 The source itself includes three explicit test/dummy records (`DUMMY_P`,
 `H/1/18/PL`, and `H/5/26/PL`); they remain in the exact source population and
-are not represented as ordinary real-world applications.
+are ordinary unsuppressed stored application rows, identified explicitly here
+as source test/dummy records.
 
 The completed schema-version-3 qualification accounts for 1,373 official-page
 requests and 11,499,963 transferred bytes across the whole bootstrap history.
@@ -113,10 +117,10 @@ captures with their exact digests. It reparses every result capture, checks its
 exact query membership, and also verifies SQLite
 integrity, evidence paths, terminal checkpoint state, exact reference-set
 equality, current section completeness, the source cap, and the durable
-discovery-only registry status before publication. The 22 checks include exact
-agreement between every reparsed native appeal/application-type field and its
-retained detail evidence, and between native document metadata and the retained
-document index. The immediate terminal rerun made zero requests,
+discovery-only registry status before publication. The 23 checks include exact
+agreement between the complete reparsed native and normalised persisted models
+and their retained detail and document-index evidence. The immediate terminal
+rerun made zero requests,
 transferred zero bytes, requested zero attachment bodies, and produced the same
 durable snapshot and semantic fingerprint. Zero-request successes do not advance
 the source-freshness timestamp; it remains the last source-bearing completion at
@@ -127,8 +131,8 @@ The canonical local receipt is
 the typed full query inventory, the optional source-reported count, exact
 enumerated count and references for every query, exact durable reference sets,
 separate search and application evidence digest inventories, Arun-scoped costs
-and run outcomes, exact request metadata for every result capture, check
-results, and pending weekly-cycle dates. The superseded
+and run outcomes, reconstructed expected request contracts for every result
+capture, check results, and pending weekly-cycle dates. The superseded
 v2 receipt remains beside it for audit history, and the pre-v2 snapshot is preserved at
 `.yimby/qualification-arun-2026-09-16-pre-v2` for diagnosis only.
 
