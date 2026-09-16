@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qsl
 
@@ -34,7 +37,6 @@ from yimby.store import SqliteStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from pathlib import Path
     from types import ModuleType
 
     from yimby.domain import EvidenceCapture
@@ -728,7 +730,11 @@ class _IdoxMock:
             return httpx.Response(200, content=content)
         if path.endswith("/applicationDetails.do"):
             locator = request.url.params["keyVal"]
-            reference = self.case.references[self.case.locators.index(locator)]
+            known = dict(zip(self.case.locators, self.case.references, strict=True)) | {
+                open_locator: open_reference
+                for open_reference, open_locator in _WEST_SUFFOLK_OPEN_REFERENCES
+            }
+            reference = known[locator]
             tab = request.url.params["activeTab"]
             if tab == "summary":
                 if self.case.authority_id == AuthorityId("leeds"):
@@ -803,6 +809,20 @@ def _session(mock: _IdoxMock) -> HttpxPortalSession:
     )
 
 
+class _QualificationSession(HttpxPortalSession):
+    def __init__(self, mock: _IdoxMock) -> None:
+        super().__init__(
+            client=httpx.AsyncClient(transport=httpx.MockTransport(mock)),
+            limiter=HostRateLimiter(0),
+            max_attempts=1,
+        )
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+        await super().aclose()
+
+
 class _PortalRequestSpy(HttpxPortalSession):
     def __init__(self, mock: _IdoxMock) -> None:
         super().__init__(
@@ -819,6 +839,18 @@ class _PortalRequestSpy(HttpxPortalSession):
 
 def _store(root: Path) -> SqliteStore:
     return SqliteStore(root / "yimby.sqlite3", EvidenceStore(root / "evidence"))
+
+
+def _qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_west_suffolk.py"
+    name = "_test_qualify_west_suffolk"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
@@ -2010,3 +2042,179 @@ def test_live_detail_failure_states_and_reference_agreement(case: _Case) -> None
         assert malformed_comments.completeness.comments.kind == "failed"
         nonzero = asyncio.run(fetch(_IdoxMock(case, comments_nonzero=True)))
         assert nonzero.completeness.comments.kind == "unavailable"
+
+
+def test_west_suffolk_qualification_requires_explicit_safe_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject implicit live access, incomplete scope, and unsafe target reuse."""
+    module = _qualification_module()
+    created = 0
+
+    def session_factory() -> _QualificationSession:
+        nonlocal created
+        created += 1
+        return _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+
+    base = [
+        "--data-dir",
+        str(tmp_path / "missing-confirmation"),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(base, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "confirmation-required"
+
+    without_open = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "missing-open"),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+    ]
+    assert module.main(without_open, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "include-open-required"
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "existing").write_text("preserve", encoding="utf-8")
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(occupied),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
+    assert (occupied / "existing").read_text(encoding="utf-8") == "preserve"
+    assert created == 0
+
+
+def test_west_suffolk_qualification_persists_and_proves_idempotence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Qualify through durable collection and a zero-I/O terminal rerun."""
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    result = module.main(
+        args,
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+    )
+
+    assert result == 0
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    assert len(sessions[0].requested_urls) == 39
+    assert sessions[1].requested_urls == ()
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "west-suffolk"
+    assert receipt["created_at"] == "2026-09-16T12:00:00Z"
+    assert receipt["scope"] == {
+        "start": "2026-09-14",
+        "end": "2026-09-20",
+        "include_open": True,
+    }
+    assert receipt["counts"] == {
+        "applications": 12,
+        "discovered_references": 12,
+        "native_versions": 12,
+        "application_versions": 12,
+        "document_versions": 12,
+        "comment_versions": 0,
+        "pending_retries": 0,
+        "failed_sections": 0,
+        "unmapped_records": 0,
+    }
+    assert receipt["costs"]["initial"]["request_count"] == 39
+    assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
+    assert receipt["costs"]["rerun"] == {
+        "request_count": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert {check["name"]: check["ok"] for check in receipt["checks"]} == {
+        "application-count": True,
+        "attachment-policy": True,
+        "database-integrity": True,
+        "evidence-paths": True,
+        "failed-sections": True,
+        "idempotent-rerun": True,
+        "pending-retries": True,
+        "run-statuses": True,
+        "terminal-checkpoint": True,
+        "terminal-rerun-requests": True,
+        "unmapped-records": True,
+    }
+    receipt_path = data_dir / "west-suffolk-qualification-v1.json"
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+    assert not (data_dir / ".west-suffolk-qualification-v1.json.tmp").exists()
+
+
+def test_west_suffolk_qualification_rejects_failed_current_sections(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Refuse a receipt while any current section remains failed."""
+    module = _qualification_module()
+    data_dir = tmp_path / "failed-sections"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(
+            _IdoxMock(_WEST_SUFFOLK_CASE, documents_fail=True)
+        )
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-09-14",
+            "--end",
+            "2026-09-20",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+    )
+
+    assert result == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "failed-sections" in error["failed_checks"]
+    assert len(sessions) == 1
+    assert sessions[0].closed is True
+    assert not (data_dir / "west-suffolk-qualification-v1.json").exists()
