@@ -34,8 +34,10 @@ from yimby.domain import (
     ApplicationId,
     ApplicationLocation,
     ApplicationSearchHit,
+    AuthorityCapabilities,
     AuthorityCollectionStatus,
     AuthorityId,
+    CapabilityState,
     DashboardSnapshot,
     DiscoveryWindow,
     EvidenceCapture,
@@ -142,6 +144,37 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
+    store.close()
+
+
+def test_registry_reregistration_merges_declared_capabilities(tmp_path: Path) -> None:
+    """Explicit declarations refresh while unknowns preserve observed state."""
+    current = pilot_registry().manifest(AuthorityId("blackburn-with-darwen"))
+    unknown = AuthorityCapabilities(
+        discovery=CapabilityState.UNKNOWN,
+        documents=CapabilityState.UNKNOWN,
+        comments=CapabilityState.UNKNOWN,
+        coordinates=CapabilityState.UNKNOWN,
+    )
+    observed = unknown.model_copy(
+        update={"documents": CapabilityState.SUPPORTED}
+    )
+    store = _store(tmp_path)
+    store.register_authorities(
+        (current.model_copy(update={"capabilities": observed}),)
+    )
+    store.register_authorities(
+        (current.model_copy(update={"capabilities": unknown}),)
+    )
+    preserved = store.authority_states()[0].manifest.capabilities
+    assert preserved.documents == CapabilityState.SUPPORTED
+    assert preserved.discovery == CapabilityState.UNKNOWN
+
+    store.register_authorities((current,))
+
+    refreshed = store.authority_states()[0].manifest
+    assert refreshed.capabilities == current.capabilities
+    assert refreshed.live_status == current.live_status
     store.close()
 
 
