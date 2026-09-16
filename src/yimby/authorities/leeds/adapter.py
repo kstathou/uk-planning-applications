@@ -63,7 +63,13 @@ _DATE_TYPES: tuple[Literal["DC_Validated", "DC_Decided"], ...] = (
     "DC_Validated",
     "DC_Decided",
 )
-_DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
+_DATE_FORMATS = (
+    "%d/%m/%Y",
+    "%Y-%m-%d",
+    "%d %B %Y",
+    "%d %b %Y",
+    "%a %d %b %Y",
+)
 _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_CELL_COUNT = 6
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."

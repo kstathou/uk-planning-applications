@@ -345,7 +345,7 @@ def _documents(*, header_only: bool = False, malformed: bool = False) -> bytes:
 
 
 class _LeedsDetailMock:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         reference: str = "26/05177/TR",
