@@ -1,10 +1,11 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, PLR2004
+# ruff: noqa: ANN401, D103, PLR2004, SLF001
 
 """Persisted qualification contract for Blackburn with Darwen."""
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sys
@@ -12,6 +13,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 
 from pydantic import HttpUrl
 
@@ -188,6 +190,23 @@ def _args(data_dir: Path, *, resume: bool = False) -> list[str]:
     if resume:
         args.append("--resume")
     return args
+
+
+def test_blackburn_default_session_reuses_verified_browser_state(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    module = _qualification_module()
+    state_path = tmp_path / "browser-state.json"
+    state_path.touch()
+    session = object()
+    create = AsyncMock(return_value=session)
+    monkeypatch.setattr(module.BlackburnPlaywrightSession, "create", create)
+
+    result = asyncio.run(module._default_session(tmp_path))
+
+    assert result is session
+    create.assert_awaited_once_with(storage_state=state_path)
 
 
 def test_blackburn_qualification_persists_complete_zero_network_receipt(
