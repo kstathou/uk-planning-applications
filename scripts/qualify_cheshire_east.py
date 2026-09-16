@@ -31,7 +31,7 @@ from yimby.transport import (
     SourceUnavailableError,
 )
 
-_RECEIPT_NAME = "cheshire-east-qualification-blocker-v1.json"
+_RECEIPT_NAME = "cheshire-east-qualification-blocker-v2.json"
 _DETAIL_REFERENCE = "26/3335/PRIOR-1A"
 _DETAIL_LOCATOR = "406569"
 _HISTORICAL_WEEK = date(2024, 1, 1)
@@ -140,6 +140,7 @@ class QualificationBlockerV1(FrozenModel):
 
     code: Literal[
         "official-search-form-unavailable",
+        "official-source-contract-drift",
         "recent-window-fidelity-contradicted",
         "weekly-list-terminality-unproven",
         "older-open-inventory-unproven",
@@ -170,10 +171,10 @@ class PendingWeeklyCycleV1(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class CheshireEastQualificationBlockerReceiptV1(FrozenModel):
+class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
     """Versioned artifact whose schema cannot represent qualification success."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     kind: Literal["cheshire-east-qualification-blocker"] = (
         "cheshire-east-qualification-blocker"
     )
@@ -184,6 +185,7 @@ class CheshireEastQualificationBlockerReceiptV1(FrozenModel):
     scope: QualificationScopeV1
     query_inventory: tuple[str, ...]
     pending_query_inventory: tuple[str, ...]
+    attempted_requests: tuple[RecordedQueryV1, ...] = Field(min_length=1)
     source_contract: SourceContractV1 | None
     blockers: tuple[QualificationBlockerV1, ...] = Field(min_length=1)
     checks: tuple[QualificationCheckV1, ...]
@@ -209,6 +211,8 @@ class QualificationEvidenceError(RuntimeError):
 
 class _ProbeResult(FrozenModel):
     source_contract: SourceContractV1 | None
+    blocker: QualificationBlockerV1 | None
+    attempted_requests: tuple[RecordedQueryV1, ...]
     captures: tuple[EvidenceCapture, ...]
     costs: QualificationCostsV1
 
@@ -251,64 +255,91 @@ def _config(argv: Sequence[str]) -> _Config:
 
 async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeResult:
     captures: list[EvidenceCapture] = []
-    search_form_capture = await session.fetch(cheshire.search_form_request())
-    captures.append(search_form_capture)
+    attempted_requests: list[RecordedQueryV1] = []
+
+    async def capture(key: str, request: PortalRequest) -> EvidenceCapture:
+        attempted_requests.append(_recorded_query(key, request))
+        response = await session.fetch(request)
+        captures.append(response)
+        return response
+
+    search_form_capture = await capture(
+        "source-access|search-form",
+        cheshire.search_form_request(),
+    )
     try:
         search_form = cheshire.parse_search_form(search_form_capture.body)
     except (
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
     ):
-        return _ProbeResult(
-            source_contract=None,
-            captures=tuple(captures),
-            costs=QualificationCostsV1(
-                request_count=len(session.requested_urls),
-                transferred_bytes=session.transferred_bytes,
-                attachment_body_requests=session.attachment_body_requests,
+        return _probe_result(
+            session,
+            captures,
+            attempted_requests,
+            blocker=QualificationBlockerV1(
+                code="official-search-form-unavailable",
+                explanation=(
+                    "the official HTTP response did not expose the recorded "
+                    "search form, so no search or detail query was attempted"
+                ),
             ),
         )
-    recent_request = cheshire.valid_date_request(
-        search_form,
-        DiscoveryWindow(
-            start=scope.start,
-            end=scope.end,
-            include_open=scope.include_open,
-        ),
-    )
-    recent_capture = await session.fetch(recent_request)
-    captures.append(recent_capture)
-    recent_boundary = cheshire.parse_search_boundary(recent_capture.body)
+    try:
+        recent_key = f"recent|valid|{scope.start.isoformat()}|{scope.end.isoformat()}"
+        recent_request = cheshire.valid_date_request(
+            search_form,
+            DiscoveryWindow(
+                start=scope.start,
+                end=scope.end,
+                include_open=scope.include_open,
+            ),
+        )
+        recent_capture = await capture(recent_key, recent_request)
+        recent_boundary = cheshire.parse_search_boundary(recent_capture.body)
 
-    weekly_form_capture = await session.fetch(cheshire.weekly_received_form_request())
-    captures.append(weekly_form_capture)
-    weekly_form = cheshire.parse_weekly_form(weekly_form_capture.body)
-    weekly_request = cheshire.weekly_received_request(
-        weekly_form,
-        _HISTORICAL_WEEK,
-    )
-    weekly_capture = await session.fetch(weekly_request)
-    captures.append(weekly_capture)
-    weekly_boundary = cheshire.parse_weekly_boundary(weekly_capture.body)
+        weekly_form_capture = await capture(
+            "source-access|weekly-form",
+            cheshire.weekly_received_form_request(),
+        )
+        weekly_form = cheshire.parse_weekly_form(weekly_form_capture.body)
+        weekly_key = f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}"
+        weekly_request = cheshire.weekly_received_request(
+            weekly_form,
+            _HISTORICAL_WEEK,
+        )
+        weekly_capture = await capture(weekly_key, weekly_request)
+        weekly_boundary = cheshire.parse_weekly_boundary(weekly_capture.body)
 
-    detail_portal_request = cheshire.detail_request(_DETAIL_LOCATOR)
-    detail_capture = await session.fetch(detail_portal_request)
-    captures.append(detail_capture)
-    detail = cheshire.parse_detail_contract(
-        detail_capture.body,
-        expected_reference=_DETAIL_REFERENCE,
-        expected_locator=_DETAIL_LOCATOR,
-    )
+        detail_key = f"detail|{_DETAIL_LOCATOR}"
+        detail_portal_request = cheshire.detail_request(_DETAIL_LOCATOR)
+        detail_capture = await capture(detail_key, detail_portal_request)
+        detail = cheshire.parse_detail_contract(
+            detail_capture.body,
+            expected_reference=_DETAIL_REFERENCE,
+            expected_locator=_DETAIL_LOCATOR,
+        )
+    except (
+        cheshire.CheshireEastFormMethodUnavailableError,
+        cheshire.CheshireEastParseError,
+        cheshire.CheshireEastReferenceMismatchError,
+    ):
+        return _probe_result(
+            session,
+            captures,
+            attempted_requests,
+            blocker=QualificationBlockerV1(
+                code="official-source-contract-drift",
+                explanation=(
+                    "an official response no longer matched the recorded source "
+                    "contract; every completed response was retained"
+                ),
+            ),
+        )
     queries = (
-        _recorded_query(
-            f"recent|valid|{scope.start.isoformat()}|{scope.end.isoformat()}",
-            recent_request,
-        ),
-        _recorded_query(
-            f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}",
-            weekly_request,
-        ),
-        _recorded_query(f"detail|{_DETAIL_LOCATOR}", detail_portal_request),
+        _recorded_query(recent_key, recent_request),
+        _recorded_query(weekly_key, weekly_request),
+        _recorded_query(detail_key, detail_portal_request),
     )
     source_contract = SourceContractV1(
         queries=queries,
@@ -337,8 +368,26 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
             ),
         ),
     )
+    return _probe_result(
+        session,
+        captures,
+        attempted_requests,
+        source_contract=source_contract,
+    )
+
+
+def _probe_result(
+    session: PortalSession,
+    captures: list[EvidenceCapture],
+    attempted_requests: list[RecordedQueryV1],
+    *,
+    source_contract: SourceContractV1 | None = None,
+    blocker: QualificationBlockerV1 | None = None,
+) -> _ProbeResult:
     return _ProbeResult(
         source_contract=source_contract,
+        blocker=blocker,
+        attempted_requests=tuple(attempted_requests),
         captures=tuple(captures),
         costs=QualificationCostsV1(
             request_count=len(session.requested_urls),
@@ -371,6 +420,16 @@ def _recorded_query(key: str, request: PortalRequest) -> RecordedQueryV1:
     )
 
 
+def _planned_query_inventory(scope: QualificationScopeV1) -> tuple[str, ...]:
+    return (
+        "source-access|search-form",
+        f"recent|valid|{scope.start.isoformat()}|{scope.end.isoformat()}",
+        "source-access|weekly-form",
+        f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}",
+        f"detail|{_DETAIL_LOCATOR}",
+    )
+
+
 def _retain_evidence(
     store: EvidenceStore,
     captures: tuple[EvidenceCapture, ...],
@@ -399,31 +458,34 @@ def _receipt(
     probe: _ProbeResult,
     evidence: tuple[RetainedEvidenceV1, ...],
     created_at: datetime,
-) -> CheshireEastQualificationBlockerReceiptV1:
-    pending_queries = (
-        f"recent|valid|{scope.start.isoformat()}|{scope.end.isoformat()}",
-        f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}",
-        f"detail|{_DETAIL_LOCATOR}",
+) -> CheshireEastQualificationBlockerReceiptV2:
+    query_inventory = tuple(request.key for request in probe.attempted_requests)
+    pending_queries = tuple(
+        key for key in _planned_query_inventory(scope) if key not in query_inventory
     )
     if probe.source_contract is None:
-        return CheshireEastQualificationBlockerReceiptV1(
+        if probe.blocker is None:
+            message = "blocked probe requires a typed blocker"
+            raise ValueError(message)
+        return CheshireEastQualificationBlockerReceiptV2(
             created_at=created_at,
             scope=scope,
-            query_inventory=("source-access|search-form",),
+            query_inventory=query_inventory,
             pending_query_inventory=pending_queries,
+            attempted_requests=probe.attempted_requests,
             source_contract=None,
-            blockers=(
-                QualificationBlockerV1(
-                    code="official-search-form-unavailable",
-                    explanation=(
-                        "the official HTTP response did not expose the recorded "
-                        "search form, so no search or detail query was attempted"
+            blockers=(probe.blocker,),
+            checks=(
+                QualificationCheckV1(
+                    name="official-search-form",
+                    status=(
+                        "failed"
+                        if probe.blocker.code == "official-search-form-unavailable"
+                        else "passed"
                     ),
                 ),
-            ),
-            checks=(
-                QualificationCheckV1(name="official-search-form", status="failed"),
-                QualificationCheckV1(name="exact-query-inventory", status="not-run"),
+                QualificationCheckV1(name="source-contract", status="failed"),
+                QualificationCheckV1(name="exact-query-inventory", status="passed"),
                 QualificationCheckV1(name="recent-window-fidelity", status="not-run"),
                 QualificationCheckV1(name="weekly-list-terminality", status="not-run"),
                 QualificationCheckV1(name="older-open-inventory", status="not-run"),
@@ -486,11 +548,12 @@ def _receipt(
             ),
         )
     )
-    return CheshireEastQualificationBlockerReceiptV1(
+    return CheshireEastQualificationBlockerReceiptV2(
         created_at=created_at,
         scope=scope,
-        query_inventory=tuple(query.key for query in probe.source_contract.queries),
+        query_inventory=query_inventory,
         pending_query_inventory=(),
+        attempted_requests=probe.attempted_requests,
         source_contract=probe.source_contract,
         blockers=tuple(blockers),
         checks=(
@@ -521,7 +584,7 @@ def _receipt(
 
 def _write_receipt(
     path: Path,
-    receipt: CheshireEastQualificationBlockerReceiptV1,
+    receipt: CheshireEastQualificationBlockerReceiptV2,
 ) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
@@ -540,11 +603,11 @@ def _write_receipt(
 def _verify_receipt(
     data_dir: Path,
     expected_scope: QualificationScopeV1,
-) -> CheshireEastQualificationBlockerReceiptV1:
+) -> CheshireEastQualificationBlockerReceiptV2:
     receipt_path = data_dir / _RECEIPT_NAME
     if not receipt_path.is_file():
         raise QualificationConfigError(_RECEIPT_REQUIRED)
-    receipt = CheshireEastQualificationBlockerReceiptV1.model_validate_json(
+    receipt = CheshireEastQualificationBlockerReceiptV2.model_validate_json(
         receipt_path.read_text(encoding="utf-8")
     )
     if receipt.scope != expected_scope:

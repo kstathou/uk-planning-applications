@@ -874,7 +874,9 @@ def test_cheshire_contract_drift_retains_a_resumable_blocker(
     )
     assert receipt.source_contract is None
     assert receipt.query_inventory == attempted_keys
-    assert tuple(request.key for request in receipt.attempted_requests) == attempted_keys
+    assert (
+        tuple(request.key for request in receipt.attempted_requests) == attempted_keys
+    )
     assert tuple(blocker.code for blocker in receipt.blockers) == (
         "official-source-contract-drift",
     )
@@ -896,8 +898,11 @@ def test_cheshire_contract_drift_retains_a_resumable_blocker(
         message = "offline resume constructed a portal session"
         raise AssertionError(message)
 
-    assert module.main(
-        [*arguments, "--resume"],
-        session_factory=forbidden_factory,
-        now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
-    ) == 1
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
