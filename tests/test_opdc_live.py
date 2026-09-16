@@ -69,6 +69,7 @@ _NORTHING = 182000
 _DETAIL_EVIDENCE_COUNT = 3
 _CONFIG_ERROR = 2
 _QUALIFICATION_SESSION_COUNT = 2
+_INTERRUPTED_QUALIFICATION_SESSION_COUNT = 3
 _QUALIFICATION_REQUEST_COUNT = 15
 _QUALIFICATION_APPLICATION_COUNT = 4
 _QUALIFICATION_APPLICATION_CAPTURE_SHA256 = (
@@ -1015,6 +1016,91 @@ def test_opdc_qualification_rejects_terminal_store_without_bootstrap_proof(
     }
     assert sessions == []
     assert not (data_dir / "opdc-qualification-v1.json").exists()
+
+
+def test_opdc_qualification_resumes_interrupted_bootstrap_with_cumulative_cost(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed acquisition remains resumable without losing its source cost."""
+    module = _qualification_module()
+    data_dir = tmp_path / "interrupted-bootstrap"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        responses = _qualification_responses()
+        if not sessions:
+            responses[_query_urls()[0]] = SourceUnavailableError("interrupted")
+        session = _OpdcSession(responses)
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert len(sessions) == 1
+    assert sessions[0].requested_urls == (_query_urls()[0],)
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert len(sessions) == _INTERRUPTED_QUALIFICATION_SESSION_COUNT
+    assert receipt["costs"]["initial"] == {
+        "request_count": 16,
+        "transferred_bytes": 4473,
+        "attachment_body_requests": 0,
+    }
+
+
+def test_opdc_qualification_rejects_fabricated_proof_cost(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A private proof cannot claim costs that its durable runs do not record."""
+    module = _qualification_module()
+    data_dir = tmp_path / "fabricated-proof"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    original_public = (data_dir / "opdc-qualification-v1.json").read_text(
+        encoding="utf-8"
+    )
+    capsys.readouterr()
+    proof_path = data_dir / "opdc-qualification-proof-v1.json"
+    proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    proof["costs"]["initial"]["request_count"] = 999
+    proof["costs"]["initial"]["transferred_bytes"] = 999
+    proof_path.write_text(f"{json.dumps(proof, indent=2)}\n", encoding="utf-8")
+    sessions.clear()
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
+    assert sessions == []
+    assert (data_dir / "opdc-qualification-v1.json").read_text(
+        encoding="utf-8"
+    ) == original_public
 
 
 def test_opdc_qualification_rejects_failed_sections_without_a_receipt(
