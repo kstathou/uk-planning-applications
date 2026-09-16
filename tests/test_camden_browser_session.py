@@ -221,12 +221,10 @@ def _route(
     url: str,
     *,
     resource_type: str = "document",
-    navigation: bool = True,
 ) -> MagicMock:
     route = MagicMock()
     route.request.url = url
     route.request.resource_type = resource_type
-    route.request.is_navigation_request.return_value = navigation
     route.abort = AsyncMock()
     route.continue_ = AsyncMock()
     return route
@@ -297,14 +295,11 @@ def test_camden_visible_chrome_launches_routes_submits_and_closes(  # noqa: PLR0
         get_payload = await boundary.request(_request())
         assert get_payload.status == 200
         assert get_payload.media_type == "text/html"
-        assert boundary._cleared  # noqa: SLF001
         page.wait_for_function.assert_awaited_once()
 
-        subresource = _route(
-            "https://planningrecords.camden.gov.uk/script.js", navigation=False
-        )
-        await route_handler(subresource)
-        subresource.abort.assert_awaited_once()
+        challenge_script = _route("https://planningrecords.camden.gov.uk/script.js")
+        await route_handler(challenge_script)
+        challenge_script.continue_.assert_awaited_once()
         navigation = _route("https://planningrecords.camden.gov.uk/result")
         await route_handler(navigation)
         navigation.continue_.assert_awaited_once()
@@ -344,7 +339,6 @@ def test_camden_visible_chrome_handles_plain_and_missing_responses() -> None:
     )
     payload = asyncio.run(boundary.request(_request()))
     assert payload.status == 200
-    assert boundary._cleared  # noqa: SLF001
 
     page.goto.return_value = None
     with pytest.raises(SourceUnavailableError, match="missing browser response"):

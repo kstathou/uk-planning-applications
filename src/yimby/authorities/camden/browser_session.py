@@ -110,7 +110,6 @@ class CamdenVisibleChromeBoundary:
         self._browser = browser
         self._context = context
         self._page = page
-        self._cleared = False
 
     @classmethod
     async def create(cls) -> CamdenVisibleChromeBoundary:
@@ -129,7 +128,6 @@ class CamdenVisibleChromeBoundary:
         should_block = (
             _is_attachment_path(path)
             or request.resource_type in _BLOCKED_RESOURCE_TYPES
-            or (self._cleared and not request.is_navigation_request())
         )
         if should_block:
             await route.abort()
@@ -158,10 +156,7 @@ class CamdenVisibleChromeBoundary:
             )
             await self._page.wait_for_load_state("domcontentloaded")
             status = 200
-            self._cleared = True
         body = (await self._page.content()).encode()
-        if b'id="M3Form"' in body or b"id='M3Form'" in body:
-            self._cleared = True
         return CamdenBrowserPayload(
             status=status,
             final_url=HttpUrl(self._page.url),
