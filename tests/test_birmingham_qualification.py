@@ -175,13 +175,18 @@ def _json_bytes(value: object) -> bytes:
 def _arcgis_bodies() -> tuple[bytes, ...]:
     fields = (
         "OBJECTID",
+        "SHAPE",
         "REFERENCE",
         "application_type_code",
         "TYPE",
+        "Stat_Return_Code",
+        "Sub_Cat",
         "Received",
         "LOCATION",
         "Dev",
         "Date_Accepted",
+        "AGENT",
+        "Decision_Level",
         "APPLICATION_DECISION",
         "Decision_Date",
         "Date_Issued",
@@ -190,6 +195,10 @@ def _arcgis_bodies() -> tuple[bytes, ...]:
         "Officer",
         "PGP_PK",
         "PA_NO",
+        "Number",
+        "TypeOfObj",
+        "SHAPE_Length",
+        "SHAPE_Area",
     )
     metadata = {
         "id": 12,
@@ -265,6 +274,8 @@ def _arcgis_bodies() -> tuple[bytes, ...]:
                         "attributes": {
                             "APPLICATION_DECISION": "Approve",
                             "record_count": 200_000,
+                            "earliest_received": 662_688_000_000,
+                            "latest_received": 1_789_430_400_000,
                         }
                     },
                 ]
@@ -694,7 +705,19 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
 
 @pytest.mark.parametrize(
     "failure",
-    ["recent-total", "layer-schema", "out-of-window", "stale-latest"],
+    [
+        "recent-total",
+        "layer-schema",
+        "unexpected-field",
+        "out-of-window",
+        "stale-latest",
+        "decision-group-date",
+        "unresolved-profile-date",
+        "historical-sample-date",
+        "issued-predicate",
+        "unresolved-predicate",
+        "blank-appeal",
+    ],
 )
 def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
     tmp_path: Path,
@@ -709,13 +732,19 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
         metadata = json.loads(bodies[0])
         metadata["type"] = "Map Layer"
         bodies[0] = _json_bytes(metadata)
+    elif failure == "unexpected-field":
+        metadata = json.loads(bodies[0])
+        metadata["fields"].append(
+            {"name": "CASE_STATUS", "type": "esriFieldTypeString"}
+        )
+        bodies[0] = _json_bytes(metadata)
     elif failure == "out-of-window":
         page = json.loads(bodies[6])
         page["features"][0]["attributes"]["Received"] = int(
             datetime(2026, 8, 17, tzinfo=UTC).timestamp() * 1000
         )
         bodies[6] = _json_bytes(page)
-    else:
+    elif failure == "stale-latest":
         stale = int(datetime(2026, 8, 18, tzinfo=UTC).timestamp() * 1000)
         profile = json.loads(bodies[1])
         profile["features"][0]["attributes"]["latest_received"] = stale
@@ -725,6 +754,31 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
             for feature in page["features"]:
                 feature["attributes"]["Received"] = stale
             bodies[page_index] = _json_bytes(page)
+    elif failure == "decision-group-date":
+        groups = json.loads(bodies[9])
+        groups["features"][0]["attributes"]["earliest_received"] = "corrupt"
+        bodies[9] = _json_bytes(groups)
+    elif failure == "unresolved-profile-date":
+        profile = json.loads(bodies[12])
+        profile["features"][0]["attributes"]["earliest_received"] = "corrupt"
+        bodies[12] = _json_bytes(profile)
+    elif failure == "historical-sample-date":
+        sample = json.loads(bodies[13])
+        sample["features"][0]["attributes"]["Received"] = "corrupt"
+        bodies[13] = _json_bytes(sample)
+    elif failure == "issued-predicate":
+        sample = json.loads(bodies[11])
+        sample["features"][0]["attributes"]["APPLICATION_DECISION"] = "Approve"
+        bodies[11] = _json_bytes(sample)
+    elif failure == "unresolved-predicate":
+        sample = json.loads(bodies[13])
+        sample["features"][0]["attributes"]["Decision_Date"] = 1_300_000_000_000
+        bodies[13] = _json_bytes(sample)
+    else:
+        sample = json.loads(bodies[13])
+        for feature in sample["features"]:
+            feature["attributes"]["APPEAL_DECISION"] = ""
+        bodies[13] = _json_bytes(sample)
     data_dir = tmp_path / failure
     session = _ArcgisSession(bodies)
 
