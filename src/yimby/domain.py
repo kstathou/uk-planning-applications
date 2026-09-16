@@ -430,6 +430,14 @@ class RunMetrics(FrozenModel):
     storage_growth_bytes: int = Field(ge=0)
 
 
+class RunCostSnapshot(FrozenModel):
+    """Durable source cost and state for one collection run."""
+
+    status: RunStatus
+    request_count: int = Field(ge=0)
+    transferred_bytes: int = Field(ge=0)
+
+
 class RunOutcome(FrozenModel):
     """Final state and measurements committed together for one run."""
 

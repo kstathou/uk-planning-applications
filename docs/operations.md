@@ -129,6 +129,41 @@ the rolling seven-day quick link and reports the source-provided totals. It
 does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
+OPDC has a persisted qualification command rather than a discovery-only smoke:
+
+```sh
+uv run python scripts/qualify_opdc.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-opdc-2026-09-16 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+The command derives the inclusive 30-day start date, refuses a non-empty target
+without `--resume`, and rejects a changed scope in an existing qualification
+store before opening a network session. It writes
+`opdc-qualification-proof-v1.json` before it publishes
+`opdc-qualification-v1.json`. The private proof records the cumulative
+bootstrap request and byte cost plus the complete identity inventory. A
+terminal `--resume` validates that cost against the authority's durable run
+rows and checks the proof against the current store. It performs no source
+requests. If public receipt publication fails, the next resume republishes the
+validated proof. A terminal store without a valid private or legacy public
+proof fails with `bootstrap-provenance` instead of recording a zero-cost
+bootstrap.
+
+The command creates the proof only after the exact query inventory, reference
+agreement, complete application evidence, SQLite integrity, zero retry and
+failure counts, evidence digest verification, exact per-application capture URL
+associations, attachment policy, and immediate zero-network rerun all pass.
+Its data directory contains the SQLite store and compressed source evidence.
+The command never requests document bodies. The
+[sanitized committed receipt](evidence/opdc-qualification-2026-09-16.json)
+keeps the aggregate proof reviewable without the ignored local store or its
+55-row public identity inventory. It records 103 distinct content digests, 165
+ordered application-to-capture associations, and SHA-256 commitments to both
+the content-digest set and the exact per-application capture associations.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
@@ -186,4 +221,6 @@ succeeded. The repository does not enable unattended execution.
 
 The pilot is not accepted until every authority has completed live bootstrap
 and two later weekly refreshes, approximately seven and fourteen days after the
-bootstrap. Same-day reruns and simulated dates do not satisfy that requirement.
+bootstrap. OPDC completed its bootstrap on 16 September 2026; its later cycles
+remain pending. Same-day reruns and simulated dates do not satisfy that
+requirement.

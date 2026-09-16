@@ -64,8 +64,10 @@ from yimby.registry import AuthorityRegistry, pilot_registry
 from yimby.store import SqliteStore
 from yimby.transport import (
     AttachmentBodyBlockedError,
+    FixtureResponse,
     FixtureSession,
     PortalRequest,
+    RequestHeader,
     RequestIntent,
     SourceUnavailableError,
 )
@@ -122,7 +124,7 @@ def _live_status(
 
 
 def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
-    """Fixture coverage remains distinct from all four live status values."""
+    """Only receipt-qualified authorities are live-ready; other gaps stay explicit."""
     registry = pilot_registry()
     readiness_by_authority = {
         manifest.id: manifest.live_status.readiness for manifest in registry.manifests()
@@ -134,7 +136,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         AuthorityId("devon"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("peak-district"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("arun"): LiveReadiness.DISCOVERY_ONLY,
-        AuthorityId("opdc"): LiveReadiness.BLOCKED,
+        AuthorityId("opdc"): LiveReadiness.LIVE_READY,
         AuthorityId("dorset"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("cheshire-east"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("blackburn-with-darwen"): LiveReadiness.BLOCKED,
@@ -150,11 +152,22 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         evidence=("docs/evidence/west-suffolk-qualification-2026-09-16.json",),
         transport=LiveTransportKind.HTTP,
     )
+    assert registry.manifest(AuthorityId("opdc")).live_status == LiveStatus(
+        readiness=LiveReadiness.LIVE_READY,
+        reason="official Agile API bootstrap and immediate idempotent rerun qualified",
+        evidence=(
+            (
+                "docs/evidence/opdc-qualification-2026-09-16.json records "
+                "55 complete applications"
+            ),
+        ),
+        transport=LiveTransportKind.HTTP,
+    )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
     assert snapshot.coverage_implemented == 15
-    assert snapshot.live_ready == 1
+    assert snapshot.live_ready == 2
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
@@ -248,6 +261,51 @@ def test_http_session_cookies_accounting_and_secret_redaction() -> None:
     assert session.attachment_body_requests == 0
     assert session.browser_time_ms == 0
     assert session.mode == TransportMode.LIVE
+
+
+def test_http_session_sends_only_typed_public_routing_headers() -> None:
+    """Authority routing values reach HTTP without widening to credentials."""
+    received: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        received.append(dict(request.headers))
+        return httpx.Response(200, content=b"{}")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    request = PortalRequest(
+        url=HttpUrl("https://planningapi.agileapplications.co.uk/api/application/1"),
+        intent=RequestIntent.DETAIL,
+        headers=(
+            RequestHeader(name="x-client", value="OPDC"),
+            RequestHeader(name="x-product", value="CITIZENPORTAL"),
+            RequestHeader(name="x-service", value="PA"),
+        ),
+    )
+
+    async def exercise() -> None:
+        await session.fetch(request)
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert {
+        name: received[0][name] for name in ("x-client", "x-product", "x-service")
+    } == {
+        "x-client": "OPDC",
+        "x-product": "CITIZENPORTAL",
+        "x-service": "PA",
+    }
+    with pytest.raises(ValueError, match="duplicate request header"):
+        PortalRequest(
+            url=HttpUrl("https://example.test"),
+            intent=RequestIntent.SEARCH,
+            headers=(
+                RequestHeader(name="x-client", value="OPDC"),
+                RequestHeader(name="x-client", value="OTHER"),
+            ),
+        )
 
 
 def test_shared_host_limiter_covers_stream_consumption() -> None:
@@ -366,6 +424,7 @@ def test_http_session_default_client_identifies_the_collector() -> None:
         ("https://example.test/file.pdf", {}, 0),
         ("https://example.test/file.png", {}, 0),
         ("https://example.test/Document/Download?id=1", {}, 0),
+        ("https://example.test/api/application/document/OPDC/123", {}, 0),
         ("https://example.test/view", {"content-disposition": "attachment"}, 1),
         ("https://example.test/view", {"content-disposition": "filename=x.txt"}, 1),
         ("https://example.test/view", {"content-type": "application/pdf"}, 1),
@@ -399,6 +458,41 @@ def test_http_session_blocks_attachment_bodies(
     assert calls == network_calls
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
+
+
+def test_browser_session_rejects_request_headers_it_cannot_apply() -> None:
+    """A browser session cannot silently discard authority routing headers."""
+    session = PlaywrightPortalSession(_FakeBoundary())
+
+    async def exercise() -> None:
+        with pytest.raises(ValueError, match="request headers"):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl("https://browser.test/page"),
+                    intent=RequestIntent.DETAIL,
+                    headers=(RequestHeader(name="x-client", value="OPDC"),),
+                )
+            )
+
+    asyncio.run(exercise())
+
+
+def test_fixture_session_rejects_request_headers_it_cannot_apply() -> None:
+    """Fixture replay cannot silently discard authority routing headers."""
+    url = "https://fixture.test/page"
+    session = FixtureSession({url: FixtureResponse(body=b"fixture")})
+
+    async def exercise() -> None:
+        with pytest.raises(ValueError, match="request headers"):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl(url),
+                    intent=RequestIntent.DETAIL,
+                    headers=(RequestHeader(name="x-client", value="OPDC"),),
+                )
+            )
+
+    asyncio.run(exercise())
 
 
 def test_http_session_blocks_redirect_to_attachment_path() -> None:

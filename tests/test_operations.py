@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import sqlite3
 from contextlib import closing
@@ -24,6 +25,7 @@ from yimby import (
     barnet_registry,
     pilot_registry,
 )
+from yimby import geo as geo_module
 from yimby.adapters import NativeSchemaMismatchError
 from yimby.authorities.barnet import BARNET_PACKAGE
 from yimby.authorities.barnet.fixtures import fixture_session
@@ -61,7 +63,7 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
 )
-from yimby.evidence import EvidenceStore
+from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.exporting import (
     PUBLIC_ALLOWLIST,
     ExportFormat,
@@ -85,6 +87,7 @@ WINDOW = DiscoveryWindow(
 )
 CAMDEN_FIXTURE_EASTING = 530748
 PILOT_AUTHORITY_COUNT = 15
+LIVE_READY_AUTHORITY_COUNT = 2
 UNCHANGED_AND_REBUILT_VERSIONS = 2
 BARNET_REQUEST_COUNT = 3
 REPEATED_RETRY_ATTEMPTS = 2
@@ -499,6 +502,29 @@ def test_coordinate_conversion_and_camden_fixture(tmp_path: Path) -> None:
     store.close()
 
 
+def test_coordinate_conversion_uses_a_stable_transform_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Coverage instrumentation cannot invalidate pyproj's default enum value."""
+    calls: list[tuple[float, float, str]] = []
+
+    class _Transformer:
+        def transform(
+            self,
+            easting: float,
+            northing: float,
+            *,
+            direction: str,
+        ) -> tuple[float, float]:
+            calls.append((easting, northing, direction))
+            return -0.1, 51.5
+
+    monkeypatch.setattr(geo_module, "_BNG_TO_WGS84", _Transformer())
+
+    assert bng_to_wgs84(530000, 180000) is not None
+    assert calls == [(530000, 180000, "FORWARD")]
+
+
 def test_offline_rebuild_preserves_versions_and_requires_matching_schema(
     tmp_path: Path,
 ) -> None:
@@ -544,12 +570,36 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     _collect_barnet(store)
     store.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_captures_json = '[]'"
+        )
+        connection.commit()
+    reopened = _store(tmp_path)
+    assert reopened.retained_native_records()[0].evidence
+    reopened.close()
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
         connection.execute("DELETE FROM evidence")
         connection.commit()
     reopened = _store(tmp_path)
     with pytest.raises(KeyError):
         reopened.retained_native_records()
     reopened.close()
+
+
+def test_retained_evidence_rejects_valid_gzip_with_wrong_digest(
+    tmp_path: Path,
+) -> None:
+    """A readable replacement body is still corrupt when its digest differs."""
+    store = _store(tmp_path)
+    _collect_barnet(store)
+    evidence_path = next((tmp_path / "evidence").rglob("*.gz"))
+    relative_path = str(evidence_path.relative_to(tmp_path / "evidence"))
+    evidence_path.write_bytes(gzip.compress(b"altered but readable", mtime=0))
+
+    assert store.invalid_evidence_paths() == (relative_path,)
+    with pytest.raises(EvidenceIntegrityError, match=relative_path):
+        store.retained_native_records()
+    store.close()
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
@@ -723,7 +773,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -737,7 +787,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     dashboard = dashboard_snapshot(store, pilot_registry())
     assert dashboard.coverage_implemented == PILOT_AUTHORITY_COUNT
     assert dashboard.coverage_denominator == PILOT_AUTHORITY_COUNT
-    assert dashboard.live_ready == 1
+    assert dashboard.live_ready == LIVE_READY_AUTHORITY_COUNT
     assert dashboard.live_readiness_denominator == PILOT_AUTHORITY_COUNT
     assert dashboard.application_count == 1
     assert dashboard.request_count == BARNET_REQUEST_COUNT
@@ -759,7 +809,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()

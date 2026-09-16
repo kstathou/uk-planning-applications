@@ -53,6 +53,7 @@ _ATTACHMENT_PATH_FRAGMENTS = (
     "/sfc/servlet.shepherd/document/download/",
     "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
+    "/api/application/document/opdc/",
 )
 _ATTACHMENT_MEDIA_PREFIXES = (
     "audio/",
@@ -205,6 +206,9 @@ class PlaywrightPortalSession:
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         """Render one allowlisted page and retain the resulting HTML."""
+        if request.headers:
+            message = "browser transport does not support request headers"
+            raise ValueError(message)
         raw_url = str(request.url)
         split = urlsplit(raw_url)
         if _is_attachment_path(split.path):

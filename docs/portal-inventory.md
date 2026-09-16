@@ -1,6 +1,6 @@
 # Pilot portal inventory
 
-This reference records the browser census taken on 15 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
+This reference records the browser census taken on 15–16 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
 
 | Authority | Observed sources | Portal shape | Browser result |
 |---|---|---|---|
@@ -10,7 +10,7 @@ This reference records the browser census taken on 15 September 2026. A successf
 | Devon County Council | `planning.devon.gov.uk/` | Custom register | A 90-day discovery query, explicit zero-result query, and one detail record were verified. See `authorities/devon.md`. |
 | Peak District National Park Authority | Legacy custom portal plus AssureLive replacement | Two linked services | A 33-record weekly query and one detail record were verified. JavaScript-loaded detail sections remained pending. See `authorities/peak-district.md`. |
 | Arun | `www1.arun.gov.uk/aplanning/OcellaWeb/` | Ocella | One decided detail record and its document index were verified without opening attachment bodies. See `authorities/arun.md`. |
-| Old Oak and Park Royal Development Corporation | `planning.agileapplications.co.uk/opdc` | Agile Applications | Two direct loads reached the citizen-portal title but returned a blank accessible document. See `authorities/opdc.md`. |
+| Old Oak and Park Royal Development Corporation | Citizen Portal plus `planningapi.agileapplications.co.uk` | Agile Applications | Exact bounded Registered and Determined searches, the complete current Registered set, detail, document metadata, and public responses were verified and qualified. See `authorities/opdc.md`. |
 | Dorset | `gi.dorsetcouncil.gov.uk/dorsetexplorer/planning/public` | Dorset Explorer map client | The JavaScript map and planning search-provider configuration loaded, but no bounded application enumeration was exposed. See `authorities/dorset.md`. |
 | Cheshire East | `pa.cheshireeast.gov.uk/planning/index.html?fa=search` | Custom register | A valid-date search and its field inventory were verified. A selected result did not yield readable detail content. See `authorities/cheshire-east.md`. |
 | Blackburn with Darwen | `planning.blackburn.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned the same maintenance page. See `authorities/blackburn-with-darwen.md`. |
@@ -34,4 +34,4 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 
 ## Verification status
 
-Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, Peak District, and West Suffolk have recorded detail paths. Cheshire East and Leeds have recorded discovery paths but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn, Birmingham, and OPDC are blocked at their entry points. Every authority now has a dated walkthrough, while the unresolved paths remain explicit.
+Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, OPDC, Peak District, and West Suffolk have recorded detail paths. OPDC has also completed a persisted live bootstrap with complete bounded and current-open discovery. Cheshire East and Leeds have recorded discovery paths but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn and Birmingham remain blocked at their entry points. Every authority has a dated walkthrough, while unresolved paths remain explicit.

@@ -5,10 +5,10 @@
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import PurePosixPath
-from typing import Protocol, Self
+from typing import Literal, Protocol, Self
 from urllib.parse import urlsplit
 
-from pydantic import HttpUrl, model_validator
+from pydantic import Field, HttpUrl, model_validator
 
 from yimby.domain import EvidenceCapture, EvidenceDigest, FrozenModel, TransportMode
 
@@ -34,6 +34,7 @@ _ATTACHMENT_PATH_FRAGMENTS = (
     "/sfc/servlet.shepherd/document/download/",
     "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
+    "/api/application/document/opdc/",
 )
 
 
@@ -67,6 +68,13 @@ class FormField(FrozenModel):
     value: str
 
 
+class RequestHeader(FrozenModel):
+    """One public portal-routing header permitted at the transport boundary."""
+
+    name: Literal["x-client", "x-product", "x-service"]
+    value: str = Field(min_length=1)
+
+
 class PortalRequest(FrozenModel):
     """One allowlisted portal request."""
 
@@ -74,12 +82,17 @@ class PortalRequest(FrozenModel):
     intent: RequestIntent
     method: RequestMethod = RequestMethod.GET
     form: tuple[FormField, ...] = ()
+    headers: tuple[RequestHeader, ...] = ()
 
     @model_validator(mode="after")
     def form_requires_post(self) -> Self:
         """Reject ambiguous GET requests carrying a form body."""
         if self.method == RequestMethod.GET and self.form:
             message = "GET portal requests cannot carry form fields"
+            raise ValueError(message)
+        names = tuple(header.name for header in self.headers)
+        if len(names) != len(set(names)):
+            message = "duplicate request header"
             raise ValueError(message)
         return self
 
@@ -133,6 +146,9 @@ class FixtureSession:
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         """Return one fixture response after applying attachment policy."""
+        if request.headers:
+            message = "fixture transport does not support request headers"
+            raise ValueError(message)
         url = str(request.url)
         path = urlsplit(url).path
         lowered = path.casefold()
