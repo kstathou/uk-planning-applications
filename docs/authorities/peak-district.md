@@ -35,6 +35,13 @@ status and preserves the portal's any-time date controls. Pagination submits
 the selected query again, the result-page controls, and the portal's serialized
 search state.
 
+New collections retain each search response with its exact response URL and
+the ordered request that produced it. The first page also retains both form
+responses that supplied the query controls. Later pages retain the pagination
+POST reconstructed from the preceding page. Each registration includes the
+scope and query key, so evidence from an earlier weekly window cannot satisfy a
+later window.
+
 Result pages reconcile the readable `Total record(s)` value with
 `TotalRecords`, `PageCount`, `PageSize`, and the current page. AssureLive shows
 only a window of page links for large result sets, so the adapter requires the
@@ -53,7 +60,9 @@ The document endpoint is accepted only when its declared route matches
 `GetOnlineDocuments`. Every document-list page reconciles three reported
 counts, its current page, its page size, its expected row count, and its
 windowed paginator. Each row retains only the published date, title, type, and
-attachment URL. The collector never opens an attachment body.
+attachment URL. Normalisation maps the type to `DocumentRecord.category` and
+the published date to `DocumentRecord.published_date`. The collector never
+opens an attachment body.
 
 The checked records exposed no public comments tab. Their comment section is
 therefore unavailable, not empty. If a comments tab appears before its contract
@@ -110,6 +119,21 @@ network I/O, binds cumulative cost to authority-scoped durable run rows, rejects
 missing or inconsistent terminal proof, uses strict receipt schemas, and checks
 the persisted live-ready HTTP manifest. The committed mirror exposes only
 aggregate counts and SHA-256 commitments, not public-reference identities.
+
+The 16 September proof predates request-bound discovery registrations. The
+qualifier continues to validate that proof against the original retained
+evidence and does not rewrite it. A later collection must satisfy the stronger
+contract: every stored discovery page must match its registered response URL,
+request URL, method, ordered form, query key, page number, digest, and parsed
+reference inventory.
+
+Later weekly windows use the same cumulative store with `--resume`. Cycle 1
+and cycle 2 each create an append-only private proof and local receipt. Cycle 1
+links to the SHA-256 digest of the original bootstrap proof. Cycle 2 links to
+the cycle 1 proof. The qualifier accepts a cycle only on or after its recorded
+eligibility date and only when the scope end advances. A valid same-cycle
+rerun performs no network requests. Any change to the original proof or an
+earlier cycle proof fails closed.
 
 ## Acceptance boundary
 

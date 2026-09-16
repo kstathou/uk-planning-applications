@@ -140,8 +140,33 @@ digests, persisted live-ready HTTP metadata, unmapped records, attachment
 policy, cumulative authority-scoped durable run-cost agreement, and an
 immediate zero-network rerun all pass. A valid resume recovers the existing
 proof without opening a source session; missing or inconsistent terminal proof
-fails closed. Use `--resume` only with the same directory and exact scope after
-an interruption or fail-closed correction.
+fails closed. New discovery captures bind each response to its exact response
+URL, request URL, method, ordered form, scope, query key, and page number.
+
+Use `--resume` with the same directory and exact scope after an interruption or
+fail-closed correction. On or after each eligibility date, use the same
+directory and move the 30-day window forward. For example, run cycle 1 on or
+after 23 September 2026:
+
+```sh
+uv run python scripts/qualify_peak_district.py \
+  --confirm-live \
+  --resume \
+  --data-dir .yimby/qualification-peak-district-2026-09-16 \
+  --start 2026-08-25 \
+  --end 2026-09-23 \
+  --include-open
+```
+
+Run cycle 2 on or after 30 September 2026 with `--start 2026-09-01` and
+`--end 2026-09-30`. The qualifier retains the original bootstrap proof and
+receipt unchanged. It writes
+`peak-district-weekly-cycle-1-proof-v1.json` and
+`peak-district-weekly-cycle-2-proof-v1.json` as an append-only proof chain.
+Each cycle also writes a corresponding `-receipt-v1.json` file. A repeated
+command for a completed cycle validates the stored chain without network I/O.
+If proof publication stops after the durable temporary file is written, the
+next command validates that file against the store before it publishes it.
 
 The accepted 16 September 2026 receipt records 377 references and applications,
 95 decision dates, zero failed sections, zero pending or historical retry
