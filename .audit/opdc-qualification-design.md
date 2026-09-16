@@ -86,3 +86,7 @@ That otherwise valid dataset remains recoverable as
 now registers the promoted pilot status and makes `LIVE_READY` plus HTTP
 transport a named receipt predicate. The canonical directory was again
 recreated from empty so its initial-cost proof and persisted manifest agree.
+The aggregate receipt is mirrored at
+`docs/evidence/opdc-qualification-2026-09-16.json` so the proof remains
+reviewable from Git; only the 55-row identity inventory stays in ignored local
+state.
