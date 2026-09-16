@@ -14,6 +14,21 @@ The weekly-list form uses the standard IDOX session flow. The observed week begi
 
 The first result was `DC/26/1388/TCA`. Its summary exposed an alternative reference, the received and validated dates, address, proposal, status, appeal status, and appeal decision.
 
+A persisted bootstrap completed on 16 September 2026 for the inclusive window
+18 August to 16 September 2026. It exhausted ten weekly queries, covering five
+intersecting weeks for both validated and decided dates. It then exhausted four
+application-status partitions and four appeal-status partitions for older open
+applications. The application statuses were Pending Consideration, Pending
+Decision, Received Awaiting Registration, and Pending Appeal Decision. The
+appeal statuses were Appeal lodged, Appeal Remitted to Secretary of State, High
+Court Appeal Lodged, and Pending Appeal Decision.
+
+The portal-owned value for Appeal Remitted to Secretary of State includes a
+trailing space. The scraper preserves that value exactly. Advanced first pages
+can expose either an empty hidden page marker or `1`. Both forms are accepted
+only on page one. Later pages still require their exact visible and hidden page
+contracts.
+
 ## Sections
 
 The record exposed summary, further information, contacts, important dates, comments, constraints, documents, related cases, and map tabs. The document index reported six records and displayed six rows.
@@ -31,11 +46,11 @@ An empty comments tab does not imply that no representations exist. The document
 ## Known limits
 
 The original walkthrough covered one weekly validated list, one current record,
-and its document index. A follow-up live adapter run on 16 September 2026 also
-exhausted the two-page decided list and fetched one summary plus its document
-index. It did not prove older open enumeration, related-case detail, retries,
-incremental updates, or a complete persisted bootstrap of every discovered
-record.
+and its document index. The persisted bootstrap now proves bounded recent and
+older-open discovery, detail persistence, retry state, source evidence, and an
+immediate idempotent rerun. It does not prove the two later weekly refreshes,
+related-case expansion beyond the recorded fields, or public comment text that
+the portal exposes only inside attachment bodies.
 
 ## Request contract capture
 
@@ -57,5 +72,19 @@ the human reference, proposal, address, received date, validated date, status,
 and comment-open marker. The smoke fetched `DC/26/1388/TCA`, completed without a
 detail error, transferred no attachment body, and retained a resumable
 checkpoint. This confirms weekly discovery, pagination, and one bounded detail
-path. It does not establish a complete persisted bootstrap, older-open coverage,
-or incremental operation.
+path.
+
+## Live bootstrap qualification
+
+The qualification receipt at
+`.yimby/qualification-west-suffolk-2026-09-16/west-suffolk-qualification-v1.json`
+records 730 discovered references and 730 persisted applications. It also
+records 730 native versions, 730 application versions, 730 document versions,
+no pending retries, no failed current sections, no unmapped records, and no
+attachment-body requests. SQLite integrity and retained evidence paths passed.
+
+The successful terminal resume made 76 requests and transferred 3,019,581
+bytes. Those figures describe that resume, not the earlier interrupted attempts.
+The immediate rerun made zero requests, transferred zero bytes, and left the
+terminal store unchanged. Both recorded runs succeeded. This satisfies live
+bootstrap acceptance. The two genuinely later weekly refreshes remain open.

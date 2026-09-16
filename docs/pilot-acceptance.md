@@ -36,22 +36,29 @@ requirement.
 | Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
-| West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Live weekly discovery completed for 3 validated and 14 decided applications; one bounded detail fetched with no attachment body | Open | Open |
+| West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Ten weekly and eight active-state partitions completed with strict pagination, exact form values, persisted details, and no attachment bodies | Verified, 730 applications, receipt dated 16 September 2026 | Open |
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, no authority has completed a verified live bootstrap.
+As of 16 September 2026, West Suffolk is the first of fifteen authorities to
+complete a verified live bootstrap. Its versioned receipt proves 730 discovered
+references, 730 persisted applications, terminal checkpoint coherence, no
+pending retries, no failed current sections, database and evidence integrity,
+no unmapped records, no attachment-body requests, and an immediate zero-request
+rerun. The other fourteen authorities still require a live bootstrap. All
+fifteen still require two successful later weekly cycles, so operational
+qualification remains zero of fifteen.
+
 The Barnet smoke is incomplete because the source returned HTTP 429 during
 pagination; its saved checkpoint permits a later bounded resume without
-repeating completed pages. All fifteen authorities still require a live
-bootstrap and two successful weekly cycles. Blocked and partial authorities
-remain in coverage denominators and failure reporting until those checks
-succeed.
+repeating completed pages. Blocked and partial authorities remain in coverage
+denominators and failure reporting until their checks succeed.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds
-were healthy for completed weekly discovery smokes. These results do not move
-their live-bootstrap cells because the smokes checkpoint discovery but do not
-persist every discovered application through the operational collection store.
-West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
-unverified detail surface.
+were healthy for completed weekly discovery smokes. The earlier smoke results
+did not move the live-bootstrap cells because they checkpointed discovery
+without persisting every discovered application through the operational
+collection store. West Suffolk has since passed that boundary through the dated
+qualification receipt. Leeds still stops explicitly before its unverified
+detail surface.
