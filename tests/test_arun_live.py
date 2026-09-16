@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from pydantic import HttpUrl
 
 import yimby.authorities.arun.adapter as arun
 from yimby.domain import (
@@ -334,6 +335,12 @@ def test_arun_show_all_form_must_exactly_replay_the_active_query() -> None:
     wrong_results = arun._parse_search_results(_partial_results(wrong))
     with pytest.raises(arun.ArunQueryReplayError):
         arun._show_all_request(wrong_results.show_all_form, query)
+    assert results.show_all_form is not None
+    cross_host = results.show_all_form.model_copy(
+        update={"action": HttpUrl("https://elsewhere.invalid/planningSearch")}
+    )
+    with pytest.raises(arun.ArunQueryReplayError):
+        arun._show_all_request(cross_host, query)
 
 
 def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
@@ -347,6 +354,14 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
     )
     assert empty.reported == 0
     assert empty.references == ()
+
+    duplicate = (
+        b'<table><tr><td><a href="planningDetails?reference=A">A</a></td></tr>'
+        b'<tr><td><a href="planningDetails?reference=A">A again</a></td></tr></table>'
+        b'<p data-result-count="2">2 records</p>'
+    )
+    with pytest.raises(arun.ArunParseError, match="duplicate result reference"):
+        arun._parse_search_results(duplicate)
 
 
 def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
@@ -681,6 +696,27 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
     assert plan.title == "Plan"
     assert plan.description is None
     assert all("viewDocument" not in url for url in session.requested_urls)
+
+
+def test_arun_fetch_accepts_an_application_without_a_parish_label() -> None:
+    reference = SourceReference(
+        source_id=arun.SOURCE,
+        reference="BR/1/26/PL",
+        locator=f"{arun.BASE_URL}/planningDetails?reference=BR%2F1%2F26%2FPL",
+    )
+
+    def responder(request: PortalRequest) -> bytes:
+        if "planningDetails" in str(request.url):
+            return _detail_with_documents(reference.reference).replace(
+                b"<tr><th>Parish</th><td>Bognor Regis</td></tr>",
+                b"",
+            )
+        return b"No documents found for this planning application"
+
+    snapshot = asyncio.run(arun.ArunAdapter().fetch(_Session(responder), reference))
+
+    assert snapshot.payload.parish_name is None
+    assert snapshot.completeness.documents.kind == "empty"
 
 
 def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> None:
