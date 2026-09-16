@@ -719,7 +719,7 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
         "blank-appeal",
     ],
 )
-def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
+def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C901, PLR0912, PLR0915
     tmp_path: Path,
     failure: str,
 ) -> None:
