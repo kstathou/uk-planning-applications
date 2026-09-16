@@ -660,31 +660,38 @@ def _pagination_request(
 
 def _parse_search_page(body: bytes, *, expected_page: int) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
-    container = soup.select_one("#divOnlinePlanningSearchResults")
-    if not isinstance(container, Tag):
+    pagination = soup.select_one("#generalSearchPagination")
+    if (
+        not isinstance(pagination, Tag)
+        or urljoin(f"{ASSURE_BASE}/", str(pagination.get("data-url", "")))
+        != _PAGINATION_URL
+    ):
         _raise_parse("search results")
     total_match = _TOTAL_PATTERN.search(soup.get_text(" ", strip=True))
     if total_match is None:
         _raise_parse("reported result count")
     reported = int(total_match.group(1))
     page_index = _required_control_int(soup, "PagingParameters.CurrentPageIndex")
-    page_size = _required_control_int(soup, "PagingParameters.PageSize")
-    hidden_reported = _required_control_int(soup, "PagingParameters.TotalRecords")
+    page_size = _required_control_int(soup, "PageSize")
+    hidden_reported = _required_control_int(soup, "TotalRecords")
+    page_count = _required_control_int(soup, "PageCount")
     if reported != hidden_reported:
         raise PeakDistrictCountMismatchError(reported, hidden_reported)
     if page_index != expected_page:
         _raise_parse("result page index")
     if page_size <= 0:
         _raise_parse("result page size")
-    references = _result_references(container)
+    references = _result_references(soup)
     remaining = reported - (page_index * page_size)
     expected_rows = min(page_size, max(0, remaining))
     if len(references) != expected_rows:
         raise PeakDistrictCountMismatchError(expected_rows, len(references))
     pages = max(1, (reported + page_size - 1) // page_size)
+    if page_count != pages:
+        raise PeakDistrictCountMismatchError(pages, page_count)
     observed_pages = {
         int(match.group(1))
-        for link in soup.select("#generalSearchPagination a[onclick]")
+        for link in pagination.select("a[onclick]")
         if (match := _PAGE_PATTERN.search(str(link.get("onclick", "")))) is not None
     }
     if observed_pages != set(range(pages)):
