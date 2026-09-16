@@ -38,6 +38,8 @@ Private typed query objects produce one canonical ordered key inventory. Before
 submission, the adapter validates the weekly form's unique POST action, ward
 and week controls, `searchType=Application`, and exact validated/decided radio
 values, as well as the advanced form's status and date controls. The
+advanced boundary also rejects any non-target criterion or discriminator that
+is not neutral, so hidden default filters cannot narrow every partition. The
 qualification command imports the canonical inventory instead of repeating
 status strings.
 

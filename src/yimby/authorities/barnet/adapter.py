@@ -981,6 +981,11 @@ def _parse_advanced_form(body: bytes) -> Tag:
         "date(applicationReceivedEnd)",
     }.issubset(field_names):
         _raise_parse("advanced form")
+    if any(
+        field.name != "_csrf" and field.value
+        for field in _form_fields(form)
+    ):
+        _raise_parse("advanced form neutral filters")
     return form
 
 

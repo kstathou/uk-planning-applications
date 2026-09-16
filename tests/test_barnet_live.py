@@ -100,8 +100,6 @@ ADVANCED_FORM = f"""
   <input type="hidden" name="searchType" value="">
   <input name="date(applicationReceivedStart)" value="">
   <input name="date(applicationReceivedEnd)" value="">
-  <input type="hidden" name="tag" value="one">
-  <input type="hidden" name="tag" value="two">
 </form></body></html>
 """.encode()
 
@@ -566,11 +564,6 @@ def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
     received_post = dict(advanced_posts[0])
     assert received_post["date(applicationReceivedStart)"] == "14/09/2026"
     assert received_post["date(applicationReceivedEnd)"] == "20/09/2026"
-    assert [
-        value for fields in advanced_posts for name, value in fields if name == "tag"
-    ] == ["one", "two"] * 10
-
-
 def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
     adapter = BarnetAdapter()
     first_session = _session(_BarnetMock(advanced_multi_page=True))
