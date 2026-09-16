@@ -87,22 +87,22 @@ The typed v1 receipt is
 It records:
 
 - 48 received-date pages and 136 unrestricted outstanding pages exhausted.
-- 478 received-date identities plus 958 additional older-open identities.
-- 1,436 current applications, queued references, and terminal-checkpoint
+- 486 received-date identities plus 951 additional older-open identities.
+- 1,437 current applications, queued references, and terminal-checkpoint
   references with
   the same SHA-256 identity-set hash,
-  `20966c1c659f604f4d9bc8011eb478557efbe3ee693051c781763ad482c2c7b7`.
-- 1,437 retained native records and 1,437 unique evidence digests, all
-  decompressed and re-hashed successfully. The extra record is a formerly-open
-  historical application outside the terminal inventory.
-- Successful live source run `050750ab-98bd-4be0-83e8-250ad7196443` made 1,097
-  single-attempt fetches, transferred 129,353,298 bytes, and made zero
+  `38d2f3a03c8a5085f55a9c820f0f1f32a14a21ecad46018d4f17c66006c627dc`.
+- 1,443 retained application evidence records and 1,443 unique evidence
+  digests, all decompressed and re-hashed successfully. Six retained historical
+  applications are outside the terminal inventory.
+- Successful live source run `06a7738f-1d43-41df-8c0a-fd5a362b42fe` made 1,628
+  single-attempt fetches, transferred 175,220,556 bytes, and made zero
   attachment-body requests.
 - Zero pending retries, failed sections, and unmapped records.
 - A second successful terminal run with zero fetches, zero transferred bytes,
   and no database or evidence change.
 - Receipt SHA-256
-  `d42f626bff417b376271f2608e1e81c0cddd5bb63959ac897454f46a3582bf65`.
+  `6a046dcd0fa87d42bcab9ce9129759d6b6ecb8780d3fbcc45a7bf766a5682fd5`.
 
 An earlier receipt was superseded after independent review showed that its
 outstanding query had inherited the bounded received dates. The corrected
@@ -119,10 +119,14 @@ A final adversarial review found that automatic redirects could still leave the
 official origin and that HTTPX could consume an attachment-marked intermediate
 redirect body. Exact pre-dispatch route validation and pre-body response-header
 checks now close both paths. A bounded official smoke of the corrected transport
-completed the disclaimer flow through the three expected top-level fetches,
-transferred 396,105 bytes, and recorded zero attachment-body requests. This
-monotonic boundary correction does not alter the persisted terminal inventory
-or its receipt digest.
+completed the disclaimer flow, but independent review correctly rejected that
+smoke as insufficiently bound to the typed receipt. The full fixed-window and
+outstanding qualification was therefore restarted through the hardened
+transport. Its cited live source run now supplies the receipt's nonzero costs
+and zero attachment count directly. A later validation-only resume must match
+the prior typed receipt's source run, request count, byte count, and attachment
+count to durable run metrics; it cannot synthesize historical attachment
+accounting.
 
 ## Readiness
 
