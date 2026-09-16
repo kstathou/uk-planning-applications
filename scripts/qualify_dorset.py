@@ -14,7 +14,8 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NoReturn, cast
+from urllib.parse import urljoin
 
 import httpx
 from pydantic import Field
@@ -41,7 +42,12 @@ from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
-from yimby.transport import PortalRequest, PortalSession
+from yimby.transport import (
+    AttachmentBodyBlockedError,
+    PortalRequest,
+    PortalSession,
+    SourceUnavailableError,
+)
 
 if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
@@ -60,6 +66,29 @@ _HTTP_HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
     "user-agent": "yimby/0.1 (+local planning research; contact via source repository)",
 }
+_OFFICIAL_HOST = "planning.dorsetcouncil.gov.uk"
+_OFFICIAL_PATHS = frozenset(
+    {
+        "/advsearch.aspx",
+        "/disclaimer.aspx",
+        "/plandisp.aspx",
+        "/searchresults.aspx",
+    }
+)
+_ATTACHMENT_MEDIA_TYPES = frozenset(
+    {
+        "application/msword",
+        "application/octet-stream",
+        "application/pdf",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/zip",
+    }
+)
+_ATTACHMENT_MEDIA_PREFIXES = ("audio/", "image/", "video/")
+_REDIRECT_DESTINATION_ERROR = "Dorset redirect destination outside official register"
+_REQUEST_BOUNDARY_ERROR = "Dorset request outside official register boundary"
 
 
 SessionFactory = Callable[[], PortalSession]
@@ -217,8 +246,11 @@ class _DorsetRateLimitedTransport(httpx.AsyncBaseTransport):
     ) -> None:
         self._transport = transport
         self._limiter = limiter
+        self._attachment_body_requests = 0
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if not _is_official_dorset_url(request.url):
+            raise SourceUnavailableError(_REQUEST_BOUNDARY_ERROR)
         turn = self._limiter.turn(request.url.host)
         await turn.__aenter__()
         try:
@@ -226,15 +258,94 @@ class _DorsetRateLimitedTransport(httpx.AsyncBaseTransport):
         except BaseException as error:
             await turn.__aexit__(type(error), error, error.__traceback__)
             raise
+        if _is_attachment_response(response):
+            self._attachment_body_requests += 1
+            blocked_error = AttachmentBodyBlockedError(
+                f"attachment body blocked for {_OFFICIAL_HOST}"
+            )
+            await _close_rejected_response(response, turn, blocked_error)
+        location = response.headers.get("location")
+        if response.is_redirect and location is not None:
+            destination = httpx.URL(urljoin(str(request.url), location))
+            if not _is_official_dorset_url(destination):
+                redirect_error = SourceUnavailableError(_REDIRECT_DESTINATION_ERROR)
+                await _close_rejected_response(response, turn, redirect_error)
         return httpx.Response(
             response.status_code,
             headers=response.headers,
-            stream=_DorsetRateLimitedStream(response.stream, turn),
+            stream=_DorsetRateLimitedStream(
+                cast("httpx.AsyncByteStream", response.stream), turn
+            ),
             extensions=response.extensions,
         )
 
     async def aclose(self) -> None:
         await self._transport.aclose()
+
+    @property
+    def attachment_body_requests(self) -> int:
+        """Return response bodies rejected at any Dorset network hop."""
+        return self._attachment_body_requests
+
+
+class _DorsetPortalSession(HttpxPortalSession):
+    """Expose authority-local blocks alongside shared session accounting."""
+
+    def __init__(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        transport: _DorsetRateLimitedTransport,
+    ) -> None:
+        self._dorset_transport = transport
+        super().__init__(
+            client=client,
+            limiter=HostRateLimiter(0),
+            max_attempts=1,
+        )
+
+    @property
+    def attachment_body_requests(self) -> int:
+        """Count final-response and redirect-hop attachment blocks."""
+        return (
+            super().attachment_body_requests
+            + self._dorset_transport.attachment_body_requests
+        )
+
+
+def _is_official_dorset_url(url: httpx.URL) -> bool:
+    return (
+        url.scheme == "https"
+        and url.host == _OFFICIAL_HOST
+        and url.port in (None, 443)
+        and not url.userinfo
+        and url.path in _OFFICIAL_PATHS
+    )
+
+
+def _is_attachment_response(response: httpx.Response) -> bool:
+    disposition = response.headers.get("content-disposition", "").casefold()
+    media_type = (
+        response.headers.get("content-type", "").partition(";")[0].strip().casefold()
+    )
+    return (
+        "attachment" in disposition
+        or "filename" in disposition
+        or media_type in _ATTACHMENT_MEDIA_TYPES
+        or media_type.startswith(_ATTACHMENT_MEDIA_PREFIXES)
+    )
+
+
+async def _close_rejected_response(
+    response: httpx.Response,
+    turn: AbstractAsyncContextManager[None],
+    error: Exception,
+) -> NoReturn:
+    try:
+        await response.aclose()
+    finally:
+        await turn.__aexit__(type(error), error, error.__traceback__)
+    raise error
 
 
 class _MeasuringSession:
@@ -737,18 +848,18 @@ def _default_session(
     limiter: HostRateLimiter | None = None,
 ) -> HttpxPortalSession:
     network_limiter = limiter or HostRateLimiter()
-    return HttpxPortalSession(
+    dorset_transport = _DorsetRateLimitedTransport(
+        transport or httpx.AsyncHTTPTransport(),
+        network_limiter,
+    )
+    return _DorsetPortalSession(
         client=httpx.AsyncClient(
             follow_redirects=True,
             headers=_HTTP_HEADERS,
             timeout=httpx.Timeout(30.0),
-            transport=_DorsetRateLimitedTransport(
-                transport or httpx.AsyncHTTPTransport(),
-                network_limiter,
-            ),
+            transport=dorset_transport,
         ),
-        limiter=HostRateLimiter(0),
-        max_attempts=1,
+        transport=dorset_transport,
     )
 
 

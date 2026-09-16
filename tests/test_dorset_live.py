@@ -1037,7 +1037,18 @@ def test_dorset_qualification_rejects_official_redirect_to_other_host() -> None:
     assert hosts == ["planning.dorsetcouncil.gov.uk"]
 
 
-def test_dorset_qualification_blocks_intermediate_attachment_body() -> None:
+@pytest.mark.parametrize(
+    "blocked_headers",
+    [
+        {"content-type": " Application/PDF ; charset=binary"},
+        {"content-type": "image/png"},
+        {"content-disposition": "inline; filename*=UTF-8''secret.html"},
+    ],
+    ids=("document-media", "media-prefix", "filename"),
+)
+def test_dorset_qualification_blocks_intermediate_attachment_body(
+    blocked_headers: dict[str, str],
+) -> None:
     """Redirect response metadata blocks an attachment before its body is read."""
     module = _qualification_module()
     body_reads = 0
@@ -1048,13 +1059,12 @@ def test_dorset_qualification_blocks_intermediate_attachment_body() -> None:
             body_reads += 1
             yield b"must not be read"
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             302,
             headers={
                 "location": DISCLAIMER_PATH,
-                "content-type": "application/pdf",
-                "content-disposition": 'attachment; filename="secret.pdf"',
+                **blocked_headers,
             },
             stream=ForbiddenStream(),
         )
@@ -1079,6 +1089,44 @@ def test_dorset_qualification_blocks_intermediate_attachment_body() -> None:
     asyncio.run(fetch_attachment_redirect())
     assert body_reads == 0
     assert session.attachment_body_requests == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"http://planning.dorsetcouncil.gov.uk{ADVANCED_PATH}",
+        f"https://planning.dorsetcouncil.gov.uk:444{ADVANCED_PATH}",
+        f"https://user@planning.dorsetcouncil.gov.uk{ADVANCED_PATH}",
+        f"{BASE_URL}/unknown.aspx",
+    ],
+    ids=("scheme", "port", "credentials", "path"),
+)
+def test_dorset_qualification_rejects_non_official_request_boundary(url: str) -> None:
+    """Every dispatched request must match the exact official endpoint boundary."""
+    module = _qualification_module()
+    network_calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal network_calls
+        network_calls += 1
+        return httpx.Response(200, content=b"must not be reached")
+
+    session = module._default_session(
+        transport=httpx.MockTransport(handler),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def fetch_invalid() -> None:
+        try:
+            with pytest.raises(SourceUnavailableError, match="official register"):
+                await session.fetch(
+                    PortalRequest(url=HttpUrl(url), intent=RequestIntent.SEARCH)
+                )
+        finally:
+            await session.aclose()
+
+    asyncio.run(fetch_invalid())
+    assert network_calls == 0
 
 
 def test_dorset_qualification_fails_closed_on_corrupt_evidence(tmp_path: Path) -> None:
