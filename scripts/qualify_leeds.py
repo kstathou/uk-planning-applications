@@ -22,6 +22,8 @@ from yimby.authorities.leeds import LEEDS_PACKAGE
 from yimby.authorities.leeds.adapter import (
     SOURCE,
     LeedsCheckpointV1,
+    LeedsDetailUnavailableError,
+    LeedsDetailUnverifiedError,
     LeedsDiscoveryScope,
 )
 from yimby.collection import Collector
@@ -38,7 +40,7 @@ from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
-from yimby.transport import PortalSession
+from yimby.transport import PortalSession, SourceUnavailableError
 
 _AUTHORITY_ID = AuthorityId("leeds")
 _RECEIPT_NAME = "leeds-qualification-v1.json"
@@ -50,6 +52,8 @@ _EXACT_WINDOW_REQUIRED = "30-day-window-required"
 _WINDOW_SPAN_DAYS = 29
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
+_MAX_REFERENCE_FAILURES = 3
+_MAX_NO_PROGRESS_FAILURES = 3
 _WEEKLY_DATE_TYPES = ("DC_Validated", "DC_Decided")
 _CASE_TYPE_VALUES = (
     "DAG",
@@ -268,6 +272,86 @@ async def _collect_once(
         await session.aclose()
 
 
+def _session_cost(session: PortalSession) -> QualificationCost:
+    return QualificationCost(
+        request_count=len(session.requested_urls),
+        transferred_bytes=session.transferred_bytes,
+        attachment_body_requests=session.attachment_body_requests,
+    )
+
+
+def _add_cost(left: QualificationCost, right: QualificationCost) -> QualificationCost:
+    return QualificationCost(
+        request_count=left.request_count + right.request_count,
+        transferred_bytes=left.transferred_bytes + right.transferred_bytes,
+        attachment_body_requests=(
+            left.attachment_body_requests + right.attachment_body_requests
+        ),
+    )
+
+
+def _progress_signature(store: SqliteStore) -> tuple[int, int, int]:
+    snapshot = store.qualification_snapshot(_AUTHORITY_ID)
+    pending_attempts = sum(
+        item.attempts
+        for item in store.retry_items()
+        if item.authority_id == _AUTHORITY_ID and item.status == "pending"
+    )
+    return (
+        snapshot.discovered_references,
+        snapshot.applications,
+        pending_attempts,
+    )
+
+
+def _reference_failure_limit_reached(store: SqliteStore) -> bool:
+    return any(
+        item.authority_id == _AUTHORITY_ID
+        and item.status == "pending"
+        and item.attempts >= _MAX_REFERENCE_FAILURES
+        for item in store.retry_items()
+    )
+
+
+async def _collect_initial(
+    collector: Collector,
+    store: SqliteStore,
+    window: DiscoveryWindow,
+    session_factory: SessionFactory,
+) -> QualificationCost:
+    total = QualificationCost(
+        request_count=0,
+        transferred_bytes=0,
+        attachment_body_requests=0,
+    )
+    progress = _progress_signature(store)
+    no_progress_failures = 0
+    while True:
+        session = session_factory()
+        try:
+            await collector.collect(_AUTHORITY_ID, window, session)
+        except (
+            LeedsDetailUnavailableError,
+            LeedsDetailUnverifiedError,
+            SourceUnavailableError,
+        ):
+            total = _add_cost(total, _session_cost(session))
+            current = _progress_signature(store)
+            no_progress_failures = (
+                no_progress_failures + 1 if current == progress else 0
+            )
+            progress = current
+            if (
+                _reference_failure_limit_reached(store)
+                or no_progress_failures >= _MAX_NO_PROGRESS_FAILURES
+            ):
+                raise
+        else:
+            return _add_cost(total, _session_cost(session))
+        finally:
+            await session.aclose()
+
+
 def _expected_query_inventory(scope: QualificationScope) -> tuple[str, ...]:
     monday = scope.start - timedelta(days=scope.start.weekday())
     weekly: list[str] = []
@@ -463,7 +547,12 @@ async def _qualify(
         include_open=True,
     )
     prior_status_count = len(store.run_statuses())
-    initial = await _collect_once(collector, window, session_factory)
+    initial = await _collect_initial(
+        collector,
+        store,
+        window,
+        session_factory,
+    )
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     checkpoint = _terminal_checkpoint(store, config.scope)
     agreement = None if checkpoint is None else _set_agreement(store, checkpoint)
@@ -518,7 +607,11 @@ async def _qualify(
         ),
         _check(
             "run-statuses-succeeded",
-            ok=run_statuses == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED),
+            ok=run_statuses[-2:]
+            == (
+                RunStatus.SUCCEEDED,
+                RunStatus.SUCCEEDED,
+            ),
         ),
         _check("weekly-cycles-pending", ok=True),
     )
