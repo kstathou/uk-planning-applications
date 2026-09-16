@@ -697,10 +697,11 @@ def _historical_sample_dates(
         if (
             frozenset(attributes) != _SAMPLE_ATTRIBUTE_KEYS
             or not isinstance(reference, str)
-            or not reference.strip()
+            or _REFERENCE_PATTERN.fullmatch(reference) is None
             or not isinstance(application_type, str)
             or not application_type.strip()
             or attributes.get("APPLICATION_DECISION") is not None
+            or attributes.get("Decision_Date") is not None
             or (
                 appeal_decision is not None
                 and appeal_decision not in _TERMINAL_APPEAL_DECISIONS
@@ -710,14 +711,12 @@ def _historical_sample_dates(
         received = _epoch_date(attributes.get("Received"))
         if received >= _QUALIFICATION_START or received > latest_received:
             _fail_invariant("historical-sample-date-mismatch")
-        for field in ("Decision_Date", "Date_Issued"):
-            value = attributes.get(field)
-            if value is not None:
-                _epoch_date(value)
-        if unresolved and (
-            attributes.get("Decision_Date") is not None
-            or attributes.get("Date_Issued") is not None
-        ):
+        issued_value = attributes.get("Date_Issued")
+        if issued_value is not None:
+            issued = _epoch_date(issued_value)
+            if issued < received or issued > _QUALIFICATION_END:
+                _fail_invariant("historical-secondary-date-mismatch")
+        if unresolved and issued_value is not None:
             _fail_invariant("historical-sample-predicate-mismatch")
         received_dates.append(received)
     if received_dates != sorted(received_dates):
@@ -1071,7 +1070,11 @@ async def _qualify(
     if created_at.tzinfo is None or created_at.utcoffset() is None:
         _fail_invariant("qualification-clock-must-be-aware")
     current_date = created_at.astimezone(UTC).date()
-    if recent.latest_received < current_date - timedelta(days=_RECENCY_MAX_LAG_DAYS):
+    if (
+        current_date < config.scope.end
+        or recent.latest_received > current_date
+        or recent.latest_received < current_date - timedelta(days=_RECENCY_MAX_LAG_DAYS)
+    ):
         _fail_invariant("latest-record-not-current-at-execution")
 
     registry = pilot_registry()
