@@ -1,4 +1,52 @@
-# Camden portal walkthrough
+# Camden: official Open Data feed
+
+## Primary live route (16 September 2026)
+
+Camden collection now uses the official [Planning Applications dataset
+2eiu-s2cw](https://dev.socrata.com/foundry/opendata.camden.gov.uk/2eiu-s2cw),
+published under the Open Government Licence, covering applications from 2010.
+The JSON endpoint is `https://opendata.camden.gov.uk/resource/2eiu-s2cw.json`.
+No browser, planning-portal scraping, or Cloudflare challenge is involved.
+
+Optionally export `CAMDEN_SOCRATA_APP_TOKEN`; it is sent only as an
+`X-App-Token` header, never embedded in stored evidence URLs. `.env` files are
+not loaded automatically. The public endpoint also works without a token.
+
+The date scope is the union of registration, validation, decision and status
+change dates. `--include-open` adds all `Registered`, `Appeal Lodged` and
+unknown-status rows regardless of date. This is completeness within the
+published dataset, not a claim that all historical portal records exist here.
+
+Keyset pagination retains whole primary-key groups, collapses identical
+duplicates, rejects conflicting rows, and reconciles distinct source totals
+and upload watermarks before completing. An interrupted cursor is scope-bound;
+if its source watermark changes, use a fresh data directory. A completed cursor
+starts a new feed read on refresh. These checks detect source changes but are
+not a transactional snapshot guarantee. Source upload timestamps and duplicate
+row IDs do not create semantic application versions.
+
+Native records retain all published columns; normalisation exposes reference,
+proposal, address, application type, status, decision, validation/decision dates,
+coordinates, officer and full-application link. Registration and other source
+dates remain in the native payload. Raw response evidence is retained. The
+legacy source identity and numeric locator are preserved to avoid duplicating
+previously stored applications. Older native records still rebuild offline.
+
+Documents and public comment text are **unsupported** by this feed and marked
+unavailable, never falsely complete or empty. The source's `comment` field is a
+commenting-status label, not representations. Application links are retained,
+not followed. Legacy portal fixtures/parsers remain for offline compatibility;
+the historical portal qualification command is retired.
+
+Live qualification for 18 August–16 September 2026 plus older open applications
+persisted 1,499 distinct applications in four HTTP requests. A second full read
+used four requests and left semantic state unchanged. Both passes verified
+stored evidence, reconciled counts and passed SQLite integrity checks, with
+zero attachment requests. See `.audit/camden-open-data-2026-09-16.json`.
+The feed's latest upload was 16 September 2026 at 02:30:29. Weekly qualification
+cycles remain pending; this establishes application-metadata readiness only.
+
+## Historical portal investigation — superseded, not the live route
 
 Walkthrough date: 15 September 2026.
 
@@ -115,6 +163,5 @@ bootstrap. The sanitized receipt is
 `.audit/camden-live-blocker-2026-09-16.json`; raw HTML and the resumable database
 remain outside Git because they contain source records.
 
-Reproduce the boundary with `scripts/qualify_camden.py --confirm-live
---data-dir <empty-directory> --start 2026-08-18 --end 2026-09-16
---include-open`; add `--resume` for every later attempt against that directory.
+This portal workflow is retired. `scripts/qualify_camden.py` now qualifies the
+official API; it does not reproduce or retry this historical browser boundary.

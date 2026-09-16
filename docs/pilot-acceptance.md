@@ -23,7 +23,7 @@ requirement.
 | Authority | Fixture package | Recorded source evidence | Real adapter boundary | Live bootstrap | Two weekly cycles |
 |---|---|---|---|---|---|
 | Barnet | Verified | Weekly, detail, and child routes recorded; older-open result cap recorded | Bounded weekly adapter; smoke reached paged discovery before HTTP 429 | Open | Open |
-| Camden | Verified | Detail and 16-row document index recorded; live blocker receipt identifies the missing discovery capture; comments and linked child pages open | Typed five-query bounded discovery, Northgate detail, and document-index browser adapter; managed challenge blocked completion after 10 of 331 first-query identities | Blocked | Open |
+| Camden | Verified | Official Socrata dataset 2eiu-s2cw; source counts and evidence reconciled | API metadata feed, 1,499 scoped applications in four requests, unchanged full immediate refresh; documents/comment text unsupported | Verified for published metadata | Open |
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
 | Peak District National Park Authority | Verified | AssureLive form, five-query discovery, detail, and windowed search and document pagination recorded | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED; complete detail and document metadata; public comments unavailable | Verified on 16 September 2026 with 377 references and applications | Pending for 23 and 30 September 2026 |
@@ -40,7 +40,7 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed
+As of 16 September 2026, West Suffolk, OPDC, Peak District, and Camden have completed
 verified live bootstraps. West Suffolk's versioned receipt proves 730
 discovered references, 730 persisted applications, terminal checkpoint
 coherence, no pending retries,
@@ -58,8 +58,12 @@ publishing the identity inventory. Peak District's privacy-safe
 records 377 applications, 95 decision dates, zero retry entries, 1,696
 cumulative durable acquisition requests, 1,299 ordered current capture
 associations, integrity commitments for all 1,560 retained evidence rows, a
-persisted live-ready HTTP manifest, and an immediate zero-network rerun. The
-other twelve authorities still require verified live bootstraps. All fifteen
+persisted live-ready HTTP manifest, and an immediate zero-network rerun.
+Camden completed an official Socrata API metadata bootstrap and unchanged
+immediate refresh for 1,499 applications in four requests per pass. This is API
+evidence, not portal/child-page agreement; the broader document/comment
+requirements are unsupported by that feed. The other eleven authorities still
+require verified live bootstraps. All fifteen
 still require two successful later weekly cycles, so operational qualification
 remains zero of fifteen.
 
@@ -68,7 +72,7 @@ pagination; its saved checkpoint permits a later bounded resume without
 repeating completed pages. Blocked and partial authorities remain in coverage
 denominators and failure reporting until their checks succeed.
 
-Camden's bounded live attempt is also incomplete: visible Chrome persisted four
+Camden's superseded portal attempt was incomplete: visible Chrome persisted four
 applications before the next ordinary detail navigation remained on the
 source's managed challenge for 60 seconds. Its non-terminal checkpoint is at
 offset 10 of 331 on the first query. The eight retained application captures

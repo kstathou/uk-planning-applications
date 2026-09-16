@@ -111,9 +111,9 @@ uv run python scripts/smoke_peak_district.py --confirm-live
 
 Arun and Devon restrict discovery to their recorded received-date paths.
 Peak District's smoke remains a small rolling-week diagnostic, while its
-complete bootstrap uses the qualification command below. Camden resolves one
-explicit reference and deliberately rejects an unsupported bounded date
-search. These commands refuse before creating a live session unless
+complete bootstrap uses the qualification command below. Camden's smoke reads
+one explicit reference from its official Socrata API, without opening the
+planning portal. These commands refuse before creating a live session unless
 `--confirm-live` is present.
 
 Peak District has a dedicated persisted qualification command:
@@ -147,8 +147,10 @@ evidence rows. Peak District is `LIVE_READY` for the receipt-backed HTTP
 contract, but remains operationally unqualified until successful weekly cycles
 occur on or after 23 September and 30 September 2026.
 
-Camden's bounded workflow uses a visible-Chrome session and the official five-
-query inventory:
+Camden's primary workflow uses official dataset `2eiu-s2cw`. Optionally export
+`CAMDEN_SOCRATA_APP_TOKEN` for the API's app-token quota; `.env` is not loaded
+automatically. The qualification command performs two real API collection
+passes, checks evidence and database integrity, and writes a JSON receipt:
 
 ```sh
 uv run python scripts/qualify_camden.py \
@@ -156,12 +158,14 @@ uv run python scripts/qualify_camden.py \
   --start 2026-08-18 --end 2026-09-16 --include-open
 ```
 
-Add `--resume` when reusing that exact directory. The workflow remains blocked,
-not live-ready: five bounded attempts on 16 September 2026 reached a non-
-terminal checkpoint at 10 of 331 records on the first query and persisted four
-applications before an ordinary detail navigation remained on Camden's managed
-challenge for 60 seconds. Comments and the linked child pages also remain fail-
-closed qualification requirements.
+Add `--resume` when reusing that exact directory. An unfinished cursor requires
+the same scope and source upload watermark; if either changes, use a fresh
+directory. Completed cursors restart a full scoped API read on refresh.
+The standard `yimby bootstrap --authority camden` and refresh commands also
+select this HTTP API. Documents and comment text are unavailable from this
+source; neither the portal nor document links are fetched. The 16 September
+bootstrap collected 1,499 applications in four requests, then repeated it
+unchanged in four more requests. Two weekly qualification cycles remain open.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:

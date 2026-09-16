@@ -56,16 +56,7 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         "captured weekly IDOX request and detail-tab contracts",
         LiveTransportKind.HTTP,
     ),
-    AuthorityId("camden"): _status(
-        LiveReadiness.BLOCKED,
-        "bounded five-query browser collection is implemented, but the live "
-        "bootstrap is blocked by Camden's managed challenge and unresolved "
-        "comment and linked-child verification",
-        "the 16 September 2026 blocker receipt records five bounded visible-"
-        "Chrome attempts, a non-terminal 10-of-331 checkpoint, and four "
-        "persisted applications",
-        LiveTransportKind.BROWSER,
-    ),
+    AuthorityId("camden"): CAMDEN_PACKAGE.manifest.live_status,
     AuthorityId("haringey"): _status(
         LiveReadiness.BROWSER_ONLY,
         "the rolling seven-day browser journey is implemented; advanced and "

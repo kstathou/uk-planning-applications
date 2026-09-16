@@ -5,7 +5,7 @@ This reference records the browser census taken on 15–16 September 2026. A suc
 | Authority | Observed sources | Portal shape | Browser result |
 |---|---|---|---|
 | Barnet | `publicaccess.barnet.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery and one detail record verified. See `authorities/barnet.md`. |
-| Camden | Current JSF search, Northgate record pages, and CMWebDrawer documents | Three linked services | An exact-reference search and one decided record were verified. See `authorities/camden.md`. |
+| Camden | Official Socrata Planning Applications dataset `2eiu-s2cw` | HTTP JSON API; historical portal sources retained offline | Primary metadata feed verified live; documents and comment text unsupported. See `authorities/camden.md`. |
 | Haringey | `londonboroughofharingey.my.site.com/pr/s/` | Salesforce public register | Seven-day discovery, one detail record, one explicit empty comment section, and its six-row file index were verified. See `authorities/haringey.md`. |
 | Devon County Council | `planning.devon.gov.uk/` | Custom register | A 90-day discovery query, explicit zero-result query, and one detail record were verified. See `authorities/devon.md`. |
 | Peak District National Park Authority | AssureLive current portal plus legacy information portal | Two linked services | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED were exhausted. All 377 unique details and document-metadata indexes were persisted without attachment bodies. See `authorities/peak-district.md`. |

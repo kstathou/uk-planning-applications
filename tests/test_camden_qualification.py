@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 
 def _qualification_module() -> ModuleType:
-    path = Path(__file__).parents[1] / "scripts" / "qualify_camden.py"
+    path = Path(__file__).parents[1] / "scripts" / "qualify_camden_portal_legacy.py"
     name = "_test_qualify_camden"
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec is not None

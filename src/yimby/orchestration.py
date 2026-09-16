@@ -11,6 +11,7 @@ import stat
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Self
 
+from yimby.authorities.camden.open_data import create_session as camden_session
 from yimby.browser_transport import BrowserWorker, PlaywrightPortalSession
 from yimby.collection import Collector
 from yimby.domain import (
@@ -125,6 +126,8 @@ class LiveSessionFactory:
         """Create the transport named by an authority's live status."""
         transport = self._registry.manifest(authority_id).live_status.transport
         if transport == LiveTransportKind.HTTP:
+            if authority_id == AuthorityId("camden"):
+                return camden_session(self._http_limiter)
             return HttpxPortalSession(limiter=self._http_limiter)
         if transport == LiveTransportKind.BROWSER:
             return await PlaywrightPortalSession.create(worker=self._browser_worker)

@@ -10,6 +10,9 @@ adapters and the required two weekly validation cycles are completed. See the
 Peak District has completed a receipt-backed live bootstrap and is `LIVE_READY`
 for its verified HTTP contract. It remains operationally unqualified until its
 two later weekly cycles complete.
+Camden now uses its official Socrata Open Data API rather than the planning
+portal scraper. Its published application-metadata bootstrap and immediate
+refresh are verified; documents/comment text and weekly qualification are not.
 
 ## Requirements
 
@@ -35,6 +38,9 @@ uv run yimby authorities
 
 # Exercise all packages without network access.
 uv run yimby bootstrap --authority all --days 30 --include-open --fixture
+
+# Collect Camden's official API metadata feed (no browser required).
+uv run yimby bootstrap --authority camden --days 30 --include-open
 
 # Inspect the local operational model without launching a server.
 uv run yimby dashboard --json
@@ -74,3 +80,5 @@ security checks, and the rest of its stable lint rule set. Pytest enforces
 
 Copy `.env.example` to `.env` for local values. The real `.env` is ignored by
 Git; only safe example values belong in `.env.example`.
+Export `CAMDEN_SOCRATA_APP_TOKEN` optionally for the Camden API. The program
+does not automatically load `.env`; export variables in the invoking shell.

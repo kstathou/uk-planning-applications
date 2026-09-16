@@ -131,7 +131,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     }
     assert readiness_by_authority == {
         AuthorityId("barnet"): LiveReadiness.DISCOVERY_ONLY,
-        AuthorityId("camden"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("camden"): LiveReadiness.LIVE_READY,
         AuthorityId("haringey"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("devon"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("peak-district"): LiveReadiness.LIVE_READY,
@@ -165,26 +165,24 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     )
     camden = registry.manifest(AuthorityId("camden")).live_status
     assert camden == LiveStatus(
-        readiness=LiveReadiness.BLOCKED,
+        readiness=LiveReadiness.LIVE_READY,
         reason=(
-            "bounded five-query browser collection is implemented, but the live "
-            "bootstrap is blocked by Camden's managed challenge and unresolved "
-            "comment and linked-child verification"
+            "Official Socrata application metadata feed; documents and "
+            "comment text unsupported; weekly qualification pending"
         ),
         evidence=(
             (
-                "the 16 September 2026 blocker receipt records five bounded visible-"
-                "Chrome attempts, a non-terminal 10-of-331 checkpoint, and four "
-                "persisted applications"
+                "2026-09-16: 1,499 applications, four requests per pass, "
+                "unchanged immediate refresh and verified evidence"
             ),
         ),
-        transport=LiveTransportKind.BROWSER,
+        transport=LiveTransportKind.HTTP,
     )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
     assert snapshot.coverage_implemented == 15
-    assert snapshot.live_ready == 3
+    assert snapshot.live_ready == 4
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
