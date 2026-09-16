@@ -35,16 +35,28 @@ provide an alternative application inventory. Its public script at
 to the generic `planning_demo` WFS namespace because the page published no
 council-specific GIS environment. The advertised
 `https://pa.cheshireeast.gov.uk/gis/ajax.html?fa=getAvailableLayers` route
-redirected to login, and the referenced Tascomi WFS returned HTTP 523 during the
-census. It published no Cheshire East namespace, freshness fact, total, or
-terminal boundary that could support qualification. These API, open-data, GIS,
-export, and dump candidates were therefore rejected before the HTML register
-was considered.
+redirected to login. The script's zero-feature application request, reproduced
+with its `planning_demo` fallback, was:
 
-Those API-first results are reproducible observations from the named requests,
-not content-addressed qualification evidence: their response bodies were not
-added to the evidence store. They therefore constrain source selection but do
-not prove a live inventory or support promotion.
+```text
+https://geoserver.tascomi.com/geoserver/planning_demo/ows?typenames=planning_demo%3Aapplications&service=WFS&request=GetFeature&maxFeatures=0&outputFormat=application%2Fjson&LAYERS=planning_demo%3Aapplications&VERSION=1.1.1
+```
+
+That exact request returned HTTP 523. It published no Cheshire East namespace,
+freshness fact, total, or terminal boundary that could support qualification.
+
+Export and dump discovery followed the complete official publication chain:
+the council open-data page, the organisation-wide ArcGIS item query across all
+item types, the ArcGIS service directory, and the Planning Data organisation
+overview. None exposed a planning-application item, file, service, download, or
+dump, so there was no item-level CSV, GeoJSON, or bulk-download URL to qualify.
+These API, open-data, GIS, export, and dump candidates were therefore rejected
+before the HTML register was considered.
+
+Those API-first results are observations from the exact named requests and
+discovery method, not content-addressed qualification evidence: their response
+bodies were not added to the evidence store. They therefore constrain source
+selection but do not prove a live inventory or support promotion.
 
 ## Search contract
 
