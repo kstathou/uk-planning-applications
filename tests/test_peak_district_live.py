@@ -128,6 +128,7 @@ def _result_page(
     page: int = 0,
     page_size: int = 2,
     hidden_reported: int | None = None,
+    visible_pages: tuple[int, ...] | None = None,
 ) -> bytes:
     rows = "".join(
         f"""
@@ -141,7 +142,9 @@ def _result_page(
     pages = max(1, (reported + page_size - 1) // page_size)
     links = "".join(
         f'<a href="#" onclick="PagingClick(\'{index}\')">{index + 1}</a>'
-        for index in range(pages)
+        for index in (
+            range(pages) if visible_pages is None else visible_pages
+        )
     )
     hidden = reported if hidden_reported is None else hidden_reported
     return f"""
@@ -892,6 +895,13 @@ def test_peak_district_form_and_search_parser_failure_boundaries() -> None:
         peak._parse_search_page(decided, expected_page=0).references[0].reference
         == "NP/DDD/0926/0909"
     )
+    large = _result_page(
+        ("NP/DDD/0926/0909", "NP/SM/0926/0913"),
+        reported=25,
+        page_size=2,
+        visible_pages=tuple(range(10)),
+    )
+    assert peak._parse_search_page(large, expected_page=0).reported == 25
     failures = (
         (
             valid.replace(b"SearchResultsForPagination", b"Changed"),
