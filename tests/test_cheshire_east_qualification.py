@@ -913,6 +913,35 @@ def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
                 "detail|406569",
             ),
         ),
+        (
+            {
+                "weekly_results": _weekly_results().replace(
+                    b"<table>",
+                    b'<table data-result-count="49">',
+                )
+            },
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+                "source-access|weekly-form",
+                "older-open|weekly-received|2024-01-01",
+            ),
+        ),
+        (
+            {
+                "detail": _detail().replace(
+                    b"public_record_id=406569",
+                    b"public_record_id=406569&amp;extra=1",
+                )
+            },
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+                "source-access|weekly-form",
+                "older-open|weekly-received|2024-01-01",
+                "detail|406569",
+            ),
+        ),
     ],
 )
 def test_cheshire_contract_drift_retains_a_resumable_blocker(
