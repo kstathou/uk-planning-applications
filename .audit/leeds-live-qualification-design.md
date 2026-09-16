@@ -50,7 +50,7 @@ class _ActiveAppealQuery(FrozenModel):
     appeal_status: Literal["Appeal lodged"] = "Appeal lodged"
 ```
 
-For 18 August through 16 September 2026, the exact ordered inventory has 42 queries.
+For 18 August through 16 September 2026, the exact ordered inventory has 43 queries.
 
 1. Ten weekly queries cover five intersecting Mondays and both weekly date types.
 2. Two advanced date queries cover validated and decision dates for the exact inclusive window.
