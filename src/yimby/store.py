@@ -51,7 +51,7 @@ from yimby.domain import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
     from yimby.evidence import EvidenceStore
@@ -932,67 +932,130 @@ class SqliteStore:
     def qualification_snapshot(
         self,
         authority_id: AuthorityId,
+        *,
+        inventory: Sequence[SourceReference] | None = None,
     ) -> QualificationSnapshot:
         """Return one authority's durable qualification counts."""
+        inventory_json = (
+            None
+            if inventory is None
+            else json.dumps(
+                [reference.model_dump(mode="json") for reference in inventory],
+                separators=(",", ":"),
+            )
+        )
         counts = next(
             self._connection.execute(
                 """
+                WITH inventory AS (
+                    SELECT
+                        json_extract(value, '$.source_id') AS source_id,
+                        json_extract(value, '$.reference') AS reference,
+                        json_extract(value, '$.locator') AS locator
+                    FROM json_each(:inventory_json)
+                ),
+                scoped_applications AS (
+                    SELECT application.id
+                    FROM applications AS application
+                    WHERE application.authority_id = :authority_id
+                        AND (
+                            :inventory_json IS NULL OR EXISTS (
+                                SELECT 1 FROM inventory
+                                WHERE inventory.source_id = application.source_id
+                                    AND inventory.reference = application.reference
+                                    AND inventory.locator IS application.locator
+                            )
+                        )
+                ),
+                scoped_queue AS (
+                    SELECT queue.source_id, queue.reference
+                    FROM discovery_queue AS queue
+                    WHERE queue.authority_id = :authority_id
+                        AND (
+                            :inventory_json IS NULL OR EXISTS (
+                                SELECT 1 FROM inventory
+                                WHERE inventory.source_id = queue.source_id
+                                    AND inventory.reference = queue.reference
+                                    AND inventory.locator IS queue.locator
+                            )
+                        )
+                )
                 SELECT
-                    (SELECT COUNT(*) FROM applications
-                        WHERE authority_id = :authority_id) AS applications,
-                    (SELECT COUNT(*) FROM discovery_queue
-                        WHERE authority_id = :authority_id) AS discovered_references,
+                    (SELECT COUNT(*) FROM scoped_applications) AS applications,
+                    (SELECT COUNT(*) FROM scoped_queue) AS discovered_references,
                     (SELECT COUNT(*) FROM native_versions AS native
-                        JOIN applications AS application
+                        JOIN scoped_applications AS application
                             ON application.id = native.application_id
-                        WHERE application.authority_id = :authority_id
                     ) AS native_versions,
                     (SELECT COUNT(*) FROM semantic_versions AS semantic
-                        JOIN applications AS application
+                        JOIN scoped_applications AS application
                             ON application.id = semantic.application_id
-                        WHERE application.authority_id = :authority_id
-                            AND semantic.section = 'application'
+                        WHERE semantic.section = 'application'
                     ) AS application_versions,
                     (SELECT COUNT(*) FROM semantic_versions AS semantic
-                        JOIN applications AS application
+                        JOIN scoped_applications AS application
                             ON application.id = semantic.application_id
-                        WHERE application.authority_id = :authority_id
-                            AND semantic.section = 'documents'
+                        WHERE semantic.section = 'documents'
                     ) AS document_versions,
                     (SELECT COUNT(*) FROM semantic_versions AS semantic
-                        JOIN applications AS application
+                        JOIN scoped_applications AS application
                             ON application.id = semantic.application_id
-                        WHERE application.authority_id = :authority_id
-                            AND semantic.section = 'comments'
+                        WHERE semantic.section = 'comments'
                     ) AS comment_versions,
                     (SELECT COUNT(*) FROM retry_queue
                         WHERE authority_id = :authority_id AND status = 'pending'
                     ) AS pending_retries,
                     (SELECT COUNT(*) FROM applications AS application
+                        JOIN scoped_applications AS scoped
+                            ON scoped.id = application.id
                         LEFT JOIN section_current AS current
                             ON current.application_id = application.id
                             AND current.section = 'application'
-                        WHERE application.authority_id = :authority_id
-                            AND current.application_id IS NULL
+                        WHERE current.application_id IS NULL
                     ) AS unmapped_records
                 """,
-                {"authority_id": authority_id},
+                {
+                    "authority_id": authority_id,
+                    "inventory_json": inventory_json,
+                },
             )
         )
         completeness_rows = self._connection.execute(
             """
+            WITH inventory AS (
+                SELECT
+                    json_extract(value, '$.source_id') AS source_id,
+                    json_extract(value, '$.reference') AS reference,
+                    json_extract(value, '$.locator') AS locator
+                FROM json_each(:inventory_json)
+            ),
+            scoped_applications AS (
+                SELECT application.id
+                FROM applications AS application
+                WHERE application.authority_id = :authority_id
+                    AND (
+                        :inventory_json IS NULL OR EXISTS (
+                            SELECT 1 FROM inventory
+                            WHERE inventory.source_id = application.source_id
+                                AND inventory.reference = application.reference
+                                AND inventory.locator IS application.locator
+                        )
+                    )
+            )
             SELECT observation.completeness_json
             FROM observations AS observation
-            JOIN applications AS application
+            JOIN scoped_applications AS application
                 ON application.id = observation.application_id
-            WHERE application.authority_id = ?
-                AND observation.id = (
+            WHERE observation.id = (
                     SELECT MAX(latest.id) FROM observations AS latest
                     WHERE latest.application_id = observation.application_id
                 )
             ORDER BY observation.application_id
             """,
-            (authority_id,),
+            {
+                "authority_id": authority_id,
+                "inventory_json": inventory_json,
+            },
         )
         failed_sections = 0
         for row in completeness_rows:

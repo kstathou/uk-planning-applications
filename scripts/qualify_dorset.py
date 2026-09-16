@@ -381,10 +381,16 @@ def _reference_agreement(
 ) -> DorsetReferenceAgreementV1:
     checkpoint_references = _canonical_references(checkpoint.seen_references)
     durable_references = _canonical_references(
-        store.discovery_state(_AUTHORITY_ID).queued
+        _current_inventory(
+            store.discovery_state(_AUTHORITY_ID).queued,
+            checkpoint_references,
+        )
     )
     application_references = _canonical_references(
-        store.application_references(_AUTHORITY_ID)
+        _current_inventory(
+            store.application_references(_AUTHORITY_ID),
+            checkpoint_references,
+        )
     )
     if (
         not checkpoint_references
@@ -398,6 +404,22 @@ def _reference_agreement(
         checkpoint_sha256=_reference_hash(checkpoint_references),
         durable_queue_sha256=_reference_hash(durable_references),
         applications_sha256=_reference_hash(application_references),
+    )
+
+
+def _current_inventory(
+    durable: Sequence[SourceReference],
+    expected: Sequence[SourceReference],
+) -> tuple[SourceReference, ...]:
+    expected_identities = {
+        (reference.source_id, reference.reference, reference.locator)
+        for reference in expected
+    }
+    return tuple(
+        reference
+        for reference in durable
+        if (reference.source_id, reference.reference, reference.locator)
+        in expected_identities
     )
 
 
@@ -610,16 +632,22 @@ async def _qualify(
         _restart_discovery_checkpoint(store, config.scope)
     prior_status_count = len(store.run_statuses())
     initial = await _collect_once(collector, window, session_factory)
-    first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     checkpoint = _terminal_checkpoint(store, config.scope)
+    first_snapshot = store.qualification_snapshot(
+        _AUTHORITY_ID,
+        inventory=checkpoint.seen_references,
+    )
     proof = _evidence_proof(store)
     agreement = _reference_agreement(store, checkpoint)
     initial_checks = _base_checks(store, first_snapshot, initial, proof, agreement)
     _require(initial_checks)
 
     rerun = await _collect_once(collector, window, session_factory)
-    final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     final_checkpoint = _terminal_checkpoint(store, config.scope)
+    final_snapshot = store.qualification_snapshot(
+        _AUTHORITY_ID,
+        inventory=final_checkpoint.seen_references,
+    )
     final_proof = _evidence_proof(store)
     final_agreement = _reference_agreement(store, final_checkpoint)
     run_statuses = store.run_statuses()[prior_status_count:]
