@@ -124,21 +124,37 @@ def _live_status(
 def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     """Fixture coverage remains distinct from all four live status values."""
     registry = pilot_registry()
-    states = {manifest.live_status.readiness for manifest in registry.manifests()}
-    assert states == {
-        LiveReadiness.BLOCKED,
-        LiveReadiness.BROWSER_ONLY,
-        LiveReadiness.DISCOVERY_ONLY,
+    readiness_by_authority = {
+        manifest.id: manifest.live_status.readiness for manifest in registry.manifests()
     }
-    assert all(
-        manifest.live_status.readiness != LiveReadiness.LIVE_READY
-        for manifest in registry.manifests()
+    assert readiness_by_authority == {
+        AuthorityId("barnet"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("camden"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("haringey"): LiveReadiness.BROWSER_ONLY,
+        AuthorityId("devon"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("peak-district"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("arun"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("opdc"): LiveReadiness.BLOCKED,
+        AuthorityId("dorset"): LiveReadiness.BROWSER_ONLY,
+        AuthorityId("cheshire-east"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("blackburn-with-darwen"): LiveReadiness.BLOCKED,
+        AuthorityId("birmingham"): LiveReadiness.BLOCKED,
+        AuthorityId("leeds"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("cornwall"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("durham"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("west-suffolk"): LiveReadiness.LIVE_READY,
+    }
+    assert registry.manifest(AuthorityId("west-suffolk")).live_status == LiveStatus(
+        readiness=LiveReadiness.LIVE_READY,
+        reason="live bootstrap and zero-request rerun passed on 16 September 2026",
+        evidence=("docs/evidence/west-suffolk-qualification-2026-09-16.json",),
+        transport=LiveTransportKind.HTTP,
     )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
     assert snapshot.coverage_implemented == 15
-    assert snapshot.live_ready == 0
+    assert snapshot.live_ready == 1
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
