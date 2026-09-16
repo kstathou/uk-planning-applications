@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: D103, PLR2004
+# ruff: noqa: D103, E501, PLR2004, SLF001
 
 """Camden GeneralSearch discovery and checkpoint behavior."""
 
@@ -163,7 +163,7 @@ def test_camden_form_submission_preserves_successful_controls_in_order() -> None
     date_request = discovery._search_request(form, date_query)
     date_pairs = _form_pairs(date_request)
 
-    assert date_request.url == discovery.GENERAL_SEARCH_URL
+    assert str(date_request.url) == discovery.GENERAL_SEARCH_URL
     assert date_pairs[:3] == [
         ("__VIEWSTATE", "state"),
         ("repeated", "one"),
@@ -175,7 +175,10 @@ def test_camden_form_submission_preserves_successful_controls_in_order() -> None
     assert ("dateStart", "18-08-2026") in date_pairs
     assert ("dateEnd", "16-09-2026") in date_pairs
     assert date_pairs[-1] == ("csbtnSearch", "Search")
-    assert all(name not in {"ignored-check", "ignored-disabled", "other-submit"} for name, _ in date_pairs)
+    assert all(
+        name not in {"ignored-check", "ignored-disabled", "other-submit"}
+        for name, _ in date_pairs
+    )
 
     status_query = discovery.camden_query_inventory(scope)[3]
     status_pairs = _form_pairs(discovery._search_request(form, status_query))
@@ -196,7 +199,11 @@ def _results_page(
 ) -> bytes:
     first = offset + 1
     last = offset + rows
-    marker = f"Records {first} to {last} of {total}" if rows > 1 else f"Record {first} of {total}"
+    marker = (
+        f"Records {first} to {last} of {total}"
+        if rows > 1
+        else f"Record {first} of {total}"
+    )
     records = "".join(
         f"""
         <tr class="Row1">
@@ -242,7 +249,9 @@ def test_camden_result_pages_reconcile_counts_rows_and_pager() -> None:
     )
     assert first.next_url is not None
     assert dict(parse_qsl(urlsplit(str(first.next_url)).query))["p"] == "10"
-    assert dict(parse_qsl(urlsplit(str(first.next_url)).query))["XMLLoc"] == "fresh-token"
+    assert (
+        dict(parse_qsl(urlsplit(str(first.next_url)).query))["XMLLoc"] == "fresh-token"
+    )
 
     last = discovery._parse_result_page(
         _results_page(offset=10, total=12, rows=2, next_offset=None),
@@ -250,14 +259,17 @@ def test_camden_result_pages_reconcile_counts_rows_and_pager() -> None:
     )
     assert len(last.references) == 2
     assert last.next_url is None
-    assert discovery._parse_result_page(
-        b"No Records Found. Please resubmit search with different criteria.",
-        requested_offset=0,
-    ).reported_count == 0
+    assert (
+        discovery._parse_result_page(
+            b"No Records Found. Please resubmit search with different criteria.",
+            requested_offset=0,
+        ).reported_count
+        == 0
+    )
 
 
 @pytest.mark.parametrize(
-    "body, offset, match",
+    ("body", "offset", "match"),
     [
         (
             _results_page(offset=0, total=11, rows=9, next_offset=9),
