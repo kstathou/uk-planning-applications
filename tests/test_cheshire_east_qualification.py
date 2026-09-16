@@ -70,6 +70,18 @@ def _weekly_form() -> bytes:
     """
 
 
+def _search_results() -> bytes:
+    return b"""
+    <table id="application_results_table">
+      <tr><th>Reference</th><th>Application Type</th><th>Location</th>
+      <th>Proposal</th><th>View</th></tr>
+      <tr><td>26/3335/PRIOR-1A</td><td>Prior Approval</td>
+      <td>139 Abbey Road</td><td>Single storey rear extension.</td>
+      <td><button class="view_application" data-id="406569">View</button></td></tr>
+    </table>
+    """
+
+
 def _weekly_results() -> bytes:
     rows = "".join(
         f"""
@@ -315,6 +327,11 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<input name="valid_date_to" value="">',
             b'<input name="valid_date_to" value=""><input name="valid_date_to">',
         ),
+        _search_form().replace(b'name="fa" value="search"', b'name="fa" value="x"'),
+        _search_form().replace(
+            b'name="valid_date_from" value=""',
+            b'name="valid_date_from" value="" disabled',
+        ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_form(body)
@@ -341,22 +358,33 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
 
 
 def test_cheshire_weekly_contract_failure_boundaries() -> None:
-    counted = (
+    counted_table = (
         _weekly_results()
         .replace(
             b"<table>",
             b'<table data-result-count="50">',
         )
-        .replace(
-            b"</table>",
-            b'</table><nav class="pagination"><a href="?page=2">Next</a></nav>'
-            b"<button>All Results Loaded</button>",
-        )
+    )
+    counted = (
+        b'<section data-weekly-results="true">'
+        + counted_table
+        + b'<nav class="pagination"><a href="?page=2">Next</a></nav>'
+        + b"<button>All Results Loaded</button></section>"
     )
     boundary = cheshire.parse_weekly_boundary(counted)
     assert boundary.reported_total == 50
     assert boundary.pagination_links == ("?page=2",)
     assert boundary.terminal_marker is True
+    unrelated = (
+        _weekly_results()
+        + b'<aside data-result-count="50">'
+        + b'<nav class="pagination"><a href="?page=2">Next</a></nav>'
+        + b"<button>All Results Loaded</button></aside>"
+    )
+    unrelated_boundary = cheshire.parse_weekly_boundary(unrelated)
+    assert unrelated_boundary.reported_total is None
+    assert unrelated_boundary.pagination_links == ()
+    assert unrelated_boundary.terminal_marker is False
     with_empty_table = _weekly_results().replace(b"<table>", b"<table></table><table>")
     assert len(cheshire.parse_weekly_boundary(with_empty_table).rows) == 50
     with_wrong_table = _weekly_results().replace(
@@ -611,6 +639,42 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
     assert resumed == 1
 
 
+def test_cheshire_nonzero_recent_results_remain_unproved(tmp_path: Path) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=lambda: _QualificationSession(
+            search_results=_search_results()
+        ),
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert tuple(blocker.code for blocker in receipt.blockers) == (
+        "recent-window-terminality-unproven",
+        "weekly-list-terminality-unproven",
+        "older-open-inventory-unproven",
+    )
+    checks = {check.name: check.status for check in receipt.checks}
+    assert checks["recent-window-fidelity"] == "failed"
+
+
 def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
     tmp_path: Path,
 ) -> None:
@@ -769,12 +833,24 @@ def test_cheshire_qualification_does_not_hide_programming_defects(
         )
 
 
-def test_cheshire_changed_search_method_becomes_a_typed_blocker(
+@pytest.mark.parametrize(
+    "changed_form",
+    [
+        _search_form().replace(b'method="post"', b'method="get"'),
+        _search_form().replace(b'name="fa" value="search"', b'name="fa" value="x"'),
+        _search_form().replace(
+            b'name="valid_date_from" value=""',
+            b'name="valid_date_from" value="" disabled',
+        ),
+    ],
+    ids=("method", "discriminator", "disabled-date"),
+)
+def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
     tmp_path: Path,
+    changed_form: bytes,
 ) -> None:
     module = _qualification_module()
     data_dir = tmp_path / "qualification"
-    changed_form = _search_form().replace(b'method="post"', b'method="get"')
 
     result = module.main(
         [
@@ -980,7 +1056,13 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         (("evidence", 0, "media_type"), "application/pdf"),
         (("source_contract", "recent", "visible_references"), ["26/X"]),
         (("source_contract", "weekly", "week"), "2030-01-01"),
+        (("source_contract", "weekly", "row_count"), 49),
         (("source_contract", "detail", "locator"), "999999"),
+        (("source_contract", "detail", "application_status"), "Fabricated"),
+        (
+            ("source_contract", "detail", "documents", 0, "description"),
+            "Fabricated",
+        ),
         (
             ("source_contract", "detail", "documents", 0, "url"),
             "https://example.com/evil",
@@ -998,7 +1080,10 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         "evidence-media-type",
         "recent-zero-with-reference",
         "historical-week",
+        "weekly-row-count",
         "detail-locator",
+        "detail-status",
+        "document-description",
         "document-url",
     ),
 )
@@ -1100,3 +1185,35 @@ def test_cheshire_offline_resume_accepts_transport_sanitized_query(
     captured = capsys.readouterr()
     assert '"outcome":"blocked"' in captured.out
     assert captured.err == ""
+
+
+def test_cheshire_resume_without_receipt_refuses_source_io(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "missing receipt constructed a portal session"
+        raise AssertionError(message)
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(tmp_path / "qualification"),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+            "--resume",
+        ],
+        session_factory=forbidden_factory,
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"error": "receipt-required"' in captured.err
