@@ -51,7 +51,31 @@ the human reference, proposal, address, received date, validated date, status,
 and comment-open marker. This confirms the current weekly request and row
 contract, not the open decided, pagination, and incremental checks above.
 
-## Qualification attempt on 16 September 2026
+## First-party machine-readable source audit
+
+The source audit on 16 September 2026 checked the council planning pages,
+download links, open-data listings, and the complete public ArcGIS REST service
+catalogue before returning to the IDOX register. The council planning and
+decision pages linked only to Public Access for application records. The
+County Durham Plan CSVs describe policy and timetable data, not application
+cases. Data Mill North listed Durham plan, rights-of-way, asset, and brownfield
+datasets, but no Durham planning-application inventory.
+
+The ArcGIS 10.91 catalogue exposed 39 service entries under `External`. Every
+MapServer layer name was enumerated at a minimum two-second host cadence. The
+planning-related layers were policy, allocation, constraint, brownfield,
+conservation, tree-preservation, and local-plan datasets. `PROW S53B
+APPLICATIONS.8838` was a public-rights-of-way claim layer, not development
+control. No ArcGIS service exposed application references, case freshness,
+case status, or a complete current-case inventory. The MHCLG Planning Data
+application dataset reported no authoritative data provider, so it was not
+used as a Durham source.
+
+The API-first audit therefore found no first-party machine-readable substitute
+that could prove the rolling window and older-open inventory. The official
+IDOX register remained the only qualifying source.
+
+## Initial blocked qualification attempt on 16 September 2026
 
 The official council planning page remained available with HTTP 200, but the
 linked Public Access host did not accept a connection from the qualification
@@ -67,10 +91,11 @@ method, result cap, or wire-level pagination controls. The prior walkthrough
 did not retain the target or completeness rules for the separate current-case
 list.
 
-The live qualification therefore stopped before implementation. Durham's exact
+That qualification attempt stopped before implementation. Durham's exact
 30-day received-date query and complete older-open inventory remain unproved.
 West Suffolk's status values are portal-owned and were not copied. The adapter
-still fails closed with `DurhamOpenEnumerationUnsupportedError`, registry
-readiness remains `discovery-only`, and both later weekly refresh cycles remain
-pending. The local blocker record is
+at that checkpoint failed closed with
+`DurhamOpenEnumerationUnsupportedError`, registry readiness remained
+`discovery-only`, and both later weekly refresh cycles remained pending. The
+local blocker record was
 `.yimby/qualification-durham-2026-09-16/durham-qualification-blocker-v1.json`.

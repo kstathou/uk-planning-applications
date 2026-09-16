@@ -100,6 +100,28 @@ Without `--confirm-live`, every smoke exits before constructing a live session.
 Each accepts a non-secret state path for resumable pagination. Leeds stops at
 its explicit unverified-detail boundary even when discovery succeeds.
 
+Durham also has an authority-specific bootstrap qualification. It requires an
+exact inclusive 30-day window, the complete older-open scope, and a unique
+data directory:
+
+```sh
+uv run python scripts/qualify_durham.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-durham-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+Add `--resume` only when continuing that exact directory and scope. Discovery
+and detail observations are committed incrementally. On complete success the
+command writes `durham-qualification-v1.json` atomically and immediately runs
+the same scope again. The receipt is rejected unless that rerun makes zero
+requests, every query partition is present in the terminal checkpoint, SQLite
+and evidence paths are intact, no current section is failed, and no attachment
+body was requested. The receipt records the two later weekly cycles as
+`pending`; a same-day rerun never satisfies them.
+
 The captured non-IDOX contracts have matching opt-in smokes:
 
 ```sh
