@@ -239,11 +239,19 @@ def _paginated_result_page(
 def _result_page_with_showing_markers(
     rows: tuple[tuple[str, str], ...],
     count_texts: tuple[str, ...],
+    *,
+    current_page: str = "1",
+    numbered_page: int = 2,
 ) -> bytes:
     markers = "".join(
         f'<span class="showing">{count_text}</span>' for count_text in count_texts
     )
-    page = _uncounted_result_page(rows, capacity="10", numbered_page=2).decode()
+    page = _uncounted_result_page(
+        rows,
+        capacity="10",
+        current_page=current_page,
+        numbered_page=numbered_page,
+    ).decode()
     return f"{markers}{page}".encode()
 
 
@@ -414,6 +422,14 @@ class _IdoxMock:
                         self.validated_legacy_count,
                     ),
                 )
+            if self.showing_counts:
+                return httpx.Response(
+                    200,
+                    content=_result_page_with_showing_markers(
+                        validated_rows,
+                        ("Showing 1-2 of 3", "Showing 1-2 of 3"),
+                    ),
+                )
             return httpx.Response(
                 200,
                 content=_result_page(
@@ -429,16 +445,17 @@ class _IdoxMock:
                 if self.empty_stall
                 else ((self.case.references[2], self.case.locators[2]),)
             )
-            return httpx.Response(
-                200,
-                content=_result_page(
+            content = (
+                _result_page_with_showing_markers(
                     rows,
-                    count=3,
-                    count_text=(
-                        "Showing 3-3 of 3 result" if self.showing_counts else None
-                    ),
-                ),
+                    ("Showing 3-3 of 3 result", "Showing 3-3 of 3 result"),
+                    current_page="2",
+                    numbered_page=1,
+                )
+                if self.showing_counts
+                else _result_page(rows, count=3)
             )
+            return httpx.Response(200, content=content)
         if path.endswith("/applicationDetails.do"):
             locator = request.url.params["keyVal"]
             reference = self.case.references[self.case.locators.index(locator)]
@@ -689,19 +706,23 @@ def test_authority_showing_totals_drive_public_pagination(case: _Case) -> None:
         ("Showing 1-2 of 2", "Showing 1-2 of 3"),
         ("Showing 1-10 of 2",),
         ("Showing 1-2 of 2", "Showing 1-1 of 2"),
+        ("Showing 1-1 of 2",),
+        ("Showing 1-2 of 2",),
     ],
     ids=[
         "trailing-junk",
         "conflicting-totals",
         "impossible-range",
         "conflicting-ranges",
+        "span-row-mismatch",
+        "terminal-forward-page",
     ],
 )
 def test_authority_public_discovery_rejects_ambiguous_showing_markers(
     case: _Case,
     showing_markers: tuple[str, ...],
 ) -> None:
-    """Malformed or conflicting displayed totals cannot truncate pagination."""
+    """Ambiguous displayed ranges cannot truncate pagination."""
     mock = _IdoxMock(case, validated_showing_markers=showing_markers)
     session = _session(mock)
     package = pilot_registry().get(case.authority_id)
