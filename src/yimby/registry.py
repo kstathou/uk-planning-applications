@@ -115,26 +115,30 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("leeds"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "discovery was verified but detail collection remains inconclusive",
-        "portal inventory records discovery-only evidence",
+        "weekly discovery is implemented but the verified detail route fails remotely",
+        "captured Leeds IDOX weekly pagination and remote-exception contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("cornwall"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "weekly and recorded detail collection are implemented; "
+        "older-open is unresolved",
+        "captured Cornwall IDOX weekly, summary, document, and zero-comment contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("durham"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "weekly and recorded detail collection are implemented; "
+        "older-open is unresolved",
+        "captured Durham IDOX weekly, summary, document, and "
+        "comment-availability contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("west-suffolk"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "weekly and recorded detail collection are implemented; "
+        "older-open is unresolved",
+        "captured West Suffolk IDOX weekly, summary, and document contracts",
         LiveTransportKind.HTTP,
     ),
 }
