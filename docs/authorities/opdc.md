@@ -65,21 +65,25 @@ attachment-body requests.
 ## Persisted qualification
 
 The full local bootstrap is stored in
-`.yimby/qualification-opdc-2026-09-16/`. A sanitized
-[committed receipt](../evidence/opdc-qualification-2026-09-16.json) retains the
-scope, query totals, aggregate counts, costs, run statuses, and checks while
-omitting the 55-row identity inventory from the repository.
+`.yimby/qualification-opdc-2026-09-16/`. Its private qualification proof keeps
+the original bootstrap cost and full identity inventory. A terminal resume
+validates that proof against the current store without source requests. The
+[committed receipt](../evidence/opdc-qualification-2026-09-16.json) is
+sanitized. It retains the scope, query totals, aggregate counts, costs, run
+statuses, checks, and evidence commitments while omitting the 55-row identity
+inventory from the repository.
 
 The receipt records:
 
-- 55 applications and 55 discovered references;
-- 55 native, application, document, and comment versions;
-- zero pending retries, failed sections, and unmapped records;
-- SQLite integrity `ok`, no missing evidence paths, and no digest-invalid
-  evidence among 103 content-addressed captures;
-- 168 allowed initial requests transferring 630,334 bytes;
-- zero attachment-body attempts; and
-- an unchanged immediate rerun with zero requests and zero transferred bytes.
+- 55 applications and 55 discovered references.
+- 55 native, application, document, and comment versions.
+- Zero pending retries, failed sections, and unmapped records.
+- SQLite integrity `ok`, 103 distinct content digests, 165 ordered application
+  capture associations, no missing evidence paths, and no digest-invalid
+  evidence.
+- 168 allowed initial requests transferring 630,334 bytes.
+- Zero attachment-body attempts.
+- An unchanged immediate rerun with zero requests and zero transferred bytes.
 
 Both collection runs completed with `succeeded` status. The terminal checkpoint
 contains the exact three-query inventory, each declared total, and the same 55
@@ -87,7 +91,12 @@ source/reference/locator identities held by the durable queue and retained
 applications. Each query's declared total is also tied to its retained identity
 inventory. Every application rebuild input preserves its own ordered detail,
 document-index, and response URL association even when response bodies have the
-same digest.
+same digest. The sanitized receipt records SHA-256 commitments to the sorted
+content-digest set and to the exact source identity plus ordered capture URL,
+media type, and content digest associations. The application input is ordered
+by source ID, reference, and locator while each application's capture order is
+retained. The content-digest input is sorted. Both inputs use ASCII JSON with
+sorted object keys and compact separators before hashing.
 The persisted authority manifest is also checked as `live-ready` with HTTP
 transport before the receipt can be written.
 
