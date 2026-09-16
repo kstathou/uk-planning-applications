@@ -53,7 +53,7 @@ _ADVANCED_QUERY_KEYS = (
     "advanced|searchCriteria.caseStatus|Received Awaiting Registration",
     "advanced|searchCriteria.caseStatus|Pending Appeal Decision",
     "advanced|searchCriteria.appealStatus|Appeal lodged",
-    "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State",
+    "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State ",
     "advanced|searchCriteria.appealStatus|High Court Appeal Lodged",
     "advanced|searchCriteria.appealStatus|Pending Appeal Decision",
 )

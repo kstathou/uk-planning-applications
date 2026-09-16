@@ -129,7 +129,7 @@ _ADVANCED_QUERIES = (
     ),
     _AdvancedQuery(
         field="searchCriteria.appealStatus",
-        value="Appeal Remitted to Secretary of State",
+        value="Appeal Remitted to Secretary of State ",
     ),
     _AdvancedQuery(
         field="searchCriteria.appealStatus",
