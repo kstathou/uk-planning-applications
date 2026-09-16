@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: C901, E501, EM102, PLR0911, PLR0915, PLR2004, SLF001, TRY003
-
-"""Barnet durable live-qualification receipt behaviour."""
+# ruff: noqa: C901, D100, D103, E501, EM101, EM102, PLR0911, PLR0915, PLR2004, SLF001, TRY003
 
 from __future__ import annotations
 
@@ -20,6 +18,7 @@ import pytest
 
 import yimby.authorities.barnet.adapter as barnet_adapter
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+from yimby.transport import SourceUnavailableError
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -223,7 +222,6 @@ def test_barnet_qualification_requires_exact_safe_scope(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Reject implicit access, missing active discovery, and non-30-day scopes."""
     module = _qualification_module()
     created = 0
 
@@ -281,7 +279,6 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Prove exact inventory, evidence, durable identities, and a zero-I/O rerun."""
     module = _qualification_module()
     data_dir = tmp_path / "qualification-barnet-2026-09-16"
     sessions: list[_QualificationSession] = []
@@ -306,7 +303,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
 
     assert len(sessions) == 2
     assert all(session.closed for session in sessions)
-    assert len(sessions[0].requested_urls) == 97
+    assert len(sessions[0].requested_urls) == 102
     assert sessions[1].requested_urls == ()
     assert all(mock.attachment_paths == [] for mock in mocks)
     receipt = json.loads(capsys.readouterr().out)
@@ -396,7 +393,6 @@ def test_barnet_qualification_rejects_failed_current_sections(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A malformed current section prevents any success receipt."""
     module = _qualification_module()
     data_dir = tmp_path / "failed-sections"
     sessions: list[_QualificationSession] = []
@@ -415,6 +411,36 @@ def test_barnet_qualification_rejects_failed_current_sections(
     assert not (data_dir / "barnet-qualification-v1.json").exists()
 
 
+def test_barnet_qualification_reports_source_failures_without_masking_defects(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+
+    def source_failure() -> _QualificationSession:
+        raise SourceUnavailableError(
+            "source unavailable: https://publicaccess.barnet.gov.uk HTTP 429"
+        )
+
+    source_dir = tmp_path / "source"
+    assert module.main(_args(source_dir), session_factory=source_failure) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error == {
+        "error": "source-unavailable",
+        "detail": ("source unavailable: https://publicaccess.barnet.gov.uk HTTP 429"),
+    }
+    assert not (source_dir / "barnet-qualification-v1.json").exists()
+
+    def programmer_defect() -> _QualificationSession:
+        raise AssertionError("programmer defect")
+
+    defect_dir = tmp_path / "defect"
+    with pytest.raises(AssertionError, match="programmer defect"):
+        module.main(_args(defect_dir), session_factory=programmer_defect)
+    assert capsys.readouterr().err == ""
+    assert not (defect_dir / "barnet-qualification-v1.json").exists()
+
+
 @pytest.mark.parametrize(
     "corruption",
     ["evidence", "locator"],
@@ -424,7 +450,6 @@ def test_barnet_qualification_invalidates_stale_receipt_on_corruption(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A prior receipt cannot survive damaged evidence or identity disagreement."""
     module = _qualification_module()
     data_dir = tmp_path / corruption
 

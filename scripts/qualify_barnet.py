@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: INP001, T201
-
-"""Qualify Barnet live collection without changing registry readiness."""
+# ruff: noqa: D100, D101, D103, D107, INP001, T201
 
 from __future__ import annotations
 
@@ -9,11 +7,13 @@ import argparse
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Literal
 
 from pydantic import Field
@@ -21,8 +21,12 @@ from pydantic import Field
 from yimby.authorities.barnet import BARNET_PACKAGE
 from yimby.authorities.barnet.adapter import (
     CURRENT_SOURCE,
+    BarnetCheckpointError,
     BarnetCheckpointV1,
     BarnetDiscoveryScope,
+    BarnetParseError,
+    BarnetReferenceMismatchError,
+    BarnetRoutingError,
     expected_live_query_keys,
 )
 from yimby.collection import Collector
@@ -36,10 +40,14 @@ from yimby.domain import (
 )
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HttpxPortalSession
-from yimby.orchestration import ProcessLock
+from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
-from yimby.transport import PortalSession
+from yimby.transport import (
+    AttachmentBodyBlockedError,
+    PortalSession,
+    SourceUnavailableError,
+)
 
 _AUTHORITY_ID = AuthorityId("barnet")
 _RECEIPT_NAME = "barnet-qualification-v1.json"
@@ -57,8 +65,6 @@ Clock = Callable[[], datetime]
 
 
 class QualificationCounts(FrozenModel):
-    """Durable authority counts after collection."""
-
     applications: int = Field(ge=0)
     discovered_references: int = Field(ge=0)
     native_versions: int = Field(ge=0)
@@ -71,38 +77,28 @@ class QualificationCounts(FrozenModel):
 
 
 class QualificationCost(FrozenModel):
-    """Observable transport cost for one qualification pass."""
-
     request_count: int = Field(ge=0)
     transferred_bytes: int = Field(ge=0)
     attachment_body_requests: int = Field(ge=0)
 
 
 class QualificationCosts(FrozenModel):
-    """First collection and immediate idempotence proof costs."""
-
     initial: QualificationCost
     rerun: QualificationCost
 
 
 class QualificationCheck(FrozenModel):
-    """One named acceptance invariant."""
-
     name: str
     ok: bool
 
 
 class PendingWeeklyRefresh(FrozenModel):
-    """One future refresh that has not happened yet."""
-
     ordinal: Literal[1, 2]
     due_on: date
     status: Literal["pending"] = "pending"
 
 
 class BarnetQualificationReceiptV1(FrozenModel):
-    """Versioned result of a complete local Barnet bootstrap."""
-
     schema_version: Literal[1] = 1
     authority_id: Literal["barnet"] = "barnet"
     created_at: datetime
@@ -121,18 +117,12 @@ class _Config(FrozenModel):
 
 
 class QualificationConfigError(ValueError):
-    """One required safety option or scope value is invalid."""
-
     def __init__(self, code: str) -> None:
-        """Retain the stable error code emitted by the command."""
         super().__init__(code)
 
 
 class QualificationFailedError(RuntimeError):
-    """Qualification invariants did not all hold."""
-
     def __init__(self, failed_checks: tuple[str, ...]) -> None:
-        """Retain the stable names of failed invariants."""
         super().__init__("qualification checks failed")
         self.failed_checks = failed_checks
 
@@ -435,18 +425,36 @@ def _write_receipt(
     path: Path,
     receipt: BarnetQualificationReceiptV1,
 ) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
-    with temporary.open("w", encoding="utf-8") as output:
-        output.write(payload)
-        output.flush()
-        os.fsync(output.fileno())
-    temporary.replace(path)
-    directory = os.open(path.parent, os.O_RDONLY)
+    temporary: Path | None = None
+    replaced = False
     try:
-        os.fsync(directory)
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as output:
+            temporary = Path(output.name)
+            output.write(payload)
+            output.flush()
+            os.fsync(output.fileno())
+        temporary.replace(path)
+        replaced = True
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except BaseException:
+        if replaced:
+            path.unlink(missing_ok=True)
+        raise
     finally:
-        os.close(directory)
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _default_session() -> HttpxPortalSession:
@@ -468,7 +476,6 @@ def main(
     session_factory: SessionFactory = _default_session,
     now: Clock = _default_clock,
 ) -> int:
-    """Run explicit live qualification and emit its atomic receipt."""
     try:
         config = _config(sys.argv[1:] if argv is None else argv)
     except QualificationConfigError as error:
@@ -492,7 +499,18 @@ def main(
             1,
             failed_checks=list(error.failed_checks),
         )
-    except Exception as error:  # noqa: BLE001
+    except SourceUnavailableError as error:
+        return _error("source-unavailable", 1, detail=str(error))
+    except (
+        AttachmentBodyBlockedError,
+        BarnetCheckpointError,
+        BarnetParseError,
+        BarnetReferenceMismatchError,
+        BarnetRoutingError,
+        CollectionAlreadyRunningError,
+        OSError,
+        sqlite3.Error,
+    ) as error:
         return _error("runtime-failure", 1, exception=type(error).__name__)
     print(receipt.model_dump_json())
     return 0

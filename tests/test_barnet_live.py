@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: C901, E501, EM102, PLR0911, PLR0912, PLR0913, PLR0915, PLR2004, SLF001, TRY003
+# ruff: noqa: C901, D103, E501, EM102, PLR0911, PLR0912, PLR0913, PLR0915, PLR2004, SLF001, TRY003
 
 """Barnet authority-native IDOX live-boundary behaviour."""
 
@@ -462,7 +462,11 @@ def test_live_discovery_pages_deduplicates_and_resumes() -> None:
     ] == ["TCP/0003/26", "TCP/0004/26"]
     assert resumed[-1].complete
     assert resumed[-1].next_checkpoint.live_complete
-    posts = [request for request in resumed_mock.requests if request[0] == "POST"]
+    posts = [
+        request
+        for request in resumed_mock.requests
+        if request[0] == "POST" and request[1].endswith("/weeklyListResults.do")
+    ]
     assert [dict(request[2])["dateType"] for request in posts] == [
         "DC_Validated",
         "DC_Decided",
@@ -477,7 +481,6 @@ def test_live_discovery_pages_deduplicates_and_resumes() -> None:
 
 
 def test_live_discovery_rejects_count_mismatch() -> None:
-    """Displayed totals cannot become completeness when their rows disagree."""
     mismatch_session = _session(_BarnetMock(multi_page=True, count_mismatch=True))
 
     async def mismatch() -> None:
@@ -494,7 +497,6 @@ def test_live_discovery_rejects_count_mismatch() -> None:
 
 
 def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
-    """One complete run proves each Barnet-native active partition exactly once."""
     mock = _BarnetMock()
     session = _session(mock)
 
@@ -549,7 +551,6 @@ def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
 
 
 def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
-    """An advanced page checkpoint recreates source session state before page two."""
     adapter = BarnetAdapter()
     first_session = _session(_BarnetMock(advanced_multi_page=True))
 
@@ -558,6 +559,7 @@ def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
             "AsyncGenerator[DiscoveryBatch[BarnetCheckpointV1]]",
             adapter.discover(first_session, WEEK_WITH_OPEN, None),
         )
+        await anext(stream)
         await anext(stream)
         await anext(stream)
         batch = await anext(stream)
@@ -740,7 +742,6 @@ def test_live_fetch_requires_locator_and_form_transport_preserves_pairs() -> Non
 
 
 def test_live_discovery_checkpoint_edges_are_explicit() -> None:
-    """Only an exact-scope terminal checkpoint can suppress live requests."""
     adapter = BarnetAdapter()
 
     async def exercise() -> None:
@@ -1035,7 +1036,6 @@ def test_barnet_form_and_search_boundary_variants() -> None:
 
 
 def test_barnet_result_count_boundaries_fail_closed() -> None:
-    """Visible ranges and uncounted shapes prove terminal pagination."""
     accepted = barnet_adapter._parse_search_page(
         _showing_result_page(
             tuple((f"A-{index}", f"KEY-{index}") for index in range(41, 46)),
@@ -1068,6 +1068,16 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             ),
             search_page=replayed_first_page,
             all_query_keys=("weekly|2026-09-14|DC_Validated",),
+        )
+
+    with pytest.raises(BarnetParseError, match="reported result count"):
+        barnet_adapter._parse_search_page(
+            b'<div data-result-count="1"></div>'
+            + _showing_result_page(
+                (("A", "KEY"),),
+                ("Showing 1-1 of 2",),
+                numbered_page=2,
+            )
         )
 
     invalid_showing_pages = (
@@ -1142,7 +1152,6 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
 
 
 def test_barnet_parses_live_div_comment_layouts() -> None:
-    """Live public and consultee comment cards reconcile with displayed counts."""
     public, public_state = barnet_adapter._parse_comments(
         b'<h2>Public Comments (1)</h2><div id="comments">'
         b'<div class="comment"><h1><span class="consultationName">Redacted</span>'
@@ -1198,7 +1207,6 @@ def test_barnet_parses_live_div_comment_layouts() -> None:
 
 
 def test_barnet_advanced_detail_redirect_boundaries() -> None:
-    """A one-record advanced redirect has one table, locator, and reference."""
     detail = (
         b'<a href="applicationDetails.do?keyVal=KEY">Details</a>'
         b'<table id="simpleDetailsTable"><tr><th>Reference</th><td>A</td></tr>'

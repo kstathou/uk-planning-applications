@@ -23,15 +23,16 @@ If the portal interrupts the run, repeat the command with `--resume`. The comman
 
 `BarnetDiscoveryScope` binds a checkpoint to its start date, end date, and older-open choice. The existing `BarnetCheckpointV1` keeps page progress, the ordered completed-query keys, and the references seen across overlapping searches.
 
-The adapter owns three query families:
+The adapter owns four query families:
 
 - Weekly validated and decided lists for every Monday that intersects the requested range.
+- One received-date search bounded to the exact inclusive qualification range.
 - Four native open-case statuses from Barnet's advanced form.
 - Five native active-appeal statuses from Barnet's advanced form.
 
 Private typed query objects produce one canonical ordered key inventory. The adapter validates the live form against that inventory before it submits a search. The qualification command imports the canonical inventory instead of repeating status strings.
 
-Each query becomes complete only when its parsed rows reconcile with the portal's displayed total and page markers. The adapter yields every page with its next checkpoint so SQLite can commit references and progress together. A resumed page first recreates the server-side search session.
+Each query becomes complete only when its parsed rows reconcile with the portal's displayed total, displayed row span, and page markers. This rejects a replayed earlier page instead of counting it twice. The adapter yields every page with its next checkpoint so SQLite can commit references and progress together. A resumed page first recreates the server-side search session.
 
 `BarnetQualificationReceiptV1` records the exact scope and query inventory, durable counts, first-pass and rerun costs, named checks, and two pending future refresh cycles. The command writes the receipt only after SQLite integrity, evidence hashes, exact durable reference agreement, section completeness, retry state, attachment policy, and an immediate zero-network rerun all pass.
 

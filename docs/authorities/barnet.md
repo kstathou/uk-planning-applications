@@ -44,10 +44,11 @@ The portal depends on a server-side session. Fixture captures must retain the re
 ## Known limits
 
 The implementation now covers validated and decided weekly searches, four
-native older-open case states, and five native active-appeal states. The first
-qualification attempt did not reach every partition because the official
-source rate-limited detail collection. Comment and document pagination also
-remain unproved on a non-empty live section.
+native older-open case states, five native active-appeal states, and an exact
+received-date range for the 30-day bootstrap. The first qualification attempt
+did not reach every partition because the official source rate-limited detail
+collection. Comment and document pagination also remain unproved on a
+non-empty live section.
 
 ## Request contract capture
 

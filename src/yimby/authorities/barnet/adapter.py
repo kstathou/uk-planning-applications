@@ -135,10 +135,21 @@ class _ActiveAppealQuery(FrozenModel):
         return f"advanced|{self.field}|{self.value}"
 
 
-type _AdvancedQuery = _OpenCaseQuery | _ActiveAppealQuery
+class _ReceivedDateQuery(FrozenModel):
+    kind: Literal["received-date"] = "received-date"
+    start: date
+    end: date
+
+    @property
+    def key(self) -> str:
+        return f"advanced|received|{self.start.isoformat()}|{self.end.isoformat()}"
 
 
-_ADVANCED_QUERIES: tuple[_AdvancedQuery, ...] = (
+type _StatusQuery = _OpenCaseQuery | _ActiveAppealQuery
+type _AdvancedQuery = _ReceivedDateQuery | _StatusQuery
+
+
+_STATUS_QUERIES: tuple[_StatusQuery, ...] = (
     _OpenCaseQuery(value="Application Received"),
     _OpenCaseQuery(value="Valid Application Received"),
     _OpenCaseQuery(value="Pending Consideration"),
@@ -167,8 +178,28 @@ def expected_live_query_keys(scope: BarnetDiscoveryScope) -> tuple[str, ...]:
         for monday in _intersecting_mondays(scope)
         for date_type in _DATE_TYPES
     )
-    advanced = tuple(query.key for query in _ADVANCED_QUERIES)
-    return weekly + (advanced if scope.include_open else ())
+    advanced = tuple(query.key for query in _advanced_queries(scope))
+    return weekly + advanced
+
+
+def _advanced_queries(scope: BarnetDiscoveryScope) -> tuple[_AdvancedQuery, ...]:
+    received = _ReceivedDateQuery(start=scope.start, end=scope.end)
+    return (received, *_STATUS_QUERIES) if scope.include_open else (received,)
+
+
+def _is_terminal_checkpoint(
+    checkpoint: BarnetCheckpointV1,
+    scope: BarnetDiscoveryScope,
+) -> bool:
+    return (
+        checkpoint.cursor == "live"
+        and checkpoint.live_scope == scope
+        and checkpoint.completed_queries == expected_live_query_keys(scope)
+        and checkpoint.active_query is None
+        and checkpoint.next_page == 1
+        and checkpoint.query_row_count == 0
+        and len(checkpoint.seen_references) == len(set(checkpoint.seen_references))
+    )
 
 
 class BarnetDocumentV1(FrozenModel):
@@ -292,6 +323,9 @@ class BarnetAdapter:
                 live_scope=requested_scope,
             )
         if progress.live_complete:
+            if not _is_terminal_checkpoint(progress, requested_scope):
+                terminal_error = "terminal checkpoint"
+                raise BarnetCheckpointError(terminal_error)
             yield DiscoveryBatch(
                 references=(),
                 next_checkpoint=progress,
@@ -348,17 +382,6 @@ class BarnetAdapter:
                     break
                 row_count = next_checkpoint.query_row_count
                 page += 1
-        if not window.include_open:
-            if pending_weekly:
-                return
-            completed_checkpoint = progress.model_copy(update={"live_complete": True})
-            yield DiscoveryBatch(
-                references=(),
-                next_checkpoint=completed_checkpoint,
-                complete=True,
-            )
-            return
-
         advanced_form = _parse_advanced_form(
             (
                 await session.fetch(
@@ -371,7 +394,7 @@ class BarnetAdapter:
         )
         pending_advanced = tuple(
             query
-            for query in _ADVANCED_QUERIES
+            for query in _advanced_queries(requested_scope)
             if query.key not in progress.completed_queries
         )
         for advanced_query in pending_advanced:
@@ -631,6 +654,7 @@ class BarnetAdapter:
 class _SearchPage(FrozenModel):
     references: tuple[SourceReference, ...]
     reported: int
+    displayed_range: tuple[int, int] | None = None
 
 
 class _ActivePage(FrozenModel):
@@ -653,6 +677,11 @@ def _advance_checkpoint(
     all_query_keys: tuple[str, ...],
 ) -> tuple[BarnetCheckpointV1, tuple[SourceReference, ...], bool]:
     next_row_count = active_page.row_count + len(search_page.references)
+    if search_page.displayed_range is not None and search_page.displayed_range != (
+        active_page.row_count + 1,
+        next_row_count,
+    ):
+        _raise_parse("displayed result range")
     if next_row_count > search_page.reported or (
         not search_page.references and next_row_count < search_page.reported
     ):
@@ -724,7 +753,7 @@ def _parse_advanced_form(body: bytes) -> Tag:
         if len(controls) != 1:
             _raise_parse("advanced form status fields")
         status_selects[name] = controls[0]
-    for query in _ADVANCED_QUERIES:
+    for query in _STATUS_QUERIES:
         options = tuple(
             str(option.get("value", ""))
             for option in status_selects[query.field].select("option[value]")
@@ -732,7 +761,12 @@ def _parse_advanced_form(body: bytes) -> Tag:
         if options.count(query.value) != 1:
             _raise_parse("advanced form status options")
     field_names = {field.name for field in _form_fields(form)}
-    if not {"_csrf", "searchType"}.issubset(field_names):
+    if not {
+        "_csrf",
+        "searchType",
+        "date(applicationReceivedStart)",
+        "date(applicationReceivedEnd)",
+    }.issubset(field_names):
         _raise_parse("advanced form")
     return form
 
@@ -836,25 +870,26 @@ def _advanced_request(
     page: int,
 ) -> PortalRequest:
     if page == 1:
+        values = {
+            "searchCriteria.caseStatus": "",
+            "searchCriteria.appealStatus": "",
+            "date(applicationReceivedStart)": "",
+            "date(applicationReceivedEnd)": "",
+        }
+        if isinstance(query, _ReceivedDateQuery):
+            values.update(
+                {
+                    "date(applicationReceivedStart)": query.start.strftime("%d/%m/%Y"),
+                    "date(applicationReceivedEnd)": query.end.strftime("%d/%m/%Y"),
+                }
+            )
+        else:
+            values[query.field] = query.value
         return PortalRequest(
             url=HttpUrl(_ADVANCED_RESULTS_URL),
             intent=RequestIntent.SEARCH,
             method=RequestMethod.POST,
-            form=_override_fields(
-                form,
-                {
-                    "searchCriteria.caseStatus": (
-                        query.value
-                        if query.field == "searchCriteria.caseStatus"
-                        else ""
-                    ),
-                    "searchCriteria.appealStatus": (
-                        query.value
-                        if query.field == "searchCriteria.appealStatus"
-                        else ""
-                    ),
-                },
-            ),
+            form=_override_fields(form, values),
         )
     return PortalRequest(
         url=HttpUrl(f"{_PAGED_RESULTS_URL}?action=page&searchCriteria.page={page}"),
@@ -916,7 +951,15 @@ def _parse_result_list(
         ):
             raise
         reported = len(references)
-    return _SearchPage(references=tuple(references), reported=reported)
+    showing_ranges = _showing_ranges(soup, row_count=len(references))
+    displayed_range = None if not showing_ranges else showing_ranges[0][:2]
+    if showing_ranges and showing_ranges[0][2] != reported:
+        _raise_parse("reported result count")
+    return _SearchPage(
+        references=tuple(references),
+        reported=reported,
+        displayed_range=displayed_range,
+    )
 
 
 def _parse_redirected_detail(
@@ -971,20 +1014,7 @@ def _reported_count(
     text = soup.get_text(" ", strip=True)
     if "no results found" in text.casefold():
         return 0
-    showing_ranges = []
-    for marker in soup.select(".showing"):
-        match = re.fullmatch(
-            r"showing\s+(\d+)\s*[-\N{EN DASH}]\s*(\d+)\s+of\s+"
-            r"(\d+)(?:\s+results?)?",
-            marker.get_text(" ", strip=True),
-            re.IGNORECASE,
-        )
-        if match is None:
-            _raise_parse("reported result count")
-        first, last, total = (int(match.group(index)) for index in range(1, 4))
-        if not 1 <= first <= last <= total or last - first + 1 != row_count:
-            _raise_parse("reported result count")
-        showing_ranges.append((first, last, total))
+    showing_ranges = _showing_ranges(soup, row_count=row_count)
     if showing_ranges:
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
@@ -1021,6 +1051,28 @@ def _reported_count(
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _showing_ranges(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+) -> tuple[tuple[int, int, int], ...]:
+    showing_ranges = []
+    for marker in soup.select(".showing"):
+        match = re.fullmatch(
+            r"showing\s+(\d+)\s*[-\N{EN DASH}]\s*(\d+)\s+of\s+"
+            r"(\d+)(?:\s+results?)?",
+            marker.get_text(" ", strip=True),
+            re.IGNORECASE,
+        )
+        if match is None:
+            _raise_parse("reported result count")
+        first, last, total = (int(match.group(index)) for index in range(1, 4))
+        if not 1 <= first <= last <= total or last - first + 1 != row_count:
+            _raise_parse("reported result count")
+        showing_ranges.append((first, last, total))
+    return tuple(showing_ranges)
 
 
 def _visible_result_page(
