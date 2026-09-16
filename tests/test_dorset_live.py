@@ -35,7 +35,6 @@ from yimby.transport import (
     FormField,
     PortalRequest,
     RequestIntent,
-    SourceUnavailableError,
 )
 
 if TYPE_CHECKING:
@@ -922,32 +921,45 @@ def test_dorset_qualification_persists_exact_terminal_receipt(tmp_path: Path) ->
     assert not list(tmp_path.glob(".*.tmp"))
 
 
-def test_dorset_qualification_default_transport_refuses_redirect_hops() -> None:
-    """A redirect cannot issue an unmetered request inside Dorset qualification."""
+def test_dorset_qualification_spaces_every_redirect_hop() -> None:
+    """Each automatic redirect remains a separate Dorset host-limiter turn."""
     module = _qualification_module()
     paths: list[str] = []
+    request_times: list[float] = []
+    elapsed = 0.0
+
+    def clock() -> float:
+        return elapsed
+
+    async def sleep(delay: float) -> None:
+        nonlocal elapsed
+        elapsed += delay
 
     def handler(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
+        request_times.append(elapsed)
         if request.url.path == ADVANCED_PATH:
             return httpx.Response(302, headers={"location": DISCLAIMER_PATH})
         return httpx.Response(200, content=_disclaimer_form())
 
-    session = module._default_session()
-    session._client._transport = httpx.MockTransport(handler)
+    session = module._default_session(
+        transport=httpx.MockTransport(handler),
+        limiter=HostRateLimiter(2.0, clock=clock, sleep=sleep),
+    )
 
     async def fetch_redirect() -> None:
-        with pytest.raises(SourceUnavailableError, match="HTTP 302"):
-            await session.fetch(
-                PortalRequest(
-                    url=HttpUrl(f"{BASE_URL}{ADVANCED_PATH}"),
-                    intent=RequestIntent.SEARCH,
-                )
+        capture = await session.fetch(
+            PortalRequest(
+                url=HttpUrl(f"{BASE_URL}{ADVANCED_PATH}"),
+                intent=RequestIntent.SEARCH,
             )
+        )
+        assert capture.body == _disclaimer_form()
         await session.aclose()
 
     asyncio.run(fetch_redirect())
-    assert paths == [ADVANCED_PATH]
+    assert paths == [ADVANCED_PATH, DISCLAIMER_PATH]
+    assert request_times == [0.0, 2.0]
 
 
 def test_dorset_qualification_fails_closed_on_corrupt_evidence(tmp_path: Path) -> None:

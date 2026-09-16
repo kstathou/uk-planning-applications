@@ -10,11 +10,11 @@ import asyncio
 import json
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 from pydantic import Field
@@ -37,11 +37,14 @@ from yimby.domain import (
     TransportMode,
 )
 from yimby.evidence import EvidenceStore
-from yimby.http_transport import HttpxPortalSession
+from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
 from yimby.transport import PortalRequest, PortalSession
+
+if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
 
 _AUTHORITY_ID = AuthorityId("dorset")
 _RECEIPT_NAME = "dorset-qualification-v1.json"
@@ -172,6 +175,65 @@ class QualificationFailedError(RuntimeError):
         """Keep stable check names for the command's machine-readable failure."""
         super().__init__("qualification checks failed")
         self.failed_checks = failed_checks
+
+
+class _DorsetRateLimitedStream(httpx.AsyncByteStream):
+    """Hold Dorset's host turn until one response body is closed."""
+
+    def __init__(
+        self,
+        stream: httpx.AsyncByteStream,
+        turn: AbstractAsyncContextManager[None],
+    ) -> None:
+        self._stream = stream
+        self._turn = turn
+        self._closed = False
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        try:
+            async for chunk in self._stream:
+                yield chunk
+        finally:
+            await self.aclose()
+
+    async def aclose(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            await self._stream.aclose()
+        finally:
+            await self._turn.__aexit__(None, None, None)
+
+
+class _DorsetRateLimitedTransport(httpx.AsyncBaseTransport):
+    """Apply Dorset's host gap to each network hop, including redirects."""
+
+    def __init__(
+        self,
+        transport: httpx.AsyncBaseTransport,
+        limiter: HostRateLimiter,
+    ) -> None:
+        self._transport = transport
+        self._limiter = limiter
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        turn = self._limiter.turn(request.url.host)
+        await turn.__aenter__()
+        try:
+            response = await self._transport.handle_async_request(request)
+        except BaseException as error:
+            await turn.__aexit__(type(error), error, error.__traceback__)
+            raise
+        return httpx.Response(
+            response.status_code,
+            headers=response.headers,
+            stream=_DorsetRateLimitedStream(response.stream, turn),
+            extensions=response.extensions,
+        )
+
+    async def aclose(self) -> None:
+        await self._transport.aclose()
 
 
 class _MeasuringSession:
@@ -581,13 +643,23 @@ def _write_receipt(path: Path, receipt: DorsetQualificationReceiptV1) -> None:
         os.close(directory)
 
 
-def _default_session() -> HttpxPortalSession:
+def _default_session(
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    limiter: HostRateLimiter | None = None,
+) -> HttpxPortalSession:
+    network_limiter = limiter or HostRateLimiter()
     return HttpxPortalSession(
         client=httpx.AsyncClient(
-            follow_redirects=False,
+            follow_redirects=True,
             headers=_HTTP_HEADERS,
             timeout=httpx.Timeout(30.0),
+            transport=_DorsetRateLimitedTransport(
+                transport or httpx.AsyncHTTPTransport(),
+                network_limiter,
+            ),
         ),
+        limiter=HostRateLimiter(0),
         max_attempts=1,
     )
 
