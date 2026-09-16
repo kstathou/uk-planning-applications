@@ -1473,9 +1473,11 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         )
         == 0
     )
-    capsys.readouterr()
+    resumed_output = json.loads(capsys.readouterr().out)
     assert len(resumed_sessions) == 2
     assert all(session.requested_urls == () for session in resumed_sessions)
+    assert resumed_output == receipt
+    assert json.loads(receipt_path.read_text()) == receipt
 
 
 def test_camden_search_and_parser_boundaries() -> None:
