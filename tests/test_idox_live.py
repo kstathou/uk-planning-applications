@@ -236,6 +236,17 @@ def _paginated_result_page(
     return f"{pager}{page}{pager}".encode()
 
 
+def _result_page_with_showing_markers(
+    rows: tuple[tuple[str, str], ...],
+    count_texts: tuple[str, ...],
+) -> bytes:
+    markers = "".join(
+        f'<span class="showing">{count_text}</span>' for count_text in count_texts
+    )
+    page = _uncounted_result_page(rows, capacity="10", numbered_page=2).decode()
+    return f"{markers}{page}".encode()
+
+
 def _ten_result_rows(case: _Case) -> tuple[tuple[str, str], ...]:
     return tuple(
         (f"{case.references[0]}-{index}", f"{case.locators[0]}-{index}")
@@ -299,6 +310,7 @@ class _IdoxMock:
         uncounted_terminal: bool = False,
         uncounted_label: str = "Ref. No",
         showing_counts: bool = False,
+        validated_showing_markers: tuple[str, ...] | None = None,
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -314,6 +326,7 @@ class _IdoxMock:
         self.uncounted_terminal = uncounted_terminal
         self.uncounted_label = uncounted_label
         self.showing_counts = showing_counts
+        self.validated_showing_markers = validated_showing_markers
         self.current_date_type = ""
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
@@ -371,13 +384,22 @@ class _IdoxMock:
                         ),
                     ),
                 )
+            validated_rows = (
+                (self.case.references[0], self.case.locators[0]),
+                (self.case.references[1], self.case.locators[1]),
+            )
+            if self.validated_showing_markers is not None:
+                return httpx.Response(
+                    200,
+                    content=_result_page_with_showing_markers(
+                        validated_rows,
+                        self.validated_showing_markers,
+                    ),
+                )
             return httpx.Response(
                 200,
                 content=_result_page(
-                    (
-                        (self.case.references[0], self.case.locators[0]),
-                        (self.case.references[1], self.case.locators[1]),
-                    ),
+                    validated_rows,
                     count=1 if self.mismatch else 3,
                     count_text=("Showing 1-2 of 3" if self.showing_counts else None),
                 ),
@@ -638,6 +660,37 @@ def test_authority_showing_totals_drive_public_pagination(case: _Case) -> None:
     assert (
         sum(path.endswith("/pagedSearchResults.do") for _, path, _ in mock.requests)
         == 1
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize(
+    "showing_markers",
+    [
+        ("Showing 1-2 of 2 bedrooms",),
+        ("Showing 1-2 of 2", "Showing 1-2 of 3"),
+    ],
+    ids=["trailing-junk", "conflicting-totals"],
+)
+def test_authority_public_discovery_rejects_ambiguous_showing_markers(
+    case: _Case,
+    showing_markers: tuple[str, ...],
+) -> None:
+    """Malformed or conflicting displayed totals cannot truncate pagination."""
+    mock = _IdoxMock(case, validated_showing_markers=showing_markers)
+    session = _session(mock)
+    package = pilot_registry().get(case.authority_id)
+    parse_error = _member(case, "ParseError")
+
+    async def discover_all() -> None:
+        with pytest.raises(parse_error, match="reported result count"):
+            async for _batch in package.discover(session, WEEK, None):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
+    assert not any(
+        path.endswith("/pagedSearchResults.do") for _, path, _ in mock.requests
     )
 
 
