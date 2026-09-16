@@ -141,7 +141,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         AuthorityId("opdc"): LiveReadiness.LIVE_READY,
         AuthorityId("dorset"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("cheshire-east"): LiveReadiness.DISCOVERY_ONLY,
-        AuthorityId("blackburn-with-darwen"): LiveReadiness.BLOCKED,
+        AuthorityId("blackburn-with-darwen"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("birmingham"): LiveReadiness.BLOCKED,
         AuthorityId("leeds"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("cornwall"): LiveReadiness.DISCOVERY_ONLY,
