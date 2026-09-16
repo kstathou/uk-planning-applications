@@ -865,7 +865,7 @@ def _reported_count(
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
             _raise_parse("reported result count")
-        visible_page = _visible_result_page(soup)
+        visible_page = _visible_result_page(soup, displayed_range)
         current_pages = (
             (visible_page,)
             if visible_page is not None
@@ -898,7 +898,10 @@ def _reported_count(
     return int(match.group(1))
 
 
-def _visible_result_page(soup: BeautifulSoup) -> int | None:
+def _visible_result_page(
+    soup: BeautifulSoup,
+    displayed_range: tuple[int, int, int],
+) -> int | None:
     labels = tuple(
         marker.get_text(" ", strip=True)
         for pager in soup.select(".pager")
@@ -906,12 +909,27 @@ def _visible_result_page(soup: BeautifulSoup) -> int | None:
     )
     if not labels:
         return None
-    if any(re.fullmatch(r"[1-9]\d*", label) is None for label in labels):
+    try:
+        pages = tuple(int(label) for label in labels)
+    except ValueError:
         return _raise_parse("reported result count")
-    pages = tuple(int(label) for label in labels)
-    if any(page != pages[0] for page in pages[1:]):
+    if pages[0] <= 0 or any(page != pages[0] for page in pages[1:]):
         return _raise_parse("reported result count")
-    return pages[0]
+    selected_capacities = soup.select(
+        'select[name="searchCriteria.resultsPerPage"] option[selected]'
+    )
+    try:
+        (selected_capacity,) = selected_capacities
+        capacity = int(str(selected_capacity.get("value", "")).strip())
+    except ValueError:
+        return _raise_parse("reported result count")
+    page = pages[0]
+    first, last, total = displayed_range
+    expected_first = (page - 1) * capacity + 1
+    expected_last = min(expected_first + capacity - 1, total)
+    if capacity <= 0 or (first, last) != (expected_first, expected_last):
+        return _raise_parse("reported result count")
+    return page
 
 
 def _current_result_pages(
