@@ -1364,14 +1364,20 @@ def test_dorset_outstanding_query_clears_retained_received_dates() -> None:
     assert values["ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput"] == ""
     assert values["ctl00$ContentPlaceHolder1$txtDateReceivedTo"] == ""
     assert values["ctl00$ContentPlaceHolder1$txtDateReceivedTo$dateInput"] == ""
-    assert json.loads(
-        values[
-            "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_dateInput_ClientState"
-        ]
-    )["valueAsString"] == ""
-    assert json.loads(
-        values["ctl00_ContentPlaceHolder1_txtDateReceivedTo_dateInput_ClientState"]
-    )["valueAsString"] == ""
+    assert (
+        json.loads(
+            values[
+                "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_dateInput_ClientState"
+            ]
+        )["valueAsString"]
+        == ""
+    )
+    assert (
+        json.loads(
+            values["ctl00_ContentPlaceHolder1_txtDateReceivedTo_dateInput_ClientState"]
+        )["valueAsString"]
+        == ""
+    )
 
 
 def test_dorset_checkpoint_requires_page_one_for_a_fresh_query() -> None:

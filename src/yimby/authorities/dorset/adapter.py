@@ -432,8 +432,7 @@ class DorsetAdapter:
                     validated_date=payload.validated_date,
                     location=(
                         bng_to_wgs84(payload.easting, payload.northing)
-                        if payload.easting is not None
-                        and payload.northing is not None
+                        if payload.easting is not None and payload.northing is not None
                         else None
                     ),
                     source_url=payload.source_url,
