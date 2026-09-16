@@ -7,6 +7,8 @@ import asyncio
 import gzip
 import importlib
 import json
+import os
+import stat
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -300,6 +302,72 @@ def test_cheshire_http_transport_rejects_unknown_media_before_body_read(
     assert body_reads == 0
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
+
+
+def test_cheshire_http_transport_blocks_query_attachment_before_request() -> None:
+    requests = 0
+
+    class ForbiddenTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(
+            self,
+            request: httpx.Request,
+        ) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                content=b"must not be read",
+                request=request,
+            )
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=ForbiddenTransport()),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        request = PortalRequest(
+            url=HttpUrl(
+                "https://pa.cheshireeast.gov.uk/planning/"
+                "?fa=downloadDocument&id=3364715&public_record_id=406569"
+            ),
+            intent=RequestIntent.DETAIL,
+        )
+        with pytest.raises(AttachmentBodyBlockedError, match="cheshireeast"):
+            await session.fetch(request)
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert requests == 0
+    assert session.transferred_bytes == 0
+    assert session.attachment_body_requests == 1
+
+
+def test_evidence_store_syncs_file_then_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sync_modes: list[str] = []
+    real_fsync = os.fsync
+
+    def tracking_fsync(descriptor: int) -> None:
+        mode = os.fstat(descriptor).st_mode
+        sync_modes.append("directory" if stat.S_ISDIR(mode) else "file")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", tracking_fsync)
+    body = b"durable evidence"
+    capture = EvidenceCapture(
+        url=HttpUrl("https://example.test/source"),
+        media_type="text/html",
+        body=body,
+        digest=EvidenceDigest(sha256(body).hexdigest()),
+    )
+
+    EvidenceStore(tmp_path / "evidence").put(capture)
+
+    assert sync_modes == ["file", "directory"]
 
 
 def test_cheshire_replays_exact_successful_search_controls() -> None:
@@ -650,6 +718,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_form().replace(
             b'action="/planning/index.html"', b'action="/planning/wrong"'
         ),
+        _search_form().replace(b'action="/planning/index.html"', b'action="http://["'),
         _search_form().replace(
             b'method="post"', b'method="post" enctype="multipart/form-data"'
         ),
@@ -754,6 +823,10 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
     invalid_forms = (
         b"<html></html>",
         _weekly_form().replace(b'method="post"', b'method="get"'),
+        _weekly_form().replace(
+            b'action="/planning/index.html?fa=getReceivedWeeklyList"',
+            b'action="http://["',
+        ),
         _weekly_form().replace(b'method="post"', b'method="post" enctype="text/plain"'),
         _weekly_form().replace(
             b'<input type="text" id="week" name="week"',
@@ -795,6 +868,10 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_results().replace(
             b"/planning/index.html?fa=getApplication&amp;id=400001",
             b"/planning/wrong?fa=getApplication&amp;id=400001",
+        ),
+        _weekly_results().replace(
+            b"/planning/index.html?fa=getApplication&amp;id=400001",
+            b"http://[",
         ),
         _weekly_results().replace(b"<table>", b'<table hidden data-result-count="50">'),
         _weekly_results().replace(b"<tr><td>24/0001D", b"<tr hidden><td>24/0001D"),
@@ -857,6 +934,10 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
         ),
         (
             _detail().replace(b"374136, 360487", b"unknown"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"374136, 360487", b"9" * 400 + b", 360487"),
             cheshire.CheshireEastParseError,
         ),
         (
@@ -940,6 +1021,13 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
             _detail().replace(
                 b'<a href="/planning/?fa=downloadDocument&amp;id=3364715&amp;public_record_id=406569">Download</a>',
                 b"No link",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b"/planning/?fa=downloadDocument&amp;id=3364715&amp;public_record_id=406569",
+                b"http://[",
             ),
             cheshire.CheshireEastParseError,
         ),
@@ -1267,6 +1355,69 @@ def test_cheshire_resume_continues_from_the_first_incomplete_stage(
         cheshire.detail_request("406569").url,
     ]
     capsys.readouterr()
+
+
+def test_cheshire_resume_uses_only_consumed_completed_journal_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(arguments, session_factory=_QualificationSession) == 1
+    capsys.readouterr()
+    (data_dir / "cheshire-east-qualification-blocker-v2.json").unlink()
+    journal_path = data_dir / "cheshire-east-qualification-journal-v1.json"
+    journal = module.CheshireEastQualificationJournalV1.model_validate_json(
+        journal_path.read_text(encoding="utf-8")
+    )
+    first_evidence = journal.stages[0].evidence
+    assert first_evidence is not None
+    drift = b"<html><body>changed source contract</body></html>"
+    capture = EvidenceCapture(
+        url=first_evidence.source_url,
+        media_type="text/html",
+        body=drift,
+        digest=EvidenceDigest(sha256(drift).hexdigest()),
+    )
+    retained = module._retain_evidence(
+        EvidenceStore(data_dir / "evidence"),
+        (capture,),
+    )[0]
+    first = journal.stages[0].model_copy(update={"evidence": retained})
+    module._write_model(
+        journal_path,
+        journal.model_copy(update={"stages": (first, *journal.stages[1:])}),
+    )
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession()
+        sessions.append(session)
+        return session
+
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert len(sessions) == 1
+    assert sessions[0].requests == []
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt.query_inventory == ("source-access|search-form",)
+    assert len(receipt.evidence) == 1
+    assert receipt.blockers[0].code == "official-search-form-unavailable"
 
 
 def test_cheshire_qualification_implementation_is_covered_package_code() -> None:
@@ -2442,6 +2593,40 @@ def test_cheshire_qualification_rejects_unsafe_data_directories(
     (nonempty / "existing").write_text("x", encoding="utf-8")
     assert module.main([*common, "--data-dir", str(nonempty)]) == 2
     assert "resume-required" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_cheshire_qualification_recovers_initial_journal_publication_crash(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    resume: bool,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / f"qualification-{resume}"
+    data_dir.mkdir()
+    (data_dir / "qualification.lock").write_text("", encoding="utf-8")
+    (data_dir / ".cheshire-east-qualification-journal-v1.json.tmp").write_text(
+        "partial",
+        encoding="utf-8",
+    )
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    if resume:
+        arguments.append("--resume")
+
+    assert module.main(arguments, session_factory=_UnavailableQualificationSession) == 1
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert (data_dir / "cheshire-east-qualification-journal-v1.json").is_file()
+    assert (data_dir / "cheshire-east-qualification-blocker-v2.json").is_file()
 
 
 def test_cheshire_replay_and_retention_defensive_guards(
