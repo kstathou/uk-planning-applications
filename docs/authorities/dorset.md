@@ -29,11 +29,15 @@ numeric and date client state, the portal's active calendar values, and the
 clicked search control in native form order. The outstanding checkbox must be
 present, enabled, and typed as a checkbox; the adapter will not fabricate it.
 Every underlying HTTP hop, including automatic disclaimer redirects, receives
-its own Dorset-local two-second host turn. Pagination posts the captured
-upper `NextButton`, whose value is one space, along with the result form's
-current view state. The terminal result page still renders enabled next-button
-chrome. The two agreeing `Page n of n` markers establish terminality, and the
-adapter never submits a next request from a terminal page.
+its own Dorset-local two-second host turn. Before dispatch, each hop must use
+HTTPS, the exact official host and port, and one of the four register routes
+used by discovery and detail collection. Redirect destinations are checked
+before they can be followed, and every hop's response headers are checked for
+attachment metadata before its body is exposed to HTTPX. Pagination posts the
+captured upper `NextButton`, whose value is one space, along with the result
+form's current view state. The terminal result page still renders enabled
+next-button chrome. The two agreeing `Page n of n` markers establish
+terminality, and the adapter never submits a next request from a terminal page.
 
 Search pages are scanned atomically before detail work is released. Each
 nonterminal page commits an empty work batch plus typed checkpoint proof. The
@@ -111,6 +115,14 @@ rescan, the live outstanding set changed from 135 to 136 pages; one contradicted
 pass failed closed and the explicit query-local restart completed the stable
 136-page scan. The receipt cites the successful nonzero live source run, selects
 two successful zero-network validation runs, and contains no failed check.
+A final adversarial review found that automatic redirects could still leave the
+official origin and that HTTPX could consume an attachment-marked intermediate
+redirect body. Exact pre-dispatch route validation and pre-body response-header
+checks now close both paths. A bounded official smoke of the corrected transport
+completed the disclaimer flow through the three expected official requests,
+transferred 396,105 bytes, and recorded zero attachment-body requests. This
+monotonic boundary correction does not alter the persisted terminal inventory
+or its receipt digest.
 
 ## Readiness
 

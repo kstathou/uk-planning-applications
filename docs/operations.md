@@ -140,7 +140,9 @@ uv run python scripts/qualify_dorset.py \
 The command fixes the inclusive received window at 18 August through 16
 September 2026 and requires the complete outstanding query. It uses one HTTP
 attempt per request, applies the two-second host gap to every Dorset network
-hop including redirects, persists a typed v1 receipt atomically, and performs
+hop including redirects, rejects any hop outside the exact HTTPS register host
+and route allowlist before dispatch, checks every hop's attachment metadata
+before exposing its body, persists a typed v1 receipt atomically, and performs
 an immediate terminal rerun that must make zero network requests. Reuse the
 same directory with `--resume` after a detail
 or transport failure. If the official same-day result ordering invalidates a
