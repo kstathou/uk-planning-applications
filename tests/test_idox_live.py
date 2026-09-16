@@ -885,11 +885,11 @@ def _qualification_module() -> ModuleType:
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
 @pytest.mark.parametrize("search_type", ["Application", "PortalOwnedSentinel"])
-def test_weekly_request_preserves_authoritative_hidden_form_fields(
+def test_weekly_request_honours_authority_hidden_form_contract(
     case: _Case,
     search_type: str,
 ) -> None:
-    """Treat form-owned search discriminators as opaque portal state."""
+    """Preserve opaque state unless an authority binds an investigated value."""
     mock = _IdoxMock(case, search_type=search_type)
     session = _PortalRequestSpy(mock)
     package = pilot_registry().get(case.authority_id)
@@ -899,9 +899,17 @@ def test_weekly_request_preserves_authoritative_hidden_form_fields(
             "AsyncGenerator[DurableDiscoveryBatch]",
             package.discover(session, WEEK, None),
         )
-        await anext(batches)
-        await batches.aclose()
-        await session.aclose()
+        try:
+            await anext(batches)
+        finally:
+            await batches.aclose()
+            await session.aclose()
+
+    if case.authority_id == AuthorityId("leeds") and search_type != "Application":
+        parse_error = _member(case, "ParseError")
+        with pytest.raises(parse_error, match="weekly form discriminators"):
+            asyncio.run(discover_first_page())
+        return
 
     asyncio.run(discover_first_page())
     request = next(request for request in session.requests if request.form)

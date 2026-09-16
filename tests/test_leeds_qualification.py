@@ -93,23 +93,36 @@ CONFIG_ERROR_EXIT = 2
 SECOND_PAGE = 2
 
 
-def _weekly_form() -> bytes:
-    options = "".join(
-        f'<option value="{value}">{value}</option>'
-        for value in (
-            "17/08/2026",
-            "24/08/2026",
-            "31/08/2026",
-            "07/09/2026",
-            "14/09/2026",
+def _weekly_form(*, with_week_options: bool = True) -> bytes:
+    options = (
+        "".join(
+            f'<option value="{value}">{value}</option>'
+            for value in (
+                "17/08/2026",
+                "24/08/2026",
+                "31/08/2026",
+                "07/09/2026",
+                "14/09/2026",
+            )
         )
+        if with_week_options
+        else ""
     )
     return f"""
-    <form>
+    <form action="weeklyListResults.do?action=firstPage" method="post">
       <input type="hidden" name="_csrf" value="weekly-token">
+      <select name="searchCriteria.parish">
+        <option value="" selected>All</option>
+      </select>
+      <select name="searchCriteria.ward">
+        <option value="" selected>All</option>
+      </select>
       <select name="week">{options}</select>
-      <select name="dateType"><option value="DC_Validated">Validated</option></select>
+      <input type="hidden" name="dateType" value="DC_Validated">
       <input type="hidden" name="searchType" value="Application">
+      <input type="hidden" name="tag" value="one">
+      <input type="hidden" name="tag" value="two">
+      <input type="submit" name="submit" value="Search">
     </form>
     """.encode()
 
@@ -300,6 +313,106 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
     """A changed exhaustive partition cannot inherit the investigated proof."""
     with pytest.raises(LeedsParseError, match="case type"):
         asyncio.run(_discover(_LeedsSearchMock(case_types=CASE_TYPES[:-1])))
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (
+            _weekly_form().replace(
+                b'action="weeklyListResults.do?action=firstPage"',
+                b'action="weeklyListResults.do?action=lastPage"',
+            ),
+            "weekly form",
+        ),
+        (
+            _weekly_form().replace(b'method="post"', b'method="get"'),
+            "weekly form",
+        ),
+        (_weekly_form() + b"<form></form>", "weekly form"),
+        (
+            _weekly_form().replace(
+                b'<input type="hidden" name="dateType" value="DC_Validated">',
+                b"",
+            ),
+            "weekly form fields",
+        ),
+        (
+            _weekly_form().replace(
+                b'<select name="searchCriteria.parish">',
+                b'<select name="other.parish">',
+            ),
+            "weekly form fields",
+        ),
+        (
+            _weekly_form().replace(
+                b'<input type="hidden" name="dateType" value="DC_Validated">',
+                (
+                    b'<input type="hidden" name="dateType" '
+                    b'value="DC_Validated" disabled>'
+                ),
+            ),
+            "weekly form fields",
+        ),
+        (
+            _weekly_form().replace(
+                b'<input type="hidden" name="searchType" value="Application">',
+                (
+                    b'<input type="hidden" name="searchType" value="Application">'
+                    b'<input name="searchCriteria.unseen" value="narrow">'
+                ),
+            ),
+            "weekly form fields",
+        ),
+        (
+            _weekly_form().replace(b'value="Application"', b'value="Property"'),
+            "weekly form discriminators",
+        ),
+        (
+            _weekly_form().replace(b'value="DC_Validated"', b'value="DC_Received"'),
+            "weekly form discriminators",
+        ),
+        (
+            _weekly_form().replace(
+                b'<option value="17/08/2026">',
+                b"<option>",
+            ),
+            "weekly week options",
+        ),
+        (
+            _weekly_form(with_week_options=False),
+            "weekly week options",
+        ),
+        (
+            _weekly_form().replace(
+                b'<option value="17/08/2026">',
+                b'<option value="17/08/2026" disabled>',
+            ),
+            "weekly week options",
+        ),
+    ],
+    ids=(
+        "action",
+        "method",
+        "multiple-forms",
+        "missing-date-type",
+        "select-inventory",
+        "disabled-date-type",
+        "unknown-filter",
+        "search-discriminator",
+        "date-discriminator",
+        "unvalued-week-option",
+        "empty-week-options",
+        "disabled-week-option",
+    ),
+)
+def test_leeds_rejects_weekly_form_boundary_drift(
+    body: bytes,
+    message: str,
+) -> None:
+    """Every submitted weekly-search boundary fails closed on source drift."""
+    with pytest.raises(LeedsParseError, match=message):
+        leeds_adapter._parse_form(body)
 
 
 @pytest.mark.parametrize(
@@ -1203,6 +1316,20 @@ def test_leeds_rejects_active_tab_zero_as_empty(body: bytes) -> None:
             "document metadata link",
         ),
         (
+            _documents().replace(
+                b'href="files/tree-plan.pdf"',
+                b'href=""',
+            ),
+            "document metadata link",
+        ),
+        (
+            _documents().replace(
+                b'href="files/tree-plan.pdf"',
+                b'href="#documents"',
+            ),
+            "document metadata link",
+        ),
+        (
             _documents().replace(b"15/09/2026", b"not-a-date"),
             "document published date",
         ),
@@ -1216,6 +1343,8 @@ def test_leeds_rejects_active_tab_zero_as_empty(body: bytes) -> None:
         "pagination",
         "row-width",
         "missing-link",
+        "blank-link",
+        "fragment-link",
         "published-date",
     ),
 )

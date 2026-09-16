@@ -108,6 +108,16 @@ _CASE_TYPES = (
     ("TR", "Tree Works"),
     ("UNK", "Unknown"),
 )
+_WEEKLY_FORM_FIELD_NAMES = (
+    "_csrf",
+    "searchCriteria.parish",
+    "searchCriteria.ward",
+    "week",
+    "dateType",
+    "searchType",
+    "tag",
+    "tag",
+)
 _ADVANCED_FORM_FIELD_NAMES = (
     "_csrf",
     "searchCriteria.reference",
@@ -633,11 +643,46 @@ def _advance_checkpoint(
 
 def _parse_form(body: bytes) -> Tag:
     soup = BeautifulSoup(body, "html.parser")
-    form = soup.select_one("form")
-    if not isinstance(form, Tag):
+    forms = soup.select("form")
+    if not forms or not isinstance(forms[0], Tag):
         _raise_parse("form")
-    if not any(field.name == "_csrf" and field.value for field in _form_fields(form)):
+    form = forms[0]
+    fields = _form_fields(form)
+    if not any(field.name == "_csrf" and field.value for field in fields):
         _raise_parse("_csrf")
+    action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
+    if (
+        len(forms) != 1
+        or str(form.get("method", "")).casefold() != "post"
+        or action != _WEEKLY_RESULTS_URL
+    ):
+        _raise_parse("weekly form")
+    hidden_names = Counter(
+        str(control.get("name"))
+        for control in form.select('input[type="hidden"][name]')
+    )
+    if hidden_names != Counter(("_csrf", "dateType", "searchType", "tag", "tag")):
+        _raise_parse("weekly form fields")
+    select_names = Counter(
+        str(control.get("name")) for control in form.select("select[name]")
+    )
+    if select_names != Counter(
+        ("searchCriteria.parish", "searchCriteria.ward", "week")
+    ):
+        _raise_parse("weekly form fields")
+    if any(_is_control_disabled(control) for control in form.select("[name]")):
+        _raise_parse("weekly form fields")
+    if Counter(field.name for field in fields) != Counter(_WEEKLY_FORM_FIELD_NAMES):
+        _raise_parse("weekly form fields")
+    week_options = form.select('select[name="week"] option')
+    if not week_options or any(
+        not option.has_attr("value") or _is_control_disabled(option)
+        for option in week_options
+    ):
+        _raise_parse("weekly week options")
+    values = {field.name: field.value for field in fields}
+    if values["dateType"] != "DC_Validated" or values["searchType"] != "Application":
+        _raise_parse("weekly form discriminators")
     return form
 
 
@@ -1106,12 +1151,13 @@ def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
     published_index, type_index, description_index, view_index = (
         (0, 1, 2, 3) if compact else (1, 2, 4, 5)
     )
-    links = tuple(
-        HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))
+    hrefs = tuple(
+        str(link.get("href", "")).strip()
         for link in cells[view_index].select("a[href]")
     )
-    if not links:
+    if not hrefs or any(not href or href.startswith("#") for href in hrefs):
         _raise_parse("document metadata link")
+    links = tuple(HttpUrl(urljoin(f"{BASE_URL}/", href)) for href in hrefs)
     published = cells[published_index].get_text(" ", strip=True)
     published_date = _parse_date(published) if published else None
     if published and published_date is None:

@@ -30,12 +30,14 @@ The unpartitioned current search exceeds the portal result cap. A capped query
 is a qualification failure, never an empty result. The adapter therefore
 requires the exact observed case-type taxonomy, exhausts every page, reconciles
 displayed totals, binds every response to its requested page, and fails closed
-if the form, taxonomy, or pagination identity drifts. Its exact named-control
-inventory and cardinality allow only the two captured repeated opaque fields,
-so an unknown filter or duplicate discriminator cannot silently narrow the
-search. Disabled named controls or options and unvalued options also fail
-closed, including disabled state inherited from a fieldset or optgroup. A
-repeated first page cannot advance a resumed checkpoint.
+if the form, taxonomy, or pagination identity drifts. Both weekly and advanced
+forms bind their POST target, named-control inventory, cardinality, enabled
+state, and application discriminators to the captured contracts. Only the two
+captured repeated opaque fields are allowed, so an unknown filter or duplicate
+discriminator cannot silently narrow the search. Disabled named controls or
+options and unvalued options also fail closed, including disabled state
+inherited from a fieldset or optgroup. A repeated first page cannot advance a
+resumed checkpoint.
 
 The clean live run completed all ten weekly partitions with totals
 `116, 162, 154, 140, 102, 101, 156, 140, 0, 93`. It then reached page 10 and
