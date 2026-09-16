@@ -74,6 +74,39 @@ def _complete_results(references: tuple[str, ...]) -> bytes:
     return f"<table><tr><th>Reference</th></tr>{rows}</table>".encode()
 
 
+def _detail_with_documents(reference: str) -> bytes:
+    return f"""
+    <table>
+      <tr><th>Reference</th><td>{reference}</td></tr>
+      <tr><th>Proposal</th><td>Build one home</td></tr>
+      <tr><th>Status</th><td>Undecided</td></tr>
+      <tr><th>Parish</th><td>Bognor Regis</td></tr>
+    </table>
+    <form method="post" action="showDocuments?reference={reference}&amp;module=pl">
+      <input type="submit" name="ViewDocuments" value="View Documents">
+    </form>
+    """.encode()
+
+
+def _document_index() -> bytes:
+    return b"""
+    <form method="post" action="showDocuments?reference=BR/1/26/PL&amp;module=pl&amp;filterBy=TYPE">
+      <select name="selectedtype"><option value="" selected>All</option></select>
+    </form>
+    <table>
+      <tr><th>Type</th><th></th><th>Date</th><th></th><th>Description</th></tr>
+      <tr>
+        <td><a href="viewDocument?file=decision-1.pdf&amp;module=pl">Decision</a></td>
+        <td></td><td>15/09/2026</td><td></td><td>Decision notice</td>
+      </tr>
+      <tr>
+        <td><a href="viewDocument?file=plan-1.pdf&amp;module=pl">Plan</a></td>
+        <td></td><td>14 Sep 2026</td><td></td><td></td>
+      </tr>
+    </table>
+    """
+
+
 class _Session:
     def __init__(
         self,
@@ -574,3 +607,61 @@ def test_arun_active_query_replay_and_ambiguous_exact_results_fail_closed() -> N
     )
     with pytest.raises(arun.ArunCheckpointError):
         arun._complete_query(terminal, plan[0], 0, ())
+
+
+def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -> None:
+    reference = SourceReference(
+        source_id=arun.SOURCE,
+        reference="BR/1/26/PL",
+        locator=f"{arun.BASE_URL}/planningDetails?reference=BR%2F1%2F26%2FPL",
+    )
+
+    def responder(request: PortalRequest) -> bytes:
+        url = str(request.url)
+        if "planningDetails" in url:
+            return _detail_with_documents(reference.reference)
+        if "showDocuments" in url:
+            assert request.method == RequestMethod.POST
+            assert [(field.name, field.value) for field in request.form] == [
+                ("ViewDocuments", "View Documents")
+            ]
+            return _document_index()
+        raise AssertionError(url)
+
+    session = _Session(responder)
+    snapshot = asyncio.run(arun.ArunAdapter().fetch(session, reference))
+
+    assert snapshot.completeness.documents.kind == "complete"
+    assert snapshot.completeness.comments.kind == "unavailable"
+    assert len(snapshot.evidence) == 2
+    assert len(snapshot.payload.documents) == 2
+    decision, plan = snapshot.payload.documents
+    assert isinstance(decision, arun.ArunDocumentV1)
+    assert decision.title == "Decision notice"
+    assert decision.document_type == "Decision"
+    assert decision.published_date == date(2026, 9, 15)
+    assert decision.description == "Decision notice"
+    assert len(decision.source_links) == 1
+    assert plan.title == "Plan"
+    assert plan.description is None
+    assert all("viewDocument" not in url for url in session.requested_urls)
+
+
+def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> None:
+    detail = _detail_with_documents("BR/1/26/PL")
+    with pytest.raises(arun.ArunParseError, match="document action reference"):
+        arun._document_request(detail, "OTHER/1")
+    with pytest.raises(arun.ArunParseError, match="document action"):
+        arun._document_request(detail + detail, "BR/1/26/PL")
+    with pytest.raises(arun.ArunParseError, match="document pagination"):
+        arun._parse_document_index(
+            _document_index() + b'<nav class="pagination">next</nav>'
+        )
+    with pytest.raises(arun.ArunParseError, match="document filter"):
+        arun._parse_document_index(
+            _document_index().replace(b'value="" selected', b'value="PLAN" selected')
+        )
+    documents = arun._parse_document_index(
+        b"No documents found for this planning application"
+    )
+    assert documents == ()
