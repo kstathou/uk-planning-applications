@@ -1409,6 +1409,30 @@ def test_dorset_detail_fails_closed_on_malformed_metadata(
         )
 
 
+@pytest.mark.parametrize(("label", "field"), [("Ward", "ward"), ("Parish", "parish")])
+def test_dorset_detail_preserves_explicitly_blank_optional_location(
+    label: str,
+    field: str,
+) -> None:
+    """Present but blank optional location labels remain honest native absence."""
+    reference = _live_reference()
+
+    def clear_value(soup: BeautifulSoup) -> None:
+        location_label = soup.find("span", string=label)
+        assert isinstance(location_label, Tag)
+        value = location_label.find_next_sibling("p")
+        assert isinstance(value, Tag)
+        value.clear()
+
+    native = dorset_adapter._parse_live_detail(
+        _mutated(_detail_page(reference.reference), clear_value),
+        reference,
+        HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={reference.locator}"),
+    )
+
+    assert getattr(native, field) is None
+
+
 def _grid_script(payload: Any, *, direct: bool = False) -> str:
     encoded = json.dumps(payload, separators=(",", ":"))
     value = encoded if direct else json.dumps(encoded)
