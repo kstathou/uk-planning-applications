@@ -45,7 +45,7 @@ row 90 of the first advanced validated-date partition. At that checkpoint,
 1,148 unique references exactly matched 1,148 retained applications, with zero
 failed current sections and zero pending retries.
 
-The first page-10 attempt returned an unparseable portal response. Six bounded
+The first page-10 attempt returned an unparseable portal response. Seven bounded
 resume commands then each exhausted three no-progress sessions with
 `SourceUnavailableError`. The checkpoint remains resumable at
 `advanced|validated|2026-08-18|2026-09-16`, page 10, row 90. Because only 10 of
