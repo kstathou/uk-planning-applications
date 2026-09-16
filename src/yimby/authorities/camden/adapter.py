@@ -7,12 +7,12 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime
 from html import unescape
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, Self
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pydantic import HttpUrl
+from pydantic import HttpUrl, model_validator
 
 from yimby.authorities.camden.discovery import (
     CAMDEN_SOURCE,
@@ -69,6 +69,7 @@ _REDIRECT_BASE = (
     "https://planningrecords.camden.gov.uk/NECSWS/Redirection/redirect.aspx"
 )
 _DATE_FORMATS = ("%d/%m/%Y", "%d %B %Y", "%d %b %Y", "%Y-%m-%d")
+_DATETIME_FORMATS = ("%d/%m/%Y %H:%M:%S",)
 _MINIMUM_LABELLED_CELLS = 2
 
 
@@ -78,7 +79,18 @@ class CamdenDocumentV1(FrozenModel):
     title: str
     url: HttpUrl
     created_date: date | None = None
+    created_at: datetime | None = None
     document_type: str | None = None
+
+    @model_validator(mode="after")
+    def _consistent_created_values(self) -> Self:
+        if self.created_at is not None and self.created_date not in {
+            None,
+            self.created_at.date(),
+        }:
+            message = "Camden document date disagrees with its timestamp"
+            raise ValueError(message)
+        return self
 
 
 class CamdenApplicationV1(FrozenModel):
@@ -87,8 +99,8 @@ class CamdenApplicationV1(FrozenModel):
     public_reference: str
     proposal: str
     current_status: str
-    grid_easting: int
-    grid_northing: int
+    grid_easting: int | None
+    grid_northing: int | None
     documents: tuple[CamdenDocumentV1, ...]
     comments: tuple[NativeComment, ...]
     northgate_key: str | None = None
@@ -99,6 +111,13 @@ class CamdenApplicationV1(FrozenModel):
     case_officer: str | None = None
     published_parties: tuple[str, ...] = ()
     document_state: SectionState | None = None
+
+    @model_validator(mode="after")
+    def _complete_coordinate_pair(self) -> Self:
+        if (self.grid_easting is None) != (self.grid_northing is None):
+            message = "Camden coordinates must be both present or both absent"
+            raise ValueError(message)
+        return self
 
 
 class CamdenAdapter:
@@ -249,19 +268,25 @@ class CamdenAdapter:
             )
         )
         fields = _parse_dataview(detail.body)
-        published = _required_field(fields, "reference", "application reference")
+        published = _required_field(
+            fields,
+            "application number",
+            "reference",
+            "application reference",
+        )
         if published != reference.reference:
             raise CamdenReferenceMismatchError(reference.reference, published)
         evidence: list[EvidenceCapture] = [detail]
         documents, document_state = await _fetch_documents(
             session, reference.reference, evidence
         )
+        grid_easting, grid_northing = _coordinate_pair(fields)
         payload = CamdenApplicationV1(
             public_reference=published,
             proposal=_required_field(fields, "proposal", "description"),
             current_status=_required_field(fields, "current status", "status"),
-            grid_easting=_required_integer(fields, "easting", "bng easting"),
-            grid_northing=_required_integer(fields, "northing", "bng northing"),
+            grid_easting=grid_easting,
+            grid_northing=grid_northing,
             documents=documents,
             comments=(),
             northgate_key=reference.locator,
@@ -301,6 +326,11 @@ class CamdenAdapter:
         """Map Camden-native names while preserving native coordinates."""
         payload = snapshot.payload
         evidence = snapshot.evidence[0].digest
+        location = (
+            None
+            if payload.grid_easting is None or payload.grid_northing is None
+            else bng_to_wgs84(payload.grid_easting, payload.grid_northing)
+        )
         return NormalisedObservation(
             authority_id=self.manifest.id,
             reference=snapshot.reference,
@@ -323,7 +353,7 @@ class CamdenAdapter:
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
                 address=payload.address,
-                location=bng_to_wgs84(payload.grid_easting, payload.grid_northing),
+                location=location,
                 published_parties=payload.published_parties,
                 officer_name=payload.case_officer,
                 source_url=snapshot.evidence[0].url,
@@ -423,23 +453,39 @@ def _parse_documents(body: bytes) -> tuple[CamdenDocumentV1, ...]:
     soup = BeautifulSoup(body, "html.parser")
     reported = _reported_document_count(soup)
     documents = []
-    for row in soup.select("[data-document-row], tbody tr"):
-        link = row.select_one("a[href]")
+    record_table = soup.select_one("table#recordtable")
+    if isinstance(record_table, Tag):
+        rows = tuple(record_table.select("tbody tr"))
+    elif soup.select_one("[data-result-count]") is not None:
+        rows = tuple(soup.select("[data-document-row], tbody tr"))
+    else:
+        rows = ()
+    for row in rows:
+        values = _row_values(row)
+        title_cell = _row_cell(row, "title", "description")
+        link = (
+            None
+            if not isinstance(title_cell, Tag)
+            else title_cell.select_one("a[href]")
+        )
+        if not isinstance(link, Tag):
+            link = row.select_one("a[href]")
         if not isinstance(link, Tag):
             continue
-        values = _row_values(row)
         title = _mapping_value(values, "title", "description") or link.get_text(
             " ", strip=True
         )
         if not title:
             _raise_parse("document title")
+        created_at = _parse_document_datetime(
+            _mapping_value(values, "created date", "date created", "date")
+        )
         documents.append(
             CamdenDocumentV1(
                 title=title,
                 url=HttpUrl(urljoin(f"{DOCUMENT_BASE}/", str(link.get("href", "")))),
-                created_date=_parse_date(
-                    _mapping_value(values, "created date", "date created", "date")
-                ),
+                created_date=None if created_at is None else created_at.date(),
+                created_at=created_at,
                 document_type=_mapping_value(values, "document type", "type"),
             )
         )
@@ -452,6 +498,16 @@ def _reported_document_count(soup: BeautifulSoup) -> int:
     element = soup.select_one("[data-result-count]")
     if isinstance(element, Tag):
         return int(str(element.get("data-result-count")))
+    summary = soup.select_one("table#casefilesummary")
+    if isinstance(summary, Tag):
+        for row in summary.select("tr"):
+            cells = row.find_all(["th", "td"], recursive=False)
+            if len(cells) < _MINIMUM_LABELLED_CELLS:
+                continue
+            label = _normalise_label(cells[0].get_text(" ", strip=True))
+            value = cells[-1].get_text(" ", strip=True)
+            if label == "records" and value.isdigit():
+                return int(value)
     match = re.search(
         r"(?:reported|found|total)\s+(\d+)\s+(?:documents?|records?)",
         soup.get_text(" ", strip=True),
@@ -481,27 +537,85 @@ def _row_values(row: Tag) -> dict[str, str]:
     return {}
 
 
+def _row_cell(row: Tag, *names: str) -> Tag | None:
+    table = row.find_parent("table")
+    if not isinstance(table, Tag):
+        return None
+    headers = tuple(
+        _normalise_label(item.get_text(" ", strip=True))
+        for item in table.select("thead th")
+    )
+    cells = row.find_all("td", recursive=False)
+    for name in names:
+        normalized = _normalise_label(name)
+        if normalized in headers and len(headers) == len(cells):
+            return cells[headers.index(normalized)]
+    return None
+
+
 def _parse_dataview(body: bytes) -> dict[str, str]:
     soup = BeautifulSoup(body, "html.parser")
-    view = soup.select_one(".dataview")
-    if not isinstance(view, Tag):
+    views = soup.select(".dataview")
+    if not views:
         _raise_parse("Northgate dataview")
+    candidates = []
+    for view in views:
+        fields = _dataview_fields(view)
+        if _mapping_value(fields, "application number", "reference") is not None:
+            candidates.append(fields)
+    if len(candidates) != 1:
+        _raise_parse("Northgate labelled values")
+    return candidates[0]
+
+
+def _dataview_fields(view: Tag) -> dict[str, str]:
     fields: dict[str, str] = {}
     for row in view.select("tr"):
         cells = row.find_all(["th", "td"], recursive=False)
         if len(cells) >= _MINIMUM_LABELLED_CELLS:
-            fields[_normalise_label(cells[0].get_text(" ", strip=True))] = cells[
-                -1
-            ].get_text(" ", strip=True)
+            _set_labelled_field(
+                fields,
+                cells[0].get_text(" ", strip=True),
+                cells[-1].get_text(" ", strip=True),
+            )
     for term in view.select("dt"):
         value = term.find_next_sibling("dd")
         if isinstance(value, Tag):
-            fields[_normalise_label(term.get_text(" ", strip=True))] = value.get_text(
-                " ", strip=True
+            _set_labelled_field(
+                fields,
+                term.get_text(" ", strip=True),
+                value.get_text(" ", strip=True),
             )
-    if not fields:
-        _raise_parse("Northgate labelled values")
+    for container in view.select("li > div"):
+        label = container.find("span", recursive=False)
+        if not isinstance(label, Tag):
+            continue
+        values = []
+        for child in container.children:
+            if child is label:
+                continue
+            text = (
+                child.get_text(" ", strip=True)
+                if isinstance(child, Tag)
+                else str(child)
+            )
+            if text.strip():
+                values.append(text.strip())
+        _set_labelled_field(
+            fields,
+            label.get_text(" ", strip=True),
+            " ".join(values),
+        )
     return fields
+
+
+def _set_labelled_field(fields: dict[str, str], label: str, value: str) -> None:
+    normalized = _normalise_label(label)
+    cleaned = " ".join(value.split())
+    existing = fields.get(normalized)
+    if existing is not None and existing != cleaned:
+        _raise_parse(f"duplicate detail label {label}")
+    fields[normalized] = cleaned
 
 
 def _normalise_label(value: str) -> str:
@@ -536,6 +650,34 @@ def _required_integer(fields: dict[str, str], *names: str) -> int:
         _raise_parse(f"integer {'/'.join(names)}")
 
 
+def _coordinate_pair(fields: dict[str, str]) -> tuple[int | None, int | None]:
+    combined = _optional_field(fields, "location co ordinates", "location coordinates")
+    if combined is not None:
+        match = re.fullmatch(
+            r"Easting\s*(\d*)\s*Northing\s*(\d*)",
+            combined,
+            re.IGNORECASE,
+        )
+        if match is None:
+            _raise_parse("coordinate pair")
+        easting, northing = match.groups()
+        if not easting and not northing:
+            return None, None
+        if not easting or not northing:
+            _raise_parse("coordinate pair")
+        return int(easting), int(northing)
+    easting = _optional_field(fields, "easting", "bng easting")
+    northing = _optional_field(fields, "northing", "bng northing")
+    if easting is None and northing is None:
+        return None, None
+    if easting is None or northing is None:
+        _raise_parse("coordinate pair")
+    try:
+        return int(easting), int(northing)
+    except ValueError:
+        _raise_parse("coordinate pair")
+
+
 def _parse_date(value: str | None) -> date | None:
     if value is None:
         return None
@@ -545,6 +687,24 @@ def _parse_date(value: str | None) -> date | None:
         except ValueError:
             continue
     return _raise_parse("document date")
+
+
+def _parse_document_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    for date_format in _DATETIME_FORMATS:
+        try:
+            return datetime.strptime(  # noqa: DTZ007 - Source exposes wall time only.
+                value, date_format
+            )
+        except ValueError:
+            continue
+    parsed_date = _parse_date(value)
+    return (
+        None
+        if parsed_date is None
+        else datetime.combine(parsed_date, datetime.min.time())
+    )
 
 
 def _required_fixture(value: str, pattern: str, field: str) -> str:

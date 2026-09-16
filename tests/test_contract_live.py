@@ -294,7 +294,15 @@ def _camden_result(reference: str = "2026/2706/L", locator: str = "681726") -> b
     """.encode()
 
 
-def _camden_detail(reference: str = "2026/2706/L") -> bytes:
+def _camden_detail(
+    reference: str = "2026/2706/L", *, coordinates: bool = True
+) -> bytes:
+    coordinate_rows = (
+        "<tr><th>Easting</th><td>530748</td></tr>"
+        "<tr><th>Northing</th><td>182755</td></tr>"
+        if coordinates
+        else ""
+    )
     return f"""
     <div class="dataview"><table>
       <tr><th>Reference</th><td>{reference}</td></tr>
@@ -306,8 +314,7 @@ def _camden_detail(reference: str = "2026/2706/L") -> bytes:
       <tr><th>Applicant</th><td>Applicant Three</td></tr>
       <tr><th>Agent</th><td>Agent Three</td></tr>
       <tr><th>Ward</th><td>Camden Square</td></tr>
-      <tr><th>Easting</th><td>530748</td></tr>
-      <tr><th>Northing</th><td>182755</td></tr>
+      {coordinate_rows}
       <tr><th>Case Officer</th><td>Officer Three</td></tr>
     </table></div>
     """.encode()
@@ -334,10 +341,12 @@ class _CamdenMock:
         self,
         *,
         mismatch_detail: bool = False,
+        missing_coordinates: bool = False,
         document_failure: bool = False,
         document_reported: int = 2,
     ) -> None:
         self.mismatch_detail = mismatch_detail
+        self.missing_coordinates = missing_coordinates
         self.document_failure = document_failure
         self.document_reported = document_reported
 
@@ -362,7 +371,10 @@ class _CamdenMock:
                 "linkid": ["EXDC"],
                 "PARAM0": ["681726"],
             }
-            return _camden_detail("WRONG/1" if self.mismatch_detail else "2026/2706/L")
+            return _camden_detail(
+                "WRONG/1" if self.mismatch_detail else "2026/2706/L",
+                coordinates=not self.missing_coordinates,
+            )
         if url.startswith(camden.DOCUMENT_BASE):
             query = parse_qs(urlsplit(url).query)["q"]
             assert query == ['recContainer:"2026/2706/L"']
@@ -800,8 +812,9 @@ def test_camden_search_and_parser_boundaries() -> None:
         camden._parse_dataview(b"<html></html>")
     assert camden._parse_dataview(
         b'<div class="dataview"><table><tr><td>orphan</td></tr></table>'
-        b"<dl><dt>Proposal</dt><dd>Value</dd><dt>Orphan</dt></dl></div>"
-    ) == {"proposal": "Value"}
+        b"<dl><dt>Reference</dt><dd>A/1</dd><dt>Proposal</dt><dd>Value</dd>"
+        b"<dt>Orphan</dt></dl></div>"
+    ) == {"reference": "A/1", "proposal": "Value"}
     with pytest.raises(camden.CamdenParseError, match="labelled values"):
         camden._parse_dataview(
             b'<div class="dataview"><table><tr><td>orphan</td></tr></table></div>'
@@ -851,9 +864,23 @@ def test_camden_official_detail_and_document_shapes() -> None:
           </tr></tbody></table>
         """
     )
-    assert documents[0].created_at == datetime(2014, 7, 12, 16, 25, 45)
+    assert documents[0].created_at == datetime(2014, 7, 12, 16, 25, 45)  # noqa: DTZ001
     assert documents[0].created_date == date(2014, 7, 12)
     assert documents[0].document_type == "Application Form"
+
+    reference = SourceReference(
+        source_id=camden.SEARCH_SOURCE,
+        reference="2026/2706/L",
+        locator="681726",
+    )
+    snapshot = asyncio.run(
+        camden.CamdenAdapter().fetch(
+            _Session(_CamdenMock(missing_coordinates=True)), reference
+        )
+    )
+    assert snapshot.payload.grid_easting is None
+    assert snapshot.payload.grid_northing is None
+    assert camden.CamdenAdapter().normalise(snapshot).metadata.location is None
 
 
 async def _batches(
