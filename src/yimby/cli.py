@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,6 +41,7 @@ from yimby.orchestration import (
     SessionFactory,
 )
 from yimby.pilot_fixtures import FIXTURE_BUILDERS
+from yimby.portal_time import england_calendar_date
 from yimby.registry import AuthorityRegistry, pilot_registry
 from yimby.store import SqliteStore
 
@@ -158,7 +159,7 @@ def _dispatch(
     elif args.command in {"bootstrap", "sync"}:
         days = args.days if args.command == "bootstrap" else 30
         include_open = args.include_open if args.command == "bootstrap" else True
-        end = datetime.now(UTC).date()
+        end = england_calendar_date()
         window = _collection_window(days, include_open=include_open, end=end)
         reports = asyncio.run(
             _collect_authorities(

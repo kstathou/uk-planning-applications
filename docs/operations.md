@@ -62,9 +62,12 @@ result with their recorded reason. The implementation must not promote an
 authority to `live-ready` until its real adapter completes collection and agrees
 with the dated browser walkthrough.
 
-One kernel-owned advisory lock prevents overlapping collection commands. Its
-persistent file contains a PID only while the lock is held, and the operating
-system releases ownership after a process exits or crashes. One orchestration
+One kernel-owned advisory lock prevents overlapping collection commands. The
+kernel lock is authoritative. Its persistent regular file contains a
+diagnostic PID while collection is healthy, but stale PID text can remain
+after an abnormal exit. The operating system still releases ownership when a
+process exits or crashes. Symlink and non-regular lock paths are rejected. One
+orchestration
 allows at most four authority tasks, one browser worker, one in-flight request
 per host, and at least two seconds between completed requests to the same host.
 Live HTTP sessions retain cookies, use bounded retries, and apply

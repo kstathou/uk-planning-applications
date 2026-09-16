@@ -792,34 +792,51 @@ def _detail_page_mock() -> MagicMock:
     page = MagicMock()
     page.url = "https://example.test/planning-application/a0iP00002582/example"
     page.goto = AsyncMock()
-    page.content = AsyncMock(
-        side_effect=(
-            _detail_html("HGY/2026/2582").decode(),
-            "<p>There are no comments.</p>",
-            _files_html().decode(),
+    interaction_order: list[str] = []
+    rendered = iter(
+        (
+            ("detail-content", _detail_html("HGY/2026/2582").decode()),
+            ("comments-content", "<p>There are no comments.</p>"),
+            ("files-content", _files_html().decode()),
         )
     )
+
+    def content() -> str:
+        event, body = next(rendered)
+        interaction_order.append(event)
+        return body
+
+    page.content = AsyncMock(side_effect=content)
     heading = MagicMock()
     heading.wait_for = AsyncMock()
-    tab = MagicMock()
-    tab.click = AsyncMock()
+    comments_tab = MagicMock()
+    comments_tab.click = AsyncMock(
+        side_effect=lambda: interaction_order.append("comments-click")
+    )
+    files_tab = MagicMock()
+    files_tab.click = AsyncMock(
+        side_effect=lambda: interaction_order.append("files-click")
+    )
     empty = MagicMock()
-    empty.wait_for = AsyncMock()
+    empty.wait_for = AsyncMock(
+        side_effect=lambda: interaction_order.append("comments-wait")
+    )
     table = MagicMock()
     table.wait_for = AsyncMock()
     rows = MagicMock()
     rows.count = AsyncMock(return_value=7)
     table.get_by_role.return_value = rows
 
-    def role(role_name: str, **_kwargs: Any) -> MagicMock:
+    def role(role_name: str, **kwargs: Any) -> MagicMock:
         if role_name == "heading":
             return heading
         if role_name == "tab":
-            return tab
+            return comments_tab if kwargs.get("name") == "Comments" else files_tab
         return table
 
     page.get_by_role.side_effect = role
     page.get_by_text.return_value = empty
+    page.interaction_order = interaction_order
     return page
 
 
@@ -846,6 +863,14 @@ def test_haringey_page_object_opens_only_recorded_child_tabs() -> None:
     page.get_by_role.assert_any_call("tab", name="Files", exact=True)
     page.get_by_text.assert_called_once_with("There are no comments.", exact=True)
     page.get_by_text.return_value.wait_for.assert_awaited_once_with()
+    assert page.interaction_order == [
+        "detail-content",
+        "comments-click",
+        "comments-wait",
+        "comments-content",
+        "files-click",
+        "files-content",
+    ]
     assert all(
         "download" not in call.kwargs.get("name", "").casefold()
         for call in page.get_by_role.mock_calls

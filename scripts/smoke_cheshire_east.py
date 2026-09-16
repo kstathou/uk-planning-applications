@@ -8,19 +8,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from yimby.authorities.cheshire_east.adapter import CheshireEastAdapter
 from yimby.domain import DiscoveryWindow
 from yimby.http_transport import HttpxPortalSession
+from yimby.portal_time import england_calendar_date
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
 async def _smoke() -> dict[str, object]:
-    today = datetime.now(UTC).date()
+    today = england_calendar_date()
     session = HttpxPortalSession()
     discovery = CheshireEastAdapter().discover(
         session,

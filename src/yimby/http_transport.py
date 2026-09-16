@@ -200,9 +200,12 @@ class HttpxPortalSession:
                             continue
                         if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
                             raise _status_error(safe_url, response.status_code)
-                        if _is_attachment_response(response):
+                        final_url = urlsplit(str(response.url))
+                        if _is_attachment_path(
+                            final_url.path
+                        ) or _is_attachment_response(response):
                             self._attachment_body_requests += 1
-                            raise _attachment_error(host)
+                            raise _attachment_error(final_url.hostname or host)
                         body = await response.aread()
                         media_type = response.headers.get(
                             "content-type", "application/octet-stream"

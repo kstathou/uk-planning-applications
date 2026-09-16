@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import os
+import stat
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Self
 
@@ -49,7 +50,22 @@ class ProcessLock:
     def __enter__(self) -> Self:
         """Acquire the kernel lock and publish this process identifier."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            descriptor = os.open(
+                self._path,
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError as error:
+            raise _unsafe_lock_error() from error
+        try:
+            mode = os.fstat(descriptor).st_mode
+        except BaseException:
+            os.close(descriptor)
+            raise
+        if not stat.S_ISREG(mode):
+            os.close(descriptor)
+            raise _unsafe_lock_error()
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
@@ -58,6 +74,9 @@ class ProcessLock:
             if owner is not None:
                 raise _owned_lock_error(owner) from None
             raise _concurrent_lock_error() from error
+        except BaseException:
+            os.close(descriptor)
+            raise
         try:
             os.ftruncate(descriptor, 0)
             os.lseek(descriptor, 0, os.SEEK_SET)
@@ -219,3 +238,7 @@ def _owned_lock_error(owner: int) -> CollectionAlreadyRunningError:
 
 def _concurrent_lock_error() -> CollectionAlreadyRunningError:
     return CollectionAlreadyRunningError("collection lock was acquired concurrently")
+
+
+def _unsafe_lock_error() -> CollectionAlreadyRunningError:
+    return CollectionAlreadyRunningError("collection lock path is not a regular file")

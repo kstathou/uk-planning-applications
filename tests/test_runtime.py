@@ -59,6 +59,7 @@ from yimby.orchestration import (
     ProcessLock,
 )
 from yimby.pilot_fixtures import FIXTURE_BUILDERS
+from yimby.portal_time import england_calendar_date
 from yimby.registry import AuthorityRegistry, pilot_registry
 from yimby.store import SqliteStore
 from yimby.transport import (
@@ -86,6 +87,20 @@ def _request(url: str) -> PortalRequest:
 
 def _store(root: Path) -> SqliteStore:
     return SqliteStore(root / "yimby.sqlite3", EvidenceStore(root / "evidence"))
+
+
+def test_english_portal_calendar_uses_london_civil_time() -> None:
+    """BST midnight boundaries follow the authority's civil calendar."""
+    assert england_calendar_date(datetime(2026, 6, 1, 23, 30, tzinfo=UTC)) == date(
+        2026, 6, 2
+    )
+    assert england_calendar_date(datetime(2026, 1, 1, 0, 30, tzinfo=UTC)) == date(
+        2026, 1, 1
+    )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        england_calendar_date(
+            datetime(2026, 6, 1, 23, 30, tzinfo=UTC).replace(tzinfo=None)
+        )
 
 
 def _registry(status: LiveStatus) -> AuthorityRegistry:
@@ -366,6 +381,39 @@ def test_http_session_blocks_attachment_bodies(
 
     asyncio.run(exercise())
     assert calls == network_calls
+    assert session.transferred_bytes == 0
+    assert session.attachment_body_requests == 1
+
+
+def test_http_session_blocks_redirect_to_attachment_path() -> None:
+    """A safe-looking route cannot redirect into an unlabelled file body."""
+    body_reads = 0
+
+    class ForbiddenStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal body_reads
+            body_reads += 1
+            yield b"must not be read"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/hidden/file.pdf"})
+        return httpx.Response(200, stream=ForbiddenStream())
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=True
+        ),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(AttachmentBodyBlockedError, match="example.test"):
+            await session.fetch(_request("https://example.test/start"))
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert body_reads == 0
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
 
@@ -756,13 +804,43 @@ def test_process_lock_uses_kernel_ownership_and_fails_closed(tmp_path: Path) -> 
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
 
+    target = tmp_path / "must-remain.txt"
+    target.write_text("preserve me")
+    symlink = tmp_path / "symlink.lock"
+    symlink.symlink_to(target)
+    with pytest.raises(CollectionAlreadyRunningError, match="regular file"):
+        with ProcessLock(symlink):
+            pass
+    assert target.read_text() == "preserve me"
+
+    fifo = tmp_path / "fifo.lock"
+    os.mkfifo(fifo)
+    with pytest.raises(CollectionAlreadyRunningError, match="regular file"):
+        with ProcessLock(fifo):
+            pass
+
 
 def test_process_lock_releases_after_pid_write_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A failed diagnostic write cannot strand the advisory lock."""
     lock_path = tmp_path / "collection.lock"
+    original_fstat = os.fstat
+    original_flock = fcntl.flock
     original_write = os.write
+
+    monkeypatch.setattr("os.fstat", MagicMock(side_effect=OSError("fstat failed")))
+    with pytest.raises(OSError, match="fstat failed"):
+        with ProcessLock(lock_path):
+            pass
+    monkeypatch.setattr("os.fstat", original_fstat)
+
+    monkeypatch.setattr(fcntl, "flock", MagicMock(side_effect=OSError("flock failed")))
+    with pytest.raises(OSError, match="flock failed"):
+        with ProcessLock(lock_path):
+            pass
+    monkeypatch.setattr(fcntl, "flock", original_flock)
+
     monkeypatch.setattr("os.write", MagicMock(side_effect=OSError("write failed")))
     with pytest.raises(OSError, match="write failed"):
         with ProcessLock(lock_path):

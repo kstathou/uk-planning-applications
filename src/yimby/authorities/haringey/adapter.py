@@ -39,6 +39,7 @@ from yimby.domain import (
     UnavailableSection,
     collection_state,
 )
+from yimby.portal_time import england_calendar_date
 from yimby.transport import PortalRequest, RequestIntent
 
 if TYPE_CHECKING:
@@ -179,7 +180,7 @@ class HaringeyAdapter:
 
     def __init__(self, today: Callable[[], date] | None = None) -> None:
         """Inject the local date so the rolling window is deterministic."""
-        self._today = today or (lambda: datetime.now(UTC).date())
+        self._today = today or england_calendar_date
 
     async def discover(
         self,
