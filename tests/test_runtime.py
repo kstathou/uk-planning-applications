@@ -764,6 +764,19 @@ def test_playwright_production_boundary_lifecycle(
 
         payload = await boundary.open("https://browser.test/page")
         assert payload.body == b"<html>live</html>"
+
+        async def successful_interaction(_page: object) -> str:
+            return "verified"
+
+        assert await boundary.interact(successful_interaction) == "verified"
+        context.storage_state.assert_awaited_once_with(path=str(state_path))
+
+        async def failed_interaction(_page: object) -> str:
+            raise RuntimeError
+
+        with pytest.raises(RuntimeError):
+            await boundary.interact(failed_interaction)
+        assert context.storage_state.await_count == 1
         await boundary.aclose()
 
         default_boundary = await PlaywrightBoundary.create()
