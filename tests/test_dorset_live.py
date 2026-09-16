@@ -53,16 +53,16 @@ OUTSTANDING = (
 )
 
 
-def _disclaimer_form() -> bytes:
-    return b"""
-    <form method="post" action="./disclaimer.aspx?returnURL=%2f">
+def _disclaimer_form(return_url: str = "%2f") -> bytes:
+    return f"""
+    <form method="post" action="./disclaimer.aspx?returnURL={return_url}">
       <input type="hidden" name="__EVENTTARGET" value="">
       <input type="hidden" name="__VIEWSTATE" value="disclaimer-state">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="ctl00$ContentPlaceHolder1$btnAccept" value="Accept">
     </form>
-    """
+    """.encode()
 
 
 def _advanced_form() -> bytes:
@@ -195,7 +195,13 @@ class _DorsetMock:
         if request.method == "GET" and request.url.path == ADVANCED_PATH:
             return httpx.Response(
                 200,
-                content=_advanced_form() if accepted else _disclaimer_form(),
+                content=(
+                    _advanced_form()
+                    if accepted
+                    else _disclaimer_form(
+                        "%2fadvsearch.aspx%3fAspxAutoDetectCookieSupport%3d1"
+                    )
+                ),
             )
         if request.method == "POST" and request.url.path == DISCLAIMER_PATH:
             assert fields == (
@@ -212,7 +218,13 @@ class _DorsetMock:
             )
         if request.method == "GET" and request.url.path == "/plandisp.aspx":
             if not accepted:
-                return httpx.Response(200, content=_disclaimer_form())
+                return httpx.Response(
+                    200,
+                    content=_disclaimer_form(
+                        "%2fplandisp.aspx%3frecno%3d430001"
+                        "%26AspxAutoDetectCookieSupport%3d1"
+                    ),
+                )
             recno = int(request.url.params["recno"])
             reference = next(
                 row.reference for row in (*RECEIVED, *OUTSTANDING) if row.recno == recno
