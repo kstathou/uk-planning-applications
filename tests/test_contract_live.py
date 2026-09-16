@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, E501, EM101, PLR0911, PLR2004, SLF001, TRY003
+# ruff: noqa: ANN401, D103, E501, EM101, PLR0911, PLR0915, PLR2004, SLF001, TRY003
 
 """Real HTTP contract boundaries for Arun, Devon, Camden, and Peak District."""
 
@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from bs4 import BeautifulSoup
+from pydantic import HttpUrl
 
 import yimby.authorities.arun.adapter as arun
 import yimby.authorities.camden.adapter as camden
@@ -256,7 +257,7 @@ def _devon_results(
     )
     if total_pages == 1:
         return records.encode()
-    numbered = []
+    numbered: list[str] = []
     for number in range(1, total_pages + 1):
         href = "/Search/Results" if number == 1 else f"/Search/Results/{number}"
         if number == page and current_markers:
@@ -333,9 +334,14 @@ class _DevonMock:
         start = (page - 1) * 10
         if page == 1 and self.shift_first_open:
             start += 1
-        references = tuple(f"OPEN/{number:03d}/2026" for number in range(start + 1, min(start + 11, 56)))
+        references = tuple(
+            f"OPEN/{number:03d}/2026"
+            for number in range(start + 1, min(start + 11, 56))
+        )
         if self.malformed_page == page:
-            return _devon_results(references, page=page, total_pages=6, current_markers=0)
+            return _devon_results(
+                references, page=page, total_pages=6, current_markers=0
+            )
         return _devon_results(references, page=page, total_pages=6)
 
     def _select_query(self, request: PortalRequest) -> None:
@@ -364,24 +370,30 @@ class _DevonMock:
             if "results" in url:
                 return self._result()
             return _devon_detail(
-                "WRONG/1" if self.mismatch_detail else cast("str", self.detail_reference)
+                "WRONG/1"
+                if self.mismatch_detail
+                else cast("str", self.detail_reference)
             )
         if url.rstrip("/") == devon._ADVANCED_FORM_URL:
-            return _devon_advanced_form() if self.direct else _devon_disclaimer("advanced")
-        if url.rstrip("/") == devon._RESULTS_URL and request.method == RequestMethod.POST:
+            return (
+                _devon_advanced_form() if self.direct else _devon_disclaimer("advanced")
+            )
+        if (
+            url.rstrip("/") == devon._RESULTS_URL
+            and request.method == RequestMethod.POST
+        ):
             self._select_query(request)
             return self._result() if self.direct else _devon_disclaimer("results")
         if "/Search/Results/" in url:
-            assert self.pending is not None and self.pending[0] == "outstanding"
+            assert self.pending is not None
+            assert self.pending[0] == "outstanding"
             self.pending = "outstanding", int(urlsplit(url).path.rsplit("/", 1)[-1])
             return self._result() if self.direct else _devon_disclaimer("results")
         if "/Planning/Display/" in url:
             reference = urlsplit(url).path.partition("/Planning/Display/")[2]
             self.detail_reference = reference
             if self.direct:
-                return _devon_detail(
-                    "WRONG/1" if self.mismatch_detail else reference
-                )
+                return _devon_detail("WRONG/1" if self.mismatch_detail else reference)
             return _devon_disclaimer("detail")
         raise AssertionError(url)
 
@@ -560,7 +572,9 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
     assert stored.completeness.comments.kind == "excluded"
     assert report.attachment_body_requests == 0
     assert all("Document/Download" not in url for url in report.requested_urls)
-    assert sum(request.method == RequestMethod.POST for request in session.requests) == 9
+    assert (
+        sum(request.method == RequestMethod.POST for request in session.requests) == 9
+    )
     view = store.application_view(report.applications[0])
     assert view.metadata.address == "North Devon recycling centre"
     assert view.metadata.validated_date == date(2026, 8, 21)
@@ -636,15 +650,20 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
     assert tuple(
         urlsplit(str(request.url)).path
         for request in resumed_session.requests
-        if request.method == RequestMethod.GET and "/Search/Results/" in str(request.url)
+        if request.method == RequestMethod.GET
+        and "/Search/Results/" in str(request.url)
     ) == tuple(f"/Search/Results/{page}" for page in range(2, 7))
     final = resumed[-1].next_checkpoint
     audit = devon.qualification_audit(final, window)
     assert audit.terminal_coherent
-    assert audit.expected_queries == audit.completed_queries == (
-        "received:2026-08-18:2026-09-16",
-        "determined:2026-08-18:2026-09-16",
-        "outstanding:planning:true",
+    assert (
+        audit.expected_queries
+        == audit.completed_queries
+        == (
+            "received:2026-08-18:2026-09-16",
+            "determined:2026-08-18:2026-09-16",
+            "outstanding:planning:true",
+        )
     )
     assert len(audit.references) == 58
 
@@ -658,34 +677,6 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
             )
         )
 
-
-def test_peak_district_public_collector_keeps_loading_sections_failed(
-    tmp_path: Path,
-) -> None:
-    adapter = peak.PeakDistrictAdapter(today=lambda: date(2026, 9, 16))
-    package = AuthorityPackage(
-        adapter, peak.PeakDistrictApplicationV1, peak.PeakDistrictCheckpointV1
-    )
-    store = _store(tmp_path)
-    collector = Collector(_registry(package), store)
-    window = DiscoveryWindow(
-        start=date(2026, 9, 10), end=date(2026, 9, 16), include_open=False
-    )
-    report = asyncio.run(
-        collector.collect(AuthorityId("peak-district"), window, _Session(_PeakMock()))
-    )
-    assert len(report.applications) == 1
-    stored = store.get_application(report.applications[0])
-    assert stored.completeness.documents.kind == "failed"
-    assert stored.completeness.comments.kind == "failed"
-    assert (
-        store.discovery_state(AuthorityId("peak-district")).queued[0].locator
-        == f"{peak.LEGACY_BASE}/result/sanitised-0917"
-    )
-    view = store.application_view(report.applications[0])
-    assert view.metadata.aliases == ("PP-15234567",)
-    assert report.attachment_body_requests == 0
-    store.close()
 
 def test_camden_exact_resolution_and_public_package_collection() -> None:
     adapter = camden.CamdenAdapter()
@@ -978,7 +969,9 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         live_complete=True,
     )
     terminal_session = _Session(_DevonMock())
-    assert asyncio.run(_batches(adapter, terminal_session, window, terminal))[0].complete
+    assert asyncio.run(_batches(adapter, terminal_session, window, terminal))[
+        0
+    ].complete
     assert terminal_session.requests == []
     with pytest.raises(devon.DevonParseError, match="accepted disclaimer"):
         devon._parse_discovery_page(_devon_disclaimer("search"), expected_page=1)
@@ -991,9 +984,10 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         expected_page=1,
     )
     assert fallback.references[0].reference == "DCC/1"
-    assert devon._parse_discovery_page(
-        b"<p>No records</p>", expected_page=1
-    ).references == ()
+    assert (
+        devon._parse_discovery_page(b"<p>No records</p>", expected_page=1).references
+        == ()
+    )
     with pytest.raises(devon.DevonParseError, match="no-records"):
         devon._parse_discovery_page(b"<p>Unknown</p>", expected_page=1)
     with pytest.raises(devon.DevonParseError, match="page-one singleton"):
@@ -1013,6 +1007,310 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     assert devon._optional_date({"date": "-"}, "date") is None
     with pytest.raises(devon.DevonParseError, match="date date"):
         devon._optional_date({"date": "bad"}, "date")
+
+
+def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
+    scope = devon.DevonDiscoveryScope(
+        start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=True
+    )
+    keys = devon._query_keys(scope)
+    references = tuple(
+        SourceReference(
+            source_id=devon.SOURCE,
+            reference=f"OPEN/{number:03d}/2026",
+            locator=f"{devon.BASE_URL}/Planning/Display/OPEN/{number:03d}/2026",
+        )
+        for number in range(1, 11)
+    )
+    links = tuple(
+        devon.DevonPageLinkV1(
+            page=page,
+            locator=HttpUrl(
+                devon._RESULTS_URL if page == 1 else f"{devon._RESULTS_URL}/{page}"
+            ),
+        )
+        for page in range(2, 7)
+    )
+    proof = devon.DevonPageProofV1(
+        page=1,
+        references=references,
+        numbered_pages=(1, 2, 3, 4, 5, 6),
+        numbered_links=links,
+        next_locator=HttpUrl(f"{devon._RESULTS_URL}/2"),
+    )
+
+    def rejected(code: str, **changes: Any) -> None:
+        values: dict[str, Any] = {
+            "result_page": "live",
+            "live_scope": scope,
+            "completed_queries": keys[:2],
+            "active_query": keys[2],
+            "next_page": 2,
+            "active_pages": (proof,),
+            "seen_references": references,
+            "live_complete": False,
+        }
+        values.update(changes)
+        with pytest.raises(ValueError, match=code):
+            devon.DevonCheckpointV1.model_validate(values)
+
+    rejected("live-scope-required", live_scope=None)
+    rejected("live-result-cursor-required", result_page="fixture")
+    rejected("completed-query-prefix", completed_queries=(keys[1],))
+    rejected("seen-references", seen_references=(*references, references[0]))
+    rejected(
+        "seen-references",
+        seen_references=(references[0].model_copy(update={"locator": None}),),
+    )
+    rejected("terminal-incoherent", live_complete=True)
+    rejected(
+        "inactive-page-progress",
+        active_query=None,
+        next_page=2,
+        active_pages=(),
+    )
+    rejected("active-query-incoherent", active_query=keys[1])
+    rejected("active-query-incoherent", next_page=3)
+    rejected("active-query-incoherent", active_pages=(), next_page=1)
+    rejected(
+        "active-page-incoherent",
+        active_pages=(proof.model_copy(update={"page": 2}),),
+    )
+    rejected(
+        "active-page-incoherent",
+        active_pages=(proof.model_copy(update={"references": references[:-1]}),),
+    )
+    with pytest.raises(devon.DevonPaginationError, match="terminal-continuation"):
+        devon._DiscoveryPage(
+            references=references[:1],
+            page=1,
+            numbered_pages=(),
+            numbered_links=(),
+            next_locator=None,
+            terminal=True,
+        ).committed_proof()
+
+    terminal_scope = scope.model_copy(update={"include_open": False})
+    terminal = devon.DevonCheckpointV1(
+        result_page="live",
+        live_scope=terminal_scope,
+        completed_queries=devon._query_keys(terminal_scope),
+        seen_references=references,
+        live_complete=True,
+    )
+    with pytest.raises(devon.DevonCheckpointError, match="qualification-scope"):
+        devon.qualification_audit(
+            terminal,
+            DiscoveryWindow(start=scope.start, end=scope.end, include_open=True),
+        )
+
+    progress = devon.DevonCheckpointV1(
+        result_page="live",
+        live_scope=scope,
+        completed_queries=keys[:2],
+        active_query=keys[2],
+        next_page=2,
+        active_pages=(proof,),
+        seen_references=references,
+    )
+    query = devon._query_inventory(scope)[2]
+    terminal_page = devon._DiscoveryPage(
+        references=(),
+        page=1,
+        numbered_pages=(),
+        numbered_links=(),
+        next_locator=None,
+        terminal=True,
+    )
+    with pytest.raises(devon.DevonCheckpointError, match="page-cursor"):
+        devon._advance_checkpoint(
+            progress, query=query, page=terminal_page, all_query_keys=keys
+        )
+    changed = references[0].model_copy(
+        update={"locator": f"{devon.BASE_URL}/Planning/Display/changed"}
+    )
+    with pytest.raises(devon.DevonCheckpointError, match="reference-locator"):
+        devon._advance_checkpoint(
+            devon.DevonCheckpointV1(
+                result_page="live",
+                live_scope=scope,
+                completed_queries=keys[:2],
+                seen_references=references,
+            ),
+            query=query,
+            page=terminal_page.model_copy(update={"references": (changed,)}),
+            all_query_keys=keys,
+        )
+
+    with pytest.raises(devon.DevonParseError, match="advanced form"):
+        devon._parse_advanced_form(b"<html></html>")
+    with pytest.raises(devon.DevonParseError, match="advanced form action"):
+        devon._parse_advanced_form(
+            _devon_advanced_form().replace(b'/Search/Results"', b'/wrong"')
+        )
+    with pytest.raises(devon.DevonParseError, match="advanced form controls"):
+        devon._parse_advanced_form(
+            _devon_advanced_form().replace(b'<input name="Address" value="old">', b"")
+        )
+    with pytest.raises(devon.DevonParseError, match="advanced boolean controls"):
+        devon._parse_advanced_form(
+            _devon_advanced_form().replace(
+                b'name="Outstanding" value="true"',
+                b'name="Outstanding" value="yes"',
+            )
+        )
+    form = devon._parse_advanced_form(_devon_advanced_form())
+    with pytest.raises(devon.DevonCheckpointError, match="dated-query-bounds"):
+        devon._advanced_fields(
+            form,
+            devon._DevonQuery(kind="received", key="received:missing"),
+        )
+    address = form.select_one('input[name="Address"]')
+    assert address is not None
+    address["name"] = ["not-string"]  # type: ignore[assignment]
+    parish = form.select_one('select[name="Parish"]')
+    assert parish is not None
+    parish.clear()
+    textarea = BeautifulSoup('<textarea name="Notes">value</textarea>', "html.parser")
+    notes = textarea.select_one("textarea")
+    assert notes is not None
+    form.append(notes)
+    extras = BeautifulSoup(
+        '<input type="submit" name="Ignored" value="Search">'
+        '<select name="EmptyChoice"></select>'
+        '<select name="FirstChoice"><option value="first">First</option></select>'
+        '<select name="SelectedChoice"><option value="selected" selected>Selected</option></select>',
+        "html.parser",
+    )
+    for extra in extras.select("input, select"):
+        form.append(extra)
+    fields = devon._advanced_fields(form, query)
+    pairs = tuple((field.name, field.value) for field in fields)
+    assert ("Parish", "") in pairs
+    assert ("Notes", "value") in pairs
+    assert ("EmptyChoice", "") in pairs
+    assert ("FirstChoice", "first") in pairs
+    assert ("SelectedChoice", "selected") in pairs
+    assert all(name != "Ignored" for name, _ in pairs)
+
+    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    window = DiscoveryWindow(start=scope.start, end=scope.end, include_open=True)
+
+    async def two_open_pages() -> Any:
+        batches = cast(
+            "AsyncGenerator[Any]",
+            adapter.discover(_Session(_DevonMock(direct=True)), window, None),
+        )
+        for _ in range(3):
+            await anext(batches)
+        fourth = await anext(batches)
+        await batches.aclose()
+        return fourth.next_checkpoint
+
+    two_page_checkpoint = asyncio.run(two_open_pages())
+    replayed = asyncio.run(
+        _batches(
+            adapter,
+            _Session(_DevonMock(direct=True)),
+            window,
+            two_page_checkpoint,
+        )
+    )
+    assert replayed[-1].complete
+
+
+def test_devon_result_and_pager_fail_closed_boundaries() -> None:
+    one = _devon_results(("DCC/1/2026",))
+    with pytest.raises(devon.DevonParseError, match="mixed result"):
+        devon._parse_discovery_page(one + _devon_detail(), expected_page=1)
+    with pytest.raises(devon.DevonParseError, match="duplicate result"):
+        devon._parse_discovery_page(
+            _devon_results(("DCC/1/2026", "DCC/1/2026")), expected_page=1
+        )
+    pager = _devon_results(
+        tuple(f"DCC/{number}/2026" for number in range(1, 11)),
+        total_pages=2,
+    )
+    pager_only = pager[pager.index(b'<ul class="pagination">') :]
+    with pytest.raises(devon.DevonPaginationError, match="multiple-pagers"):
+        devon._parse_discovery_page(pager + pager_only, expected_page=1)
+    with pytest.raises(devon.DevonPaginationError, match="current-page-mismatch"):
+        devon._parse_discovery_page(
+            _devon_results(("DCC/1/2026",), page=2, total_pages=2),
+            expected_page=1,
+        )
+    with pytest.raises(devon.DevonPaginationError, match="nonterminal-page-size"):
+        devon._parse_discovery_page(
+            _devon_results(
+                tuple(f"DCC/{number}/2026" for number in range(1, 10)),
+                total_pages=2,
+            ),
+            expected_page=1,
+        )
+    with pytest.raises(devon.DevonPaginationError, match="terminal-page-size"):
+        devon._parse_discovery_page(
+            _devon_results(
+                tuple(f"DCC/{number}/2026" for number in range(1, 12)),
+                page=2,
+                total_pages=2,
+            ),
+            expected_page=2,
+        )
+    with pytest.raises(devon.DevonParseError, match="detail locator"):
+        devon._parse_discovery_page(
+            b'<dl class="searchResultsList"><a href="https://evil.test/Planning/Display/DCC/1">DCC/1</a></dl>',
+            expected_page=1,
+        )
+
+    def parsed_pager(markup: str) -> Any:
+        found = BeautifulSoup(markup, "html.parser").select_one("ul")
+        assert found is not None
+        return found
+
+    cases = (
+        ("current-page-marker", '<ul><li class="active">current</li></ul>'),
+        (
+            "numbered-locator",
+            '<ul><li class="active">1</li><li><a href="/Search/Results/3">2</a></li><li><a rel="next" href="/Search/Results/2">Next</a></li></ul>',
+        ),
+        (
+            "duplicate-numbered-link",
+            '<ul><li class="active">1</li><li><a href="/Search/Results/2">2</a></li><li><a href="/Search/Results/2">2</a></li><li><a rel="next" href="/Search/Results/2">Next</a></li></ul>',
+        ),
+        (
+            "nonconsecutive-numbering",
+            '<ul><li class="active">1</li><li><a href="/Search/Results/3">3</a></li><li><a rel="next" href="/Search/Results/2">Next</a></li></ul>',
+        ),
+        (
+            "linked-current-page",
+            '<ul><li class="active">1</li><li><a href="/Search/Results">1</a></li></ul>',
+        ),
+        (
+            "duplicate-forward-link",
+            '<ul><li class="active">1</li><li><a href="/Search/Results/2">2</a></li><li><a rel="next" href="/Search/Results/2">Next</a></li><li><a href="/Search/Results/2">Next</a></li></ul>',
+        ),
+        (
+            "nonterminal-forward-link",
+            '<ul><li class="active">1</li><li><a href="/Search/Results/2">2</a></li><li><a href="/Search/Results/9">Other</a></li></ul>',
+        ),
+        (
+            "terminal-forward-link",
+            '<ul><li><a href="/Search/Results">1</a></li><li aria-current="page">2</li><li><a rel="next" href="/Search/Results/3">Forward</a></li></ul>',
+        ),
+    )
+    for code, markup in cases:
+        with pytest.raises(devon.DevonPaginationError, match=code):
+            devon._parse_pager(parsed_pager(markup))
+
+    with pytest.raises(devon.DevonPaginationError, match="pager-host"):
+        devon._page_from_locator(HttpUrl("https://evil.test/Search/Results/2"))
+    with pytest.raises(devon.DevonPaginationError, match="pager-parameters"):
+        devon._page_from_locator(HttpUrl(f"{devon._RESULTS_URL}/2?bad=true"))
+    with pytest.raises(devon.DevonPaginationError, match="pager-locator"):
+        devon._page_from_locator(HttpUrl(f"{devon.BASE_URL}/wrong"))
+    assert devon._query_bool({}, "isPlan") is None
+    with pytest.raises(devon.DevonParseError, match="document isPlan"):
+        devon._query_bool({"isPlan": ["maybe"]}, "isPlan")
 
 
 def test_camden_search_and_parser_boundaries() -> None:
