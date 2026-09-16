@@ -49,6 +49,7 @@ _ATTACHMENT_PATH_FRAGMENTS = (
     "/sfc/servlet.shepherd/document/download/",
     "/sfc/servlet.shepherd/version/download/",
     "/downloadall",
+    "/api/application/document/opdc/",
 )
 _ATTACHMENT_MEDIA_TYPES = {
     "application/msword",
@@ -165,9 +166,9 @@ class HttpxPortalSession:
         safe_url = _safe_url(url)
         form = [(field.name, field.value) for field in portal_request.form]
         encoded_form = urlencode(form).encode() if form else None
-        headers = (
-            {"content-type": "application/x-www-form-urlencoded"} if form else None
-        )
+        headers = {header.name: header.value for header in portal_request.headers}
+        if form:
+            headers["content-type"] = "application/x-www-form-urlencoded"
         for attempt in range(1, self._max_attempts + 1):
             try:
                 async with self._limiter.turn(host):
