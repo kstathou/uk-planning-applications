@@ -25,7 +25,6 @@ from yimby.domain import (
     DiscoveryWindow,
     DocumentRecord,
     FrozenModel,
-    NativeDocument,
     NativeSnapshot,
     NormalisedObservation,
     Provenance,
@@ -48,6 +47,7 @@ BASE_URL = "https://www1.arun.gov.uk/aplanning/OcellaWeb"
 _SEARCH_URL = f"{BASE_URL}/planningSearch"
 _DATE_FORMATS = ("%d-%m-%y", "%d/%m/%Y", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
+_DOCUMENT_COLUMNS = 5
 _OPEN_HISTORY_START = date(1948, 1, 1)
 _OPEN_ANNUAL_END = date(2023, 12, 31)
 _DECEMBER = 12
@@ -262,6 +262,17 @@ class ArunCheckpointV1(FrozenModel):
     ]
 
 
+class ArunDocumentV1(FrozenModel):
+    """Arun-native document metadata without attachment content."""
+
+    title: str = Field(min_length=1)
+    url: HttpUrl
+    published_date: date | None = None
+    document_type: str = Field(min_length=1)
+    description: str | None = None
+    source_links: tuple[HttpUrl, ...] = Field(min_length=1)
+
+
 class ArunApplicationV1(FrozenModel):
     """Arun-native Ocella application."""
 
@@ -269,7 +280,7 @@ class ArunApplicationV1(FrozenModel):
     proposal_text: str
     decision_status: str
     parish_name: str
-    documents: tuple[NativeDocument, ...]
+    documents: tuple[ArunDocumentV1, ...]
     site_address: str | None = None
     application_type: str | None = None
     received_date: date | None = None
@@ -493,7 +504,12 @@ class ArunAdapter:
         )
         html = detail.body.decode()
         documents = tuple(
-            NativeDocument(title=unescape(title), url=HttpUrl(document_url))
+            ArunDocumentV1(
+                title=unescape(title),
+                url=HttpUrl(document_url),
+                document_type="fixture",
+                source_links=(HttpUrl(document_url),),
+            )
             for title, document_url in re.findall(
                 r'data-arun-document="([^"]+)" href="([^"]+)"', html
             )
@@ -541,12 +557,16 @@ class ArunAdapter:
         published = _required_field(fields, "reference", "application reference")
         if published != reference.reference:
             raise ArunReferenceMismatchError(reference.reference, published)
+        document_index = await session.fetch(
+            _document_request(detail.body, reference.reference)
+        )
+        documents = _parse_document_index(document_index.body)
         payload = ArunApplicationV1(
             ocella_reference=published,
             proposal_text=_required_field(fields, "proposal", "description"),
             decision_status=_required_field(fields, "status"),
             parish_name=_required_field(fields, "parish"),
-            documents=(),
+            documents=documents,
             site_address=_optional_field(fields, "location", "address"),
             application_type=_optional_field(fields, "application type", "type"),
             received_date=_optional_date(fields, "received date"),
@@ -562,14 +582,12 @@ class ArunAdapter:
             payload=payload,
             completeness=Completeness(
                 application=CompleteSection(item_count=1),
-                documents=UnavailableSection(
-                    reason="Ocella document action parameter contract is unresolved"
-                ),
+                documents=collection_state(len(documents)),
                 comments=UnavailableSection(
-                    reason="Ocella undecided comment flow is unresolved"
+                    reason="Ocella does not expose a bounded comment text index"
                 ),
             ),
-            evidence=(detail,),
+            evidence=(detail, document_index),
         )
 
     def normalise(
@@ -838,6 +856,108 @@ def _parse_show_all_form(soup: BeautifulSoup) -> ArunShowAllForm | None:
     return show_all_form
 
 
+def _document_request(body: bytes, expected_reference: str) -> PortalRequest:
+    soup = BeautifulSoup(body, "html.parser")
+    forms = tuple(
+        form
+        for form in soup.select("form[action]")
+        if urlsplit(urljoin(f"{BASE_URL}/", str(form.get("action", "")))).path.endswith(
+            "/showDocuments"
+        )
+    )
+    if len(forms) != 1:
+        _raise_parse("document action")
+    form = forms[0]
+    action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
+    parts = urlsplit(action)
+    base = urlsplit(BASE_URL)
+    query = parse_qs(parts.query)
+    if (
+        str(form.get("method", "")).casefold() != "post"
+        or parts.netloc != base.netloc
+        or query.get("module") != ["pl"]
+    ):
+        _raise_parse("document action")
+    if query.get("reference") != [expected_reference]:
+        _raise_parse("document action reference")
+    submits = tuple(
+        FormField(name=str(control.get("name")), value=str(control.get("value")))
+        for control in form.select('input[type="submit"]')
+        if control.get("name") == "ViewDocuments"
+        and control.get("value") == "View Documents"
+    )
+    if len(submits) != 1:
+        _raise_parse("document action submit")
+    return PortalRequest(
+        url=HttpUrl(action),
+        intent=RequestIntent.DETAIL,
+        method=RequestMethod.POST,
+        form=submits,
+    )
+
+
+def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
+    soup = BeautifulSoup(body, "html.parser")
+    text = soup.get_text(" ", strip=True)
+    if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
+        _raise_parse("document pagination")
+    for selected_type in soup.select('select[name="selectedtype"]'):
+        selected = selected_type.select_one("option[selected]")
+        if isinstance(selected, Tag) and str(selected.get("value", "")):
+            _raise_parse("document filter")
+    tables = tuple(
+        table
+        for table in soup.select("table")
+        if {"type", "date"}.issubset(
+            {
+                _normalise_label(header.get_text(" ", strip=True))
+                for header in table.select("th")
+            }
+        )
+    )
+    if not tables:
+        if "no documents found" in text.casefold():
+            return ()
+        _raise_parse("document table")
+    if len(tables) != 1:
+        _raise_parse("document table")
+    documents = []
+    for row in tables[0].select("tr"):
+        cells = row.find_all("td", recursive=False)
+        if not cells:
+            continue
+        documents.append(_parse_document_row(cells))
+    return tuple(documents)
+
+
+def _parse_document_row(cells: list[Tag]) -> ArunDocumentV1:
+    if len(cells) < _DOCUMENT_COLUMNS:
+        _raise_parse("document row")
+    link = cells[0].select_one('a[href*="viewDocument"]')
+    if not isinstance(link, Tag):
+        _raise_parse("document link")
+    url = HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))
+    parts = urlsplit(str(url))
+    query = parse_qs(parts.query)
+    if (
+        parts.netloc != urlsplit(BASE_URL).netloc
+        or not parts.path.endswith("/viewDocument")
+        or len(query.get("file", [])) != 1
+        or query.get("module") != ["pl"]
+    ):
+        _raise_parse("document link")
+    document_type = unescape(cells[0].get_text(" ", strip=True))
+    description = unescape(cells[4].get_text(" ", strip=True)) or None
+    return ArunDocumentV1(
+        title=description or document_type,
+        url=url,
+        published_date=_optional_date_text(cells[2].get_text(" ", strip=True)),
+        document_type=document_type,
+        description=description,
+        source_links=(url,),
+    )
+
+
 def _parse_labelled_fields(body: bytes) -> dict[str, str]:
     soup = BeautifulSoup(body, "html.parser")
     fields: dict[str, str] = {}
@@ -942,6 +1062,17 @@ def _optional_date(fields: dict[str, str], *names: str) -> date | None:
         except ValueError:
             continue
     return _raise_parse(f"date {'/'.join(names)}")
+
+
+def _optional_date_text(value: str) -> date | None:
+    if not value:
+        return None
+    for date_format in _DATE_FORMATS:
+        try:
+            return datetime.strptime(value, date_format).replace(tzinfo=UTC).date()
+        except ValueError:
+            continue
+    return _raise_parse("document date")
 
 
 def _required_fixture(value: str, pattern: str, field: str) -> str:

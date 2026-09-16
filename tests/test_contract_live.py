@@ -157,6 +157,22 @@ def _arun_detail(reference: str) -> bytes:
       <tr><th>Applicant</th><td>Applicant One</td></tr>
       <tr><th>Agent</th><td>Agent One</td></tr>
     </table>
+    <form method="post" action="showDocuments?reference={reference}&amp;module=pl">
+      <input type="submit" name="ViewDocuments" value="View Documents">
+    </form>
+    """.encode()
+
+
+def _arun_documents(reference: str) -> bytes:
+    return f"""
+    <form method="post" action="showDocuments?reference={reference}&amp;module=pl&amp;filterBy=TYPE">
+      <select name="selectedtype"><option value="" selected>All</option></select>
+    </form>
+    <table>
+      <tr><th>Type</th><th></th><th>Date</th><th></th><th>Description</th></tr>
+      <tr><td><a href="viewDocument?file=decision.pdf&amp;module=pl">Decision</a></td>
+      <td></td><td>15/09/2026</td><td></td><td>Decision notice</td></tr>
+    </table>
     """.encode()
 
 
@@ -206,6 +222,9 @@ class _ArunMock:
         if "planningDetails" in url:
             reference = parse_qs(urlsplit(url).query)["reference"][0]
             return _arun_detail("WRONG/1" if self.mismatch_detail else reference)
+        if "showDocuments" in url:
+            reference = parse_qs(urlsplit(url).query)["reference"][0]
+            return _arun_documents(reference)
         raise AssertionError(url)
 
 
@@ -466,7 +485,8 @@ def test_arun_public_collector_resumes_and_is_idempotent(tmp_path: Path) -> None
     assert first.attachment_body_requests == 0
     stored = store.get_application(first.applications[0])
     assert stored.proposal == "Build & landscape one home"
-    assert stored.completeness.documents.kind == "unavailable"
+    assert stored.completeness.documents.kind == "complete"
+    assert [document.title for document in stored.documents] == ["Decision notice"]
     assert store.discovery_state(AuthorityId("arun")).queued[0].locator is not None
     repeat = asyncio.run(
         collector.collect(AuthorityId("arun"), window, _Session(_ArunMock()))
@@ -474,7 +494,7 @@ def test_arun_public_collector_resumes_and_is_idempotent(tmp_path: Path) -> None
     assert repeat.applications == ()
     assert repeat.requested_urls == ()
     assert store.semantic_version_count(first.applications[0], "application") == 1
-    assert store.semantic_version_count(first.applications[0], "documents") == 0
+    assert store.semantic_version_count(first.applications[0], "documents") == 1
     assert all("ShowFile" not in url for url in first.requested_urls)
     store.close()
 

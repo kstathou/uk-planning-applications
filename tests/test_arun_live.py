@@ -89,8 +89,10 @@ def _detail_with_documents(reference: str) -> bytes:
 
 
 def _document_index() -> bytes:
-    return b"""
-    <form method="post" action="showDocuments?reference=BR/1/26/PL&amp;module=pl&amp;filterBy=TYPE">
+    return (
+        b'<form method="post" action="showDocuments?reference=BR/1/26/PL'
+        b'&amp;module=pl&amp;filterBy=TYPE">'
+        b"""
       <select name="selectedtype"><option value="" selected>All</option></select>
     </form>
     <table>
@@ -105,6 +107,7 @@ def _document_index() -> bytes:
       </tr>
     </table>
     """
+    )
 
 
 class _Session:
@@ -665,3 +668,72 @@ def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> Non
         b"No documents found for this planning application"
     )
     assert documents == ()
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        b'<form method="get" action="showDocuments',
+        b'<form method="post" action="https://elsewhere.invalid/showDocuments',
+        b'<form method="post" action="showDocuments?module=wrong&amp;ignored=',
+    ],
+)
+def test_arun_document_action_rejects_wrong_routing(replacement: bytes) -> None:
+    detail = _detail_with_documents("BR/1/26/PL")
+    malformed = detail.replace(
+        b'<form method="post" action="showDocuments',
+        replacement,
+    )
+    with pytest.raises(arun.ArunParseError, match="document action"):
+        arun._document_request(malformed, "BR/1/26/PL")
+
+
+def test_arun_document_action_requires_the_exact_submit_control() -> None:
+    detail = _detail_with_documents("BR/1/26/PL").replace(
+        b'name="ViewDocuments"', b'name="Other"'
+    )
+    with pytest.raises(arun.ArunParseError, match="document action submit"):
+        arun._document_request(detail, "BR/1/26/PL")
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "https://elsewhere.invalid/viewDocument?file=x.pdf&module=pl",
+        "notviewDocument?file=x.pdf&module=pl",
+        "viewDocument?module=pl",
+        "viewDocument?file=x.pdf&module=wrong",
+    ],
+)
+def test_arun_document_index_rejects_invalid_attachment_links(href: str) -> None:
+    malformed = _document_index().replace(
+        b"viewDocument?file=decision-1.pdf&amp;module=pl",
+        href.replace("&", "&amp;").encode(),
+        1,
+    )
+    with pytest.raises(arun.ArunParseError, match="document link"):
+        arun._parse_document_index(malformed)
+
+
+def test_arun_document_index_rejects_incomplete_tables_and_dates() -> None:
+    with pytest.raises(arun.ArunParseError, match="document table"):
+        arun._parse_document_index(b"unknown document response")
+    with pytest.raises(arun.ArunParseError, match="document table"):
+        arun._parse_document_index(_document_index() + _document_index())
+    with pytest.raises(arun.ArunParseError, match="document row"):
+        arun._parse_document_index(
+            b"<table><tr><th>Type</th><th>Date</th></tr><tr><td>Only</td></tr></table>"
+        )
+    with pytest.raises(arun.ArunParseError, match="document link"):
+        arun._parse_document_index(
+            b"<table><tr><th>Type</th><th>Date</th></tr>"
+            b"<tr><td>Type</td><td></td><td></td><td></td><td></td></tr></table>"
+        )
+    blank_date = arun._parse_document_index(
+        _document_index().replace(b"15/09/2026", b"", 1)
+    )
+    assert blank_date[0].published_date is None
+    with pytest.raises(arun.ArunParseError, match="document date"):
+        arun._parse_document_index(
+            _document_index().replace(b"15/09/2026", b"not-a-date", 1)
+        )
