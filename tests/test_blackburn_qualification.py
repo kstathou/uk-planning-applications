@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import sqlite3
 import sys
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -277,6 +278,25 @@ def test_blackburn_qualification_persists_complete_zero_network_receipt(
     ]
     receipt_path = data_dir / "blackburn-with-darwen-qualification-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+    connection = sqlite3.connect(data_dir / "yimby.sqlite3")
+    connection.row_factory = sqlite3.Row
+    try:
+        authority = connection.execute(
+            "SELECT capabilities_json, live_readiness, live_transport "
+            "FROM authorities WHERE authority_id = ?",
+            ("blackburn-with-darwen",),
+        ).fetchone()
+    finally:
+        connection.close()
+    assert authority is not None
+    assert json.loads(authority["capabilities_json"]) == {
+        "discovery": "supported",
+        "documents": "supported",
+        "comments": "unsupported",
+        "coordinates": "supported",
+    }
+    assert authority["live_readiness"] == "browser-only"
+    assert authority["live_transport"] == "browser"
 
 
 def test_blackburn_qualification_writes_truthful_blocked_receipt(
