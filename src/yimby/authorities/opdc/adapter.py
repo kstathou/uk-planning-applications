@@ -92,18 +92,32 @@ class OpdcDiscoveryScope(FrozenModel):
     include_open: bool
 
 
-class OpdcCompletedQuery(FrozenModel):
-    """A fully returned API query and its source-declared result total."""
-
-    query: OpdcDiscoveryQuery
-    result_total: int = Field(ge=0)
-
-
 class OpdcIdentity(FrozenModel):
     """Canonical public reference and Agile application identifier."""
 
     reference: _NonBlank
     locator: _NonBlank
+
+
+class OpdcCompletedQuery(FrozenModel):
+    """A fully returned API query with its exact returned identities."""
+
+    query: OpdcDiscoveryQuery
+    result_total: int = Field(ge=0)
+    identities: tuple[OpdcIdentity, ...]
+
+    @model_validator(mode="after")
+    def coherent(self) -> Self:
+        """Tie the declared total to a bijective per-query identity inventory."""
+        if self.result_total != len(self.identities):
+            _raise_checkpoint("result total")
+        references = tuple(item.reference for item in self.identities)
+        locators = tuple(item.locator for item in self.identities)
+        if len(references) != len(set(references)) or len(locators) != len(
+            set(locators)
+        ):
+            _raise_checkpoint("query identity")
+        return self
 
 
 class OpdcCheckpointV1(FrozenModel):
@@ -137,6 +151,8 @@ class OpdcCheckpointV1(FrozenModel):
             set(locators)
         ):
             _raise_checkpoint("identity")
+        if _merged_identities(self.completed_queries) != self.seen_references:
+            _raise_checkpoint("identity inventory")
         return self
 
     @property
@@ -547,6 +563,27 @@ def _query_inventory(
     return (*bounded, OpdcDiscoveryQuery.REGISTERED_OPEN)
 
 
+def _merged_identities(
+    completed_queries: tuple[OpdcCompletedQuery, ...],
+) -> tuple[OpdcIdentity, ...]:
+    by_reference: dict[str, str] = {}
+    by_locator: dict[str, str] = {}
+    merged = []
+    for completed_query in completed_queries:
+        for identity in completed_query.identities:
+            known_locator = by_reference.get(identity.reference)
+            known_reference = by_locator.get(identity.locator)
+            if (known_locator is not None and known_locator != identity.locator) or (
+                known_reference is not None and known_reference != identity.reference
+            ):
+                _raise_checkpoint("cross-query identity")
+            if known_locator is None and known_reference is None:
+                by_reference[identity.reference] = identity.locator
+                by_locator[identity.locator] = identity.reference
+                merged.append(identity)
+    return tuple(merged)
+
+
 def _search_request(
     query: OpdcDiscoveryQuery,
     scope: OpdcDiscoveryScope,
@@ -761,7 +798,11 @@ def _advance(
         live_scope=progress.live_scope,
         completed_queries=(
             *progress.completed_queries,
-            OpdcCompletedQuery(query=query, result_total=len(identities)),
+            OpdcCompletedQuery(
+                query=query,
+                result_total=len(identities),
+                identities=identities,
+            ),
         ),
         seen_references=tuple(seen),
     )

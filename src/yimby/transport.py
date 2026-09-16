@@ -146,6 +146,9 @@ class FixtureSession:
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         """Return one fixture response after applying attachment policy."""
+        if request.headers:
+            message = "fixture transport does not support request headers"
+            raise ValueError(message)
         url = str(request.url)
         path = urlsplit(url).path
         lowered = path.casefold()

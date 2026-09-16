@@ -49,6 +49,7 @@ from yimby.domain import (
     TransportMode,
     Wgs84Coordinate,
 )
+from yimby.evidence import EvidenceIntegrityError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -59,6 +60,15 @@ if TYPE_CHECKING:
 _DOCUMENTS = TypeAdapter(tuple[DocumentRecord, ...])
 _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
+
+
+class _RetainedEvidenceCapture(FrozenModel):
+    digest: EvidenceDigest
+    source_url: HttpUrl
+    media_type: str
+
+
+_RETAINED_EVIDENCE = TypeAdapter(tuple[_RetainedEvidenceCapture, ...])
 
 
 class _ApplicationSection(FrozenModel):
@@ -314,15 +324,16 @@ class SqliteStore:
                 INSERT INTO native_rebuild_inputs(
                     application_id, authority_id, source_id, reference, schema_name,
                     locator, payload_json, observed_at, completeness_json,
-                    evidence_digests_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    evidence_digests_json, evidence_captures_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(application_id) DO UPDATE SET
                     schema_name = excluded.schema_name,
                     locator = COALESCE(excluded.locator, native_rebuild_inputs.locator),
                     payload_json = excluded.payload_json,
                     observed_at = excluded.observed_at,
                     completeness_json = excluded.completeness_json,
-                    evidence_digests_json = excluded.evidence_digests_json
+                    evidence_digests_json = excluded.evidence_digests_json,
+                    evidence_captures_json = excluded.evidence_captures_json
                 """,
                 (
                     application_id,
@@ -336,6 +347,17 @@ class SqliteStore:
                     normalised.completeness.model_dump_json(),
                     json.dumps(
                         [str(capture.digest) for capture in collected.evidence],
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(
+                        [
+                            {
+                                "digest": str(capture.digest),
+                                "source_url": str(capture.url),
+                                "media_type": capture.media_type,
+                            }
+                            for capture in collected.evidence
+                        ],
                         separators=(",", ":"),
                     ),
                 ),
@@ -377,22 +399,48 @@ class SqliteStore:
         )
         for row in rows:
             captures = []
-            for digest_value in json.loads(row["evidence_digests_json"]):
+            associations = _RETAINED_EVIDENCE.validate_json(
+                row["evidence_captures_json"]
+            )
+            capture_inputs: tuple[tuple[EvidenceDigest, str | None, str | None], ...]
+            if associations:
+                capture_inputs = tuple(
+                    (
+                        capture.digest,
+                        str(capture.source_url),
+                        capture.media_type,
+                    )
+                    for capture in associations
+                )
+            else:
+                capture_inputs = tuple(
+                    (EvidenceDigest(digest_value), None, None)
+                    for digest_value in json.loads(row["evidence_digests_json"])
+                )
+            for digest, captured_url, captured_media_type in capture_inputs:
                 evidence = self._connection.execute(
                     """
                     SELECT path, source_url, media_type FROM evidence
                     WHERE digest = ?
                     """,
-                    (digest_value,),
+                    (digest,),
                 ).fetchone()
                 if evidence is None:
-                    raise KeyError(digest_value)
+                    raise KeyError(digest)
+                source_url = (
+                    captured_url if captured_url is not None else evidence["source_url"]
+                )
+                media_type = (
+                    captured_media_type
+                    if captured_media_type is not None
+                    else evidence["media_type"]
+                )
                 captures.append(
                     self._evidence.read_capture(
-                        EvidenceDigest(digest_value),
+                        digest,
                         evidence["path"],
-                        evidence["source_url"],
-                        evidence["media_type"],
+                        source_url,
+                        media_type,
                     )
                 )
             retained.append(
@@ -1081,6 +1129,26 @@ class SqliteStore:
             )
             if not (self.evidence_root / row["path"]).exists()
         )
+
+    def invalid_evidence_paths(self) -> tuple[str, ...]:
+        """Return retained evidence paths that fail body-integrity verification."""
+        invalid = []
+        for row in self._connection.execute(
+            """
+            SELECT digest, path, source_url, media_type
+            FROM evidence ORDER BY path
+            """
+        ):
+            try:
+                self._evidence.read_capture(
+                    EvidenceDigest(row["digest"]),
+                    row["path"],
+                    row["source_url"],
+                    row["media_type"],
+                )
+            except EvidenceIntegrityError:
+                invalid.append(row["path"])
+        return tuple(invalid)
 
     def migration_versions(self) -> tuple[int, ...]:
         """Return applied migration versions in order."""

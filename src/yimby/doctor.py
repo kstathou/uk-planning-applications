@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from yimby.store import SqliteStore
 
-EXPECTED_MIGRATIONS = (1, 2, 3, 4, 5)
+EXPECTED_MIGRATIONS = (1, 2, 3, 4, 5, 6)
 DEFAULT_MINIMUM_FREE_BYTES = 100 * 1024 * 1024
 
 
@@ -28,7 +28,7 @@ def run_doctor(
     """Check database, migrations, evidence, registry, and free disk space."""
     integrity = store.database_integrity()
     migrations = store.migration_versions()
-    missing_evidence = store.missing_evidence_paths()
+    invalid_evidence = store.invalid_evidence_paths()
     authority_count = len(store.authority_states())
     free_bytes = shutil.disk_usage(data_dir).free
     return DoctorReport(
@@ -45,11 +45,11 @@ def run_doctor(
             ),
             DoctorCheck(
                 name="evidence",
-                ok=not missing_evidence,
+                ok=not invalid_evidence,
                 detail=(
                     "complete"
-                    if not missing_evidence
-                    else f"missing {len(missing_evidence)} file(s)"
+                    if not invalid_evidence
+                    else f"invalid {len(invalid_evidence)} file(s)"
                 ),
             ),
             DoctorCheck(

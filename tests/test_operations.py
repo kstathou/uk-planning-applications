@@ -569,6 +569,14 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     _collect_barnet(store)
     store.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_captures_json = '[]'"
+        )
+        connection.commit()
+    reopened = _store(tmp_path)
+    assert reopened.retained_native_records()[0].evidence
+    reopened.close()
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
         connection.execute("DELETE FROM evidence")
         connection.commit()
     reopened = _store(tmp_path)

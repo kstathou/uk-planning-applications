@@ -23,7 +23,6 @@ from yimby.authorities.opdc.adapter import (
     API_BASE_URL,
     SOURCE,
     OpdcCheckpointV1,
-    OpdcCompletedQuery,
     OpdcDiscoveryQuery,
     OpdcDiscoveryScope,
 )
@@ -36,7 +35,7 @@ from yimby.domain import (
     RunStatus,
     SourceReference,
 )
-from yimby.evidence import EvidenceStore
+from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
@@ -119,6 +118,13 @@ class QualificationCheck(FrozenModel):
     ok: bool
 
 
+class QualificationQuery(FrozenModel):
+    """Compact receipt summary of one identity-backed discovery query."""
+
+    query: OpdcDiscoveryQuery
+    result_total: int = Field(ge=0)
+
+
 class OpdcQualificationReceiptV1(FrozenModel):
     """Versioned success proof for one complete OPDC bootstrap."""
 
@@ -127,7 +133,7 @@ class OpdcQualificationReceiptV1(FrozenModel):
     source_contract: Literal["agile-citizen-portal-v1"] = "agile-citizen-portal-v1"
     created_at: datetime
     scope: QualificationScope
-    query_inventory: tuple[OpdcCompletedQuery, ...]
+    query_inventory: tuple[QualificationQuery, ...]
     identities: tuple[QualificationIdentity, ...]
     counts: QualificationCounts
     costs: QualificationCosts
@@ -260,11 +266,14 @@ def _terminal_checkpoint(
     checkpoint_identities = _checkpoint_identities(checkpoint)
     state = store.discovery_state(_AUTHORITY_ID)
     durable = tuple(_identity(reference) for reference in state.queued)
-    retained = tuple(
-        _identity(record.reference)
-        for record in store.retained_native_records()
-        if record.authority_id == _AUTHORITY_ID
-    )
+    try:
+        retained = tuple(
+            _identity(record.reference)
+            for record in store.retained_native_records()
+            if record.authority_id == _AUTHORITY_ID
+        )
+    except (EvidenceIntegrityError, KeyError):
+        return None
     if not (
         checkpoint.page_token == _LIVE_PAGE
         and checkpoint.live_scope == _expected_scope(scope)
@@ -297,11 +306,14 @@ def _application_evidence(
     if checkpoint is None:
         return False
     expected_identities = set(_checkpoint_identities(checkpoint))
-    records = tuple(
-        record
-        for record in store.retained_native_records()
-        if record.authority_id == _AUTHORITY_ID
-    )
+    try:
+        records = tuple(
+            record
+            for record in store.retained_native_records()
+            if record.authority_id == _AUTHORITY_ID
+        )
+    except (EvidenceIntegrityError, KeyError):
+        return False
     if {_identity(record.reference) for record in records} != expected_identities:
         return False
     for record in records:
@@ -310,19 +322,9 @@ def _application_evidence(
         if locator is None or len(captures) != _APPLICATION_EVIDENCE_COUNT:
             return False
         root = f"{API_BASE_URL}/api/application/{locator}"
-        detail, document, response = captures
-        document_path = urlsplit(str(document.url)).path.casefold()
-        response_path = urlsplit(str(response.url)).path.casefold()
-        child_classes_ok = (
-            document_path.endswith("/document") and response_path.endswith("/responses")
-        ) or document.digest == response.digest
         actual_urls = tuple(str(capture.url) for capture in captures)
-        if (
-            str(detail.url) != root
-            or not child_classes_ok
-            or any(
-                _ATTACHMENT_PATH in urlsplit(url).path.casefold() for url in actual_urls
-            )
+        if actual_urls != (root, f"{root}/document", f"{root}/responses") or any(
+            _ATTACHMENT_PATH in urlsplit(url).path.casefold() for url in actual_urls
         ):
             return False
     return True
@@ -372,6 +374,10 @@ def _base_checks(
         QualificationCheck(
             name="evidence-paths",
             ok=not store.missing_evidence_paths(),
+        ),
+        QualificationCheck(
+            name="evidence-integrity",
+            ok=not store.invalid_evidence_paths(),
         ),
         QualificationCheck(
             name="application-evidence",
@@ -452,7 +458,10 @@ async def _qualify(
     return OpdcQualificationReceiptV1(
         created_at=now(),
         scope=config.scope,
-        query_inventory=terminal.completed_queries,
+        query_inventory=tuple(
+            QualificationQuery(query=item.query, result_total=item.result_total)
+            for item in terminal.completed_queries
+        ),
         identities=identities,
         counts=_counts(final_snapshot),
         costs=QualificationCosts(
