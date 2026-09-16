@@ -66,6 +66,7 @@ if TYPE_CHECKING:
 _DOCUMENTS = TypeAdapter(tuple[DocumentRecord, ...])
 _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
+_REQUEST_FORM_PARTS = 2
 
 
 class _RetainedEvidenceCapture(FrozenModel):
@@ -89,6 +90,11 @@ class RetainedEvidenceRegistration(FrozenModel):
     observation_id: int
     digest: EvidenceDigest
     path: str
+    source_id: SourceId
+    reference: str
+    locator: str | None
+    response_url: str | None
+    native_json: str
 
 
 class RetainedDiscoveryEvidenceRegistration(FrozenModel):
@@ -99,6 +105,10 @@ class RetainedDiscoveryEvidenceRegistration(FrozenModel):
     page: int
     digest: EvidenceDigest
     path: str
+    response_url: str | None
+    request_url: str | None
+    request_method: str | None
+    request_form: tuple[tuple[str, str], ...] | None
 
 
 class RegisteredEvidenceObject(FrozenModel):
@@ -254,7 +264,8 @@ class SqliteStore:
             msg = "discovery evidence requires a query key and page"
             raise ValueError(msg)
         evidence_paths = [
-            (capture, self._evidence.put(capture)) for capture in batch.evidence
+            (retained, self._evidence.put(retained.capture))
+            for retained in batch.evidence
         ]
         with self._connection:
             for reference in batch.references:
@@ -277,7 +288,8 @@ class SqliteStore:
                         run_id,
                     ),
                 )
-            for capture, path in evidence_paths:
+            for retained, path in evidence_paths:
+                capture = retained.capture
                 self._connection.execute(
                     """
                     INSERT OR IGNORE INTO evidence(
@@ -294,8 +306,10 @@ class SqliteStore:
                 self._connection.execute(
                     """
                     INSERT OR IGNORE INTO discovery_evidence(
-                        authority_id, run_id, query_key, page, digest
-                    ) VALUES (?, ?, ?, ?, ?)
+                        authority_id, run_id, query_key, page, digest,
+                        response_url, request_url, request_method,
+                        request_form_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         authority_id,
@@ -303,6 +317,10 @@ class SqliteStore:
                         batch.evidence_key,
                         batch.evidence_page,
                         capture.digest,
+                        str(capture.url),
+                        str(retained.request_url),
+                        retained.request_method,
+                        json.dumps(retained.request_form, separators=(",", ":")),
                     ),
                 )
             self._connection.execute(
@@ -405,10 +423,10 @@ class SqliteStore:
                 self._connection.execute(
                     """
                     INSERT OR IGNORE INTO observation_evidence(
-                        observation_id, digest
-                    ) VALUES (?, ?)
+                        observation_id, digest, response_url
+                    ) VALUES (?, ?, ?)
                     """,
-                    (observation_id, capture.digest),
+                    (observation_id, capture.digest, str(capture.url)),
                 )
             self._connection.execute(
                 """
@@ -1571,12 +1589,22 @@ class SqliteStore:
                 SELECT application.id AS application_id,
                     observation.id AS observation_id,
                     linked.digest,
-                    evidence.path
+                    evidence.path,
+                    application.source_id,
+                    application.reference,
+                    application.locator,
+                    linked.response_url,
+                    native.payload_json AS native_json
                 FROM applications AS application
                 JOIN observations AS observation
                     ON observation.application_id = application.id
                 JOIN observation_evidence AS linked
                     ON linked.observation_id = observation.id
+                JOIN observation_native_versions AS observed_native
+                    ON observed_native.observation_id = observation.id
+                JOIN native_versions AS native
+                    ON native.application_id = observed_native.application_id
+                    AND native.payload_hash = observed_native.payload_hash
                 LEFT JOIN evidence ON evidence.digest = linked.digest
                 WHERE application.authority_id = ?
                 ORDER BY application.id, observation.id, linked.digest
@@ -1595,13 +1623,20 @@ class SqliteStore:
                     observation_id=row["observation_id"],
                     digest=digest,
                     path=row["path"],
+                    source_id=SourceId(row["source_id"]),
+                    reference=row["reference"],
+                    locator=row["locator"],
+                    response_url=row["response_url"],
+                    native_json=row["native_json"],
                 )
             )
         discovery_registrations: list[RetainedDiscoveryEvidenceRegistration] = []
         for row in self._connection.execute(
             """
             SELECT linked.run_id, linked.query_key, linked.page,
-                linked.digest, evidence.path
+                linked.digest, evidence.path, linked.response_url,
+                linked.request_url, linked.request_method,
+                linked.request_form_json
             FROM discovery_evidence AS linked
             LEFT JOIN evidence ON evidence.digest = linked.digest
             WHERE linked.authority_id = ?
@@ -1620,6 +1655,10 @@ class SqliteStore:
                     page=row["page"],
                     digest=digest,
                     path=row["path"],
+                    response_url=row["response_url"],
+                    request_url=row["request_url"],
+                    request_method=row["request_method"],
+                    request_form=self._decode_request_form(row["request_form_json"]),
                 )
             )
         database_objects = tuple(
@@ -2354,6 +2393,25 @@ class SqliteStore:
     @staticmethod
     def _optional_date(value: str | None) -> date | None:
         return None if value is None else date.fromisoformat(value)
+
+    @staticmethod
+    def _decode_request_form(
+        value: str | None,
+    ) -> tuple[tuple[str, str], ...] | None:
+        if value is None:
+            return None
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(decoded, list) or any(
+            not isinstance(item, list)
+            or len(item) != _REQUEST_FORM_PARTS
+            or not all(isinstance(part, str) for part in item)
+            for item in decoded
+        ):
+            return None
+        return tuple((item[0], item[1]) for item in decoded)
 
     @staticmethod
     def _capability_state(kind: str) -> CapabilityState:

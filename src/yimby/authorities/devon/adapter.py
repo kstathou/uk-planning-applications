@@ -25,6 +25,7 @@ from yimby.domain import (
     Completeness,
     CompleteSection,
     DiscoveryBatch,
+    DiscoveryEvidenceCapture,
     DiscoveryWindow,
     DocumentRecord,
     FrozenModel,
@@ -76,6 +77,7 @@ _REDIRECT_BOUNDARY = RedirectBoundary(
         "/Appeals/Display/",
         "/Search/Results/",
     ),
+    query_paths=("/Disclaimer",),
 )
 _BOOLEAN_FIELDS = (
     "Outstanding",
@@ -319,6 +321,14 @@ class _DevonQuery(FrozenModel):
     end: date | None = None
 
 
+class DevonDiscoveryRequestV1(FrozenModel):
+    """Retained logical request facts used to audit one discovery page."""
+
+    url: str
+    method: str
+    form: tuple[tuple[str, str], ...]
+
+
 class _DiscoveryPage(FrozenModel):
     references: tuple[SourceReference, ...]
     page: int = Field(ge=1)
@@ -415,29 +425,25 @@ class DevonAdapter:
             return
         queries = _query_inventory(scope)
         for query in queries[len(progress.completed_queries) :]:
-            form_capture = await _fetch_protected(
-                session,
-                PortalRequest(
-                    url=HttpUrl(_ADVANCED_FORM_URL), intent=RequestIntent.SEARCH
-                ),
+            form_request = PortalRequest(
+                url=HttpUrl(_ADVANCED_FORM_URL), intent=RequestIntent.SEARCH
             )
+            form_capture = await _fetch_protected(session, form_request)
             form = _parse_advanced_form(form_capture[-1].body)
-            first_capture = await _fetch_protected(
-                session,
-                PortalRequest(
-                    url=HttpUrl(_RESULTS_URL),
-                    intent=RequestIntent.SEARCH,
-                    method=RequestMethod.POST,
-                    form=_advanced_fields(form, query),
-                ),
+            result_request = PortalRequest(
+                url=HttpUrl(_RESULTS_URL),
+                intent=RequestIntent.SEARCH,
+                method=RequestMethod.POST,
+                form=_advanced_fields(form, query),
             )
+            first_capture = await _fetch_protected(session, result_request)
             current = _parse_discovery_page(
                 first_capture[-1].body,
                 expected_page=1,
                 expected_source=_query_source(query),
                 response_url=first_capture[-1].url,
             )
-            current_evidence = (*form_capture, *first_capture)
+            current_evidence = _discovery_evidence(first_capture, result_request)
             if progress.active_query == query.key:
                 current, current_evidence = await _replay_committed_pages(
                     session,
@@ -550,13 +556,7 @@ class DevonAdapter:
                     reference.reference,
                     final_reference,
                 )
-        fields = _parse_labelled_fields(detail.body)
-        documents, document_state = _parse_documents(detail.body)
-        payload = (
-            _planning_payload(reference, fields, detail.body, documents)
-            if route == "planning"
-            else _appeal_payload(reference, fields, detail.body, documents)
-        )
+        payload, document_state = parse_native_evidence(reference, detail.body)
         return _snapshot(reference, payload, captures, document_state)
 
     def normalise(
@@ -692,6 +692,27 @@ def _published_value(value: str | None) -> str | None:
     if value is None or not value.strip() or value.strip() == "-":
         return None
     return value.strip()
+
+
+def parse_native_evidence(
+    reference: SourceReference,
+    body: bytes,
+) -> tuple[DevonApplicationV1, CompleteSection | UnavailableSection]:
+    """Parse one retained detail body under its source-qualified identity."""
+    if reference.locator is None:
+        raise DevonRoutingError(reference.reference)
+    route = _detail_route(HttpUrl(reference.locator))
+    expected_source = PLANNING_SOURCE if route == "planning" else APPEAL_SOURCE
+    if reference.source_id != expected_source:
+        raise DevonRoutingError(reference.reference)
+    fields = _parse_labelled_fields(body)
+    documents, document_state = _parse_documents(body)
+    payload = (
+        _planning_payload(reference, fields, body, documents)
+        if route == "planning"
+        else _appeal_payload(reference, fields, body, documents)
+    )
+    return payload, document_state
 
 
 def _planning_payload(
@@ -903,7 +924,7 @@ async def _replay_committed_pages(
     progress: DevonCheckpointV1,
     first_page: _DiscoveryPage,
     query: _DevonQuery,
-) -> tuple[_DiscoveryPage, tuple[EvidenceCapture, ...]]:
+) -> tuple[_DiscoveryPage, tuple[DiscoveryEvidenceCapture, ...]]:
     current = first_page
     for index, expected in enumerate(progress.active_pages):
         if current.terminal or current.committed_proof() != expected:
@@ -928,11 +949,9 @@ async def _fetch_result_page(
     locator: HttpUrl,
     page: int,
     query: _DevonQuery,
-) -> tuple[_DiscoveryPage, tuple[EvidenceCapture, ...]]:
-    captures = await _fetch_protected(
-        session,
-        PortalRequest(url=locator, intent=RequestIntent.SEARCH),
-    )
+) -> tuple[_DiscoveryPage, tuple[DiscoveryEvidenceCapture, ...]]:
+    request = PortalRequest(url=locator, intent=RequestIntent.SEARCH)
+    captures = await _fetch_protected(session, request)
     return (
         _parse_discovery_page(
             captures[-1].body,
@@ -940,7 +959,22 @@ async def _fetch_result_page(
             expected_source=_query_source(query),
             response_url=captures[-1].url,
         ),
-        captures,
+        _discovery_evidence(captures, request),
+    )
+
+
+def _discovery_evidence(
+    captures: tuple[EvidenceCapture, ...],
+    request: PortalRequest,
+) -> tuple[DiscoveryEvidenceCapture, ...]:
+    return tuple(
+        DiscoveryEvidenceCapture(
+            capture=capture,
+            request_url=request.url,
+            request_method=request.method.value,
+            request_form=tuple((field.name, field.value) for field in request.form),
+        )
+        for capture in captures
     )
 
 
@@ -1111,6 +1145,72 @@ def _advanced_fields(  # noqa: C901
             value = str(control.get("value", ""))
         fields.append(FormField(name=name, value=value))
     return tuple(fields)
+
+
+def discovery_request_matches(  # noqa: C901, PLR0911
+    query: _DevonQuery,
+    page: int,
+    request: DevonDiscoveryRequestV1,
+    expected_url: HttpUrl,
+) -> bool:
+    """Validate retained logical request facts against one query page."""
+    if request.url != str(expected_url):
+        return False
+    if page > 1:
+        return request.method == RequestMethod.GET and not request.form
+    if request.method != RequestMethod.POST:
+        return False
+    appeal_query = query.kind in {
+        "appeal-received",
+        "appeal-determined",
+        "outstanding-appeals",
+    }
+    enabled = {
+        "Outstanding": query.kind in {"outstanding-planning", "outstanding-appeals"},
+        "SearchPlanning": not appeal_query,
+        "SearchEnforcement": False,
+        "SearchAppeals": appeal_query,
+    }
+    expected_values = dict.fromkeys(_VALUE_FIELDS, "")
+    if query.kind in {
+        "received",
+        "determined",
+        "appeal-received",
+        "appeal-determined",
+    }:
+        if query.start is None or query.end is None:
+            return False
+        prefix = {
+            "received": "DateReceived",
+            "determined": "DateDetermined",
+            "appeal-received": "DateAppeal",
+            "appeal-determined": "DateAppealDecision",
+        }[query.kind]
+        expected_values[f"{prefix}From"] = query.start.strftime("%d/%m/%Y")
+        expected_values[f"{prefix}To"] = query.end.strftime("%d/%m/%Y")
+    values: dict[str, list[str]] = {}
+    for name, value in request.form:
+        values.setdefault(name, []).append(value)
+    expected_counts = Counter(
+        {
+            "__RequestVerificationToken": 1,
+            "AdvancedSearch": 1,
+            **{name: 2 if value else 1 for name, value in enabled.items()},
+            **dict.fromkeys(_VALUE_FIELDS, 1),
+        }
+    )
+    if Counter(name for name, _value in request.form) != expected_counts:
+        return False
+    if not values["__RequestVerificationToken"][0]:
+        return False
+    if values["AdvancedSearch"] != ["true"]:
+        return False
+    if any(
+        values[name] != (["true", "false"] if value else ["false"])
+        for name, value in enabled.items()
+    ):
+        return False
+    return all(values[name] == [value] for name, value in expected_values.items())
 
 
 def _parse_discovery_page(  # noqa: C901, PLR0912
@@ -1335,7 +1435,7 @@ async def _fetch_protected(
         return (first,)
     action, fields = disclaimer
     accepted_url = HttpUrl(urljoin(f"{BASE_URL}/", action))
-    _validate_disclaimer_action(accepted_url)
+    _validate_disclaimer_action(accepted_url, request.url)
     accepted = await session.fetch(
         PortalRequest(
             url=accepted_url,
@@ -1388,7 +1488,7 @@ def _validate_protected_request(request: PortalRequest) -> None:
         _raise_protected("request-path")
 
 
-def _validate_disclaimer_action(url: HttpUrl) -> None:
+def _validate_disclaimer_action(url: HttpUrl, expected_return_url: HttpUrl) -> None:
     parts = urlsplit(str(url))
     expected_origin = urlsplit(BASE_URL)
     if (
@@ -1409,6 +1509,13 @@ def _validate_disclaimer_action(url: HttpUrl) -> None:
         "",
     ):
         _raise_protected("disclaimer-action")
+    query = parse_qs(parts.query)
+    if set(query) != {"returnUrl"} or len(query["returnUrl"]) != 1:
+        _raise_protected("disclaimer-action-query")
+    returned = urlsplit(urljoin(f"{BASE_URL}/", query["returnUrl"][0]))
+    expected = urlsplit(str(expected_return_url))
+    if returned != expected:
+        _raise_protected("disclaimer-return-route")
 
 
 def _parse_disclaimer(body: bytes) -> tuple[str, tuple[FormField, ...]] | None:
@@ -1441,7 +1548,10 @@ def _parse_labelled_fields(body: bytes) -> dict[str, str]:
 
 def _leading_text(value: Tag) -> str:
     """Read a value only until Devon's first unclosed nested label."""
-    return " ".join(next(value.stripped_strings, "").split())
+    leading = next(value.stripped_strings, "")
+    return "\n".join(
+        " ".join(line.split()) for line in leading.splitlines() if line.strip()
+    )
 
 
 def _parse_coordinates(body: bytes) -> tuple[float | None, float | None]:

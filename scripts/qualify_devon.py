@@ -17,13 +17,24 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import Field
+from pydantic import Field, HttpUrl
 
 from yimby.authorities.devon import DEVON_PACKAGE
 from yimby.authorities.devon.adapter import (
+    _RESULTS_URL,
     DevonCheckpointV1,
+    DevonDiscoveryRequestV1,
+    DevonDiscoveryScope,
     DevonQualificationAuditV1,
     DevonQuerySummaryV1,
+    _DevonQuery,
+    _DiscoveryPage,
+    _parse_disclaimer,
+    _parse_discovery_page,
+    _query_inventory,
+    _query_source,
+    discovery_request_matches,
+    parse_native_evidence,
     qualification_audit,
 )
 from yimby.collection import Collector
@@ -40,11 +51,15 @@ from yimby.evidence import EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
-from yimby.store import EvidenceRegistrationAudit, SqliteStore
+from yimby.store import (
+    EvidenceRegistrationAudit,
+    RetainedDiscoveryEvidenceRegistration,
+    SqliteStore,
+)
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("devon")
-_RECEIPT_NAME = "devon-qualification-v4.json"
+_RECEIPT_NAME = "devon-qualification-v5.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -110,10 +125,10 @@ class PendingWeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class DevonQualificationReceiptV4(FrozenModel):
+class DevonQualificationReceiptV5(FrozenModel):
     """Versioned result of a complete local live qualification."""
 
-    schema_version: Literal[4] = 4
+    schema_version: Literal[5] = 5
     authority_id: Literal["devon"] = "devon"
     created_at: datetime
     scope: QualificationScope
@@ -255,18 +270,172 @@ def _reference_agreement(
 def _discovery_evidence_complete(
     receipt_audit: DevonQualificationAuditV1 | None,
     evidence_audit: EvidenceRegistrationAudit,
+    data_dir: Path,
 ) -> bool:
     if receipt_audit is None or not evidence_audit.discovery_registrations:
         return False
-    retained_pages = {
-        (item.query_key, item.page) for item in evidence_audit.discovery_registrations
-    }
+    grouped: dict[tuple[str, int], list[RetainedDiscoveryEvidenceRegistration]] = {}
+    for item in evidence_audit.discovery_registrations:
+        grouped.setdefault((item.query_key, item.page), []).append(item)
+    retained_pages = set(grouped)
     expected_pages = {
         (summary.query_key, page)
         for summary in receipt_audit.query_summaries
         for page in range(1, summary.page_count + 1)
     }
-    return retained_pages == expected_pages
+    if retained_pages != expected_pages:
+        return False
+    scope = DevonDiscoveryScope(
+        start=receipt_audit.scope.start,
+        end=receipt_audit.scope.end,
+        include_open=receipt_audit.scope.include_open,
+    )
+    queries = _query_inventory(scope)
+    summaries = {item.query_key: item for item in receipt_audit.query_summaries}
+    query_keys = tuple(item.key for item in queries)
+    if query_keys != receipt_audit.expected_queries or set(summaries) != set(
+        query_keys
+    ):
+        return False
+    return all(
+        _query_evidence_complete(query, summaries[query.key], grouped, data_dir)
+        for query in queries
+    )
+
+
+def _query_evidence_complete(
+    query: _DevonQuery,
+    summary: DevonQuerySummaryV1,
+    grouped: dict[tuple[str, int], list[RetainedDiscoveryEvidenceRegistration]],
+    data_dir: Path,
+) -> bool:
+    expected_request_url = HttpUrl(_RESULTS_URL)
+    observed_rows = 0
+    for page_number in range(1, summary.page_count + 1):
+        parsed = _parsed_discovery_evidence(
+            query,
+            page_number,
+            expected_request_url,
+            grouped[(query.key, page_number)],
+            data_dir,
+        )
+        if parsed is None:
+            return False
+        observed_rows += len(parsed.references)
+        if page_number < summary.page_count:
+            if parsed.terminal or parsed.next_locator is None:
+                return False
+            expected_request_url = parsed.next_locator
+        elif not parsed.terminal:
+            return False
+    return observed_rows == summary.row_count
+
+
+def _parsed_discovery_evidence(
+    query: _DevonQuery,
+    page_number: int,
+    expected_request_url: HttpUrl,
+    registrations: list[RetainedDiscoveryEvidenceRegistration],
+    data_dir: Path,
+) -> _DiscoveryPage | None:
+    request_subjects = {
+        (item.request_url, item.request_method, item.request_form)
+        for item in registrations
+    }
+    if len(request_subjects) != 1:
+        return None
+    request_url, request_method, request_form = next(iter(request_subjects))
+    if request_url is None or request_method is None or request_form is None:
+        return None
+    request = DevonDiscoveryRequestV1(
+        url=request_url,
+        method=request_method,
+        form=request_form,
+    )
+    if not discovery_request_matches(
+        query,
+        page_number,
+        request,
+        expected_request_url,
+    ):
+        return None
+    parsed_pages: dict[str, _DiscoveryPage] = {}
+    for item in registrations:
+        parsed = _parse_retained_discovery_page(
+            query,
+            page_number,
+            item,
+            data_dir,
+        )
+        if parsed is False:
+            return None
+        if parsed is not None:
+            parsed_pages[parsed.model_dump_json()] = parsed
+    if len(parsed_pages) != 1:
+        return None
+    return next(iter(parsed_pages.values()))
+
+
+def _parse_retained_discovery_page(
+    query: _DevonQuery,
+    page_number: int,
+    registration: RetainedDiscoveryEvidenceRegistration,
+    data_dir: Path,
+) -> _DiscoveryPage | Literal[False] | None:
+    if registration.response_url is None:
+        return False
+    body = _retained_body(data_dir, registration.path)
+    if body is None:
+        return False
+    if _parse_disclaimer(body) is not None:
+        return None
+    try:
+        return _parse_discovery_page(
+            body,
+            expected_page=page_number,
+            expected_source=_query_source(query),
+            response_url=HttpUrl(registration.response_url),
+        )
+    except ValueError:
+        return False
+
+
+def _retained_body(data_dir: Path, stored_path: str) -> bytes | None:
+    try:
+        return gzip.decompress((data_dir / "evidence" / stored_path).read_bytes())
+    except (OSError, EOFError):
+        return None
+
+
+def _observation_evidence_bound(
+    data_dir: Path,
+    audit: EvidenceRegistrationAudit,
+) -> bool:
+    observations = {item.observation_id for item in audit.registrations}
+    matched: set[int] = set()
+    for item in audit.registrations:
+        if item.locator is None or item.response_url != item.locator:
+            return False
+        body = _retained_body(data_dir, item.path)
+        if body is None:
+            return False
+        if _parse_disclaimer(body) is not None:
+            continue
+        try:
+            payload, _document_state = parse_native_evidence(
+                SourceReference(
+                    source_id=item.source_id,
+                    reference=item.reference,
+                    locator=item.locator,
+                ),
+                body,
+            )
+        except ValueError:
+            return False
+        if payload.model_dump_json() != item.native_json:
+            return False
+        matched.add(item.observation_id)
+    return observations == matched
 
 
 def _evidence_inventory(data_dir: Path) -> tuple[str, ...]:
@@ -303,6 +472,7 @@ def _evidence_integrity(
         or audit.missing_digests
         or audit.unlinked_digests
         or not audit.current_rebuild_coherent
+        or not _observation_evidence_bound(data_dir, audit)
         or len(registered_pairs) != len(set(registered_pairs))
         or set(database_paths) != set(inventory)
     ):
@@ -383,7 +553,7 @@ def _base_checks(
         ),
         QualificationCheck(
             name="discovery-evidence",
-            ok=_discovery_evidence_complete(audit, evidence_audit),
+            ok=_discovery_evidence_complete(audit, evidence_audit, data_dir),
         ),
         QualificationCheck(
             name="unmapped-records",
@@ -403,7 +573,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> DevonQualificationReceiptV4:
+) -> DevonQualificationReceiptV5:
     registry = AuthorityRegistry((DEVON_PACKAGE,), PILOT_LIVE_STATUS)
     collector = Collector(registry, store)
     window = DiscoveryWindow(
@@ -458,7 +628,7 @@ async def _qualify(
     )
     _require(final_checks)
     audit = cast("DevonQualificationAuditV1", _checkpoint_audit(store, config.scope))
-    return DevonQualificationReceiptV4(
+    return DevonQualificationReceiptV5(
         created_at=now(),
         scope=config.scope,
         expected_queries=audit.expected_queries,
@@ -477,7 +647,7 @@ async def _qualify(
     )
 
 
-def _write_receipt(path: Path, receipt: DevonQualificationReceiptV4) -> None:
+def _write_receipt(path: Path, receipt: DevonQualificationReceiptV5) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:
@@ -496,35 +666,44 @@ def _preserved_receipt(
     store: SqliteStore,
     config: _Config,
     path: Path,
-) -> DevonQualificationReceiptV4 | None:
+) -> DevonQualificationReceiptV5 | None:
     """Require original live transport proof whenever durable history exists."""
+    statuses = store.run_statuses()
     has_history = bool(
-        store.run_statuses()
+        statuses
         or store.discovery_state(_AUTHORITY_ID).checkpoint is not None
         or _application_identities(store)
     )
     if not has_history:
         return None
+    if not path.exists():
+        if statuses[-2:] == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED):
+            raise QualificationFailedError(("preserved-live-receipt",))
+        return None
     try:
-        prior = DevonQualificationReceiptV4.model_validate_json(path.read_text())
+        prior = DevonQualificationReceiptV5.model_validate_json(path.read_text())
     except (OSError, ValueError) as error:
         raise QualificationFailedError(("preserved-live-receipt",)) from error
     if (
         prior.scope != config.scope
         or prior.costs.initial.request_count == 0
+        or prior.costs.initial.attachment_body_requests != 0
         or prior.costs.rerun.request_count != 0
         or prior.costs.rerun.transferred_bytes != 0
         or prior.costs.rerun.attachment_body_requests != 0
         or not all(check.ok for check in prior.checks)
+        or not any(
+            check.name == "attachment-policy" and check.ok for check in prior.checks
+        )
     ):
         raise QualificationFailedError(("preserved-live-receipt",))
     return prior
 
 
 def _receipt_to_persist(
-    prior: DevonQualificationReceiptV4 | None,
-    candidate: DevonQualificationReceiptV4,
-) -> DevonQualificationReceiptV4:
+    prior: DevonQualificationReceiptV5 | None,
+    candidate: DevonQualificationReceiptV5,
+) -> DevonQualificationReceiptV5:
     if candidate.costs.initial.request_count != 0:
         if prior is not None:
             raise QualificationFailedError(("preserved-live-receipt",))
@@ -539,6 +718,7 @@ def _receipt_to_persist(
         and prior.checks == candidate.checks
         and prior.weekly_cycles == candidate.weekly_cycles
         and prior.costs.initial.request_count > 0
+        and prior.costs.initial.attachment_body_requests == 0
         and prior.costs.rerun.request_count == 0
         and prior.costs.rerun.transferred_bytes == 0
         and prior.costs.rerun.attachment_body_requests == 0

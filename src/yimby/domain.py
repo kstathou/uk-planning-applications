@@ -200,6 +200,15 @@ class EvidenceCapture(FrozenModel):
     digest: EvidenceDigest
 
 
+class DiscoveryEvidenceCapture(FrozenModel):
+    """One discovery response bound to the logical request that produced it."""
+
+    capture: EvidenceCapture
+    request_url: HttpUrl
+    request_method: Literal["GET", "POST"]
+    request_form: tuple[tuple[str, str], ...] = ()
+
+
 class StoredCheckpoint(FrozenModel):
     """Type-erased checkpoint persisted by the common runner."""
 
@@ -222,7 +231,7 @@ class DiscoveryBatch[CheckpointT: BaseModel](FrozenModel):
     references: tuple[SourceReference, ...]
     next_checkpoint: CheckpointT
     complete: bool
-    evidence: tuple[EvidenceCapture, ...] = ()
+    evidence: tuple[DiscoveryEvidenceCapture, ...] = ()
     evidence_key: str | None = None
     evidence_page: int | None = Field(default=None, ge=1)
 
@@ -233,7 +242,7 @@ class DurableDiscoveryBatch(FrozenModel):
     references: tuple[SourceReference, ...]
     next_checkpoint: StoredCheckpoint
     complete: bool
-    evidence: tuple[EvidenceCapture, ...] = ()
+    evidence: tuple[DiscoveryEvidenceCapture, ...] = ()
     evidence_key: str | None = None
     evidence_page: int | None = Field(default=None, ge=1)
 

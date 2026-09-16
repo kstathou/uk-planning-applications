@@ -1183,6 +1183,15 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
                 reference.model_copy(update={"source_id": devon.APPEAL_SOURCE}),
             )
         )
+    with pytest.raises(devon.DevonRoutingError):
+        devon.parse_native_evidence(
+            reference.model_copy(update={"locator": None}), _devon_detail()
+        )
+    with pytest.raises(devon.DevonRoutingError):
+        devon.parse_native_evidence(
+            reference.model_copy(update={"source_id": devon.APPEAL_SOURCE}),
+            _devon_detail(),
+        )
 
     class _CrossRouteSession(_Session):
         async def fetch(self, request: PortalRequest) -> EvidenceCapture:
@@ -1231,6 +1240,13 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
             HttpUrl(
                 f"{devon.BASE_URL}/Disclaimer/Accept"
                 "?returnUrl=%2FSearch%2FAdvanced&unexpected=value"
+            ),
+            HttpUrl(devon._ADVANCED_FORM_URL),
+        )
+    with pytest.raises(devon.DevonProtectedRouteError):
+        devon._validate_disclaimer_action(
+            HttpUrl(
+                f"{devon.BASE_URL}/Disclaimer/Accept?returnUrl=%2FSearch%2FResults"
             ),
             HttpUrl(devon._ADVANCED_FORM_URL),
         )
@@ -1841,6 +1857,99 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
     assert ("SearchAppeals", "true") in appeal_pairs
     assert ("DateAppealFrom", "18/08/2026") in appeal_pairs
     assert ("DateAppealTo", "16/09/2026") in appeal_pairs
+
+    dated_query = devon._DevonQuery(
+        kind="received",
+        key="received:2026-08-18:2026-09-16",
+        start=scope.start,
+        end=scope.end,
+    )
+    dated_form = devon._advanced_fields(
+        devon._parse_advanced_form(_devon_advanced_form()), dated_query
+    )
+    request = devon.DevonDiscoveryRequestV1(
+        url=f"{devon.BASE_URL}/Search/Results",
+        method="POST",
+        form=tuple((field.name, field.value) for field in dated_form),
+    )
+    expected_url = HttpUrl(f"{devon.BASE_URL}/Search/Results")
+    assert devon.discovery_request_matches(dated_query, 1, request, expected_url)
+    assert not devon.discovery_request_matches(
+        dated_query,
+        1,
+        request.model_copy(update={"url": f"{devon.BASE_URL}/Search/Advanced"}),
+        expected_url,
+    )
+    assert not devon.discovery_request_matches(
+        dated_query, 1, request.model_copy(update={"method": "GET"}), expected_url
+    )
+    assert not devon.discovery_request_matches(
+        dated_query,
+        1,
+        request.model_copy(update={"form": request.form[:-1]}),
+        expected_url,
+    )
+    assert not devon.discovery_request_matches(
+        dated_query,
+        1,
+        request.model_copy(
+            update={
+                "form": tuple(
+                    (name, "")
+                    if name == "__RequestVerificationToken"
+                    else (name, value)
+                    for name, value in request.form
+                )
+            }
+        ),
+        expected_url,
+    )
+    assert not devon.discovery_request_matches(
+        dated_query,
+        1,
+        request.model_copy(
+            update={
+                "form": tuple(
+                    (name, "false") if name == "AdvancedSearch" else (name, value)
+                    for name, value in request.form
+                )
+            }
+        ),
+        expected_url,
+    )
+    assert not devon.discovery_request_matches(
+        dated_query,
+        1,
+        request.model_copy(
+            update={
+                "form": tuple(
+                    (name, "false")
+                    if name == "SearchPlanning" and value == "true"
+                    else (name, value)
+                    for name, value in request.form
+                )
+            }
+        ),
+        expected_url,
+    )
+    assert not devon.discovery_request_matches(
+        dated_query.model_copy(update={"start": None}), 1, request, expected_url
+    )
+    continuation = devon.DevonDiscoveryRequestV1(
+        url=f"{devon.BASE_URL}/Search/Results?page=2", method="GET", form=()
+    )
+    assert devon.discovery_request_matches(
+        dated_query,
+        2,
+        continuation,
+        HttpUrl(f"{devon.BASE_URL}/Search/Results?page=2"),
+    )
+    assert not devon.discovery_request_matches(
+        dated_query,
+        2,
+        continuation.model_copy(update={"method": "POST"}),
+        HttpUrl(f"{devon.BASE_URL}/Search/Results?page=2"),
+    )
 
     adapter = devon.DevonAdapter()
     window = DiscoveryWindow(start=scope.start, end=scope.end, include_open=True)

@@ -51,6 +51,7 @@ from yimby.domain import (
     CommentRecord,
     Completeness,
     CompleteSection,
+    DiscoveryEvidenceCapture,
     DocumentRecord,
     DurableDiscoveryBatch,
     EvidenceCapture,
@@ -900,13 +901,18 @@ def test_discovery_evidence_requires_page_scope_and_audits_missing_rows(
         body=body,
         digest=digest,
     )
+    retained = DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=HttpUrl("https://example.test/search"),
+        request_method="GET",
+    )
     checkpoint = StoredCheckpoint(schema_version=1, payload_json="{}")
     for invalid in (
         DurableDiscoveryBatch(
             references=(),
             next_checkpoint=checkpoint,
             complete=False,
-            evidence=(capture,),
+            evidence=(retained,),
         ),
         DurableDiscoveryBatch(
             references=(),
@@ -925,7 +931,7 @@ def test_discovery_evidence_requires_page_scope_and_audits_missing_rows(
             references=(),
             next_checkpoint=checkpoint,
             complete=True,
-            evidence=(capture,),
+            evidence=(retained,),
             evidence_key="received",
             evidence_page=1,
         ),
@@ -943,6 +949,18 @@ def test_discovery_evidence_requires_page_scope_and_audits_missing_rows(
     assert missing.discovery_registrations == ()
     assert missing.missing_digests == (digest,)
     reopened.close()
+
+
+def test_discovery_request_form_decoder_rejects_malformed_values() -> None:
+    """Retained logical request fields fail closed when their JSON is malformed."""
+    decoder = SqliteStore._decode_request_form  # noqa: SLF001
+    assert decoder(None) is None
+    assert decoder("{") is None
+    for malformed in ("{}", '[["name"]]', '[["name", 1]]'):
+        assert decoder(malformed) is None
+    assert decoder('[["name", "value"]]') == (
+        ("name", "value"),
+    )
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
