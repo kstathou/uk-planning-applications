@@ -401,6 +401,42 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert resumed["created_at"] == "2026-09-16T12:00:00Z"
     assert resumed["weekly_refreshes"] == receipt["weekly_refreshes"]
 
+    invalid_receipts = (
+        None,
+        "{invalid",
+        json.dumps(
+            {
+                **receipt,
+                "created_at": "2026-10-16T12:00:00Z",
+                "weekly_refreshes": [
+                    {"ordinal": 1, "due_on": "2026-10-23", "status": "pending"},
+                    {"ordinal": 2, "due_on": "2026-10-30", "status": "pending"},
+                ],
+            }
+        ),
+    )
+    for invalid_receipt in invalid_receipts:
+        if invalid_receipt is None:
+            receipt_path.unlink(missing_ok=True)
+        else:
+            receipt_path.write_text(invalid_receipt, encoding="utf-8")
+        sessions.clear()
+        mocks.clear()
+        assert (
+            module.main(
+                _args(data_dir, "--resume"),
+                session_factory=session_factory,
+                now=lambda: now + timedelta(days=6),
+            )
+            == 1
+        )
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert json.loads(captured.err) == {"error": "receipt-anchor-required"}
+        assert len(sessions) == 1
+        assert sessions[0].requested_urls == ()
+        assert not receipt_path.exists()
+
 
 def test_barnet_qualification_rejects_failed_current_sections(
     tmp_path: Path,
