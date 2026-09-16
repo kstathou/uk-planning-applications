@@ -626,6 +626,22 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<div class="push-30-t"><strong class="text-danger">'
             b"<span hidden>No</span> Results Found.</strong></div></div>"
         ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list" '
+            b'data-result-count="1"><div class="push-30-t"><strong '
+            b'class="text-danger">No Results Found.</strong></div></div>'
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b'No Results Found.<a rel="next" href="?page=2" '
+            b'aria-label="Next"></a></strong></div></div>'
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b"<span>No</span> Results Found.</strong></div></div>"
+        ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_boundary(body)
@@ -633,6 +649,13 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
     for body in (
         _search_form().replace(
             b'action="/planning/index.html"', b'action="/planning/wrong"'
+        ),
+        _search_form().replace(
+            b'method="post"', b'method="post" enctype="multipart/form-data"'
+        ),
+        _search_form().replace(
+            b'<input type="hidden" name="fa"',
+            b'<input form="other" type="hidden" name="fa"',
         ),
         _search_form().replace(
             b'<input name="valid_date_to" value="">',
@@ -727,6 +750,13 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
     invalid_forms = (
         b"<html></html>",
         _weekly_form().replace(b'method="post"', b'method="get"'),
+        _weekly_form().replace(
+            b'method="post"', b'method="post" enctype="text/plain"'
+        ),
+        _weekly_form().replace(
+            b'<input type="text" id="week" name="week"',
+            b'<input form="other" type="text" id="week" name="week"',
+        ),
         _weekly_form().replace(b'name="week"', b'name="other"'),
         _weekly_form().replace(b'name="fa" value=""', b'name="fa" value="x"'),
         _weekly_form().replace(
