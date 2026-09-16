@@ -88,6 +88,25 @@ class _NeverFetchSession:
         message = f"unexpected fetch: {request.url}"
         raise AssertionError(message)
 
+    @property
+    def requested_urls(self) -> tuple[str, ...]:
+        return ()
+
+    @property
+    def attachment_body_requests(self) -> int:
+        return 0
+
+    @property
+    def transferred_bytes(self) -> int:
+        return 0
+
+    @property
+    def browser_time_ms(self) -> int:
+        return 0
+
+    async def aclose(self) -> None:
+        """Match the session protocol without owning a resource."""
+
 
 @pytest.mark.parametrize(
     "mode",
