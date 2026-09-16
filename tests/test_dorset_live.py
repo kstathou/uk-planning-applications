@@ -881,6 +881,45 @@ def test_dorset_qualification_restarts_stale_partial_discovery(tmp_path: Path) -
     assert receipt.run_statuses == ("succeeded", "succeeded")
 
 
+def test_dorset_qualification_explicitly_restarts_terminal_discovery(
+    tmp_path: Path,
+) -> None:
+    """A superseded terminal inventory can be rescanned without erasing history."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+    mocks: list[_DorsetMock] = []
+
+    def session_factory() -> HttpxPortalSession:
+        mock = _DorsetMock()
+        mocks.append(mock)
+        return _session(mock)
+
+    assert module.main(arguments, session_factory=session_factory) == 0
+    assert (
+        module.main(
+            [*arguments, "--resume", "--restart-discovery"],
+            session_factory=session_factory,
+        )
+        == 0
+    )
+
+    receipt = module.DorsetQualificationReceiptV1.model_validate_json(
+        (tmp_path / "dorset-qualification-v1.json").read_text()
+    )
+    assert receipt.terminal_checkpoint.live_complete
+    assert receipt.reference_agreement.count == 21
+    assert receipt.costs.initial.fetch_calls == 29
+    assert receipt.costs.rerun.fetch_calls == 0
+    assert len(mocks) == 4
+    assert mocks[2].requests
+    assert mocks[3].requests == []
+
+
 def test_dorset_qualification_hashes_actual_application_identities(
     tmp_path: Path,
 ) -> None:
