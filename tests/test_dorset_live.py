@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, E501
+# ruff: noqa: ANN401, E501, PLR2004
 
 """Dorset Council public-register contracts."""
 
@@ -9,14 +9,18 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qsl
 
 import httpx
+import pytest
 
 from yimby import AuthorityId, DiscoveryWindow, pilot_registry
-from yimby.domain import DurableDiscoveryBatch
+from yimby.domain import DurableDiscoveryBatch, SourceId, SourceReference
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 WINDOW = DiscoveryWindow(
     start=date(2026, 8, 18),
@@ -76,9 +80,15 @@ def _advanced_form() -> bytes:
     """
 
 
-def _result_page(query: str, page: int) -> bytes:
+def _result_page(query: str, page: int, fault: str | None = None) -> bytes:
     rows = RECEIVED if query == "received-valid" else OUTSTANDING
-    page_rows = rows[(page - 1) * 10 : page * 10]
+    page_rows = list(rows[(page - 1) * 10 : page * 10])
+    if fault == "duplicate-reference" and query == "received-valid" and page == 1:
+        page_rows[-1] = page_rows[0]
+    if fault == "duplicate-locator" and query == "received-valid" and page == 1:
+        page_rows[-1] = _Result(page_rows[-1].reference, page_rows[0].recno)
+    if fault == "underfull" and query == "received-valid" and page == 1:
+        page_rows.pop()
     rendered_rows = "".join(
         f"""
         <div class="result">
@@ -90,6 +100,7 @@ def _result_page(query: str, page: int) -> bytes:
         """
         for index, row in enumerate(page_rows)
     )
+    has_next = page == 1 or fault == "terminal-next"
     next_controls = (
         f"""
         <input type="submit" name="{NEXT_BUTTON}" value=" ">
@@ -97,14 +108,16 @@ def _result_page(query: str, page: int) -> bytes:
           name="ctl00$ContentPlaceHolder1$lvResults$pager$ctl02$NextButton"
           value=" ">
         """
-        if page == 1
+        if has_next
         else ""
     )
+    bottom_page = page + 1 if fault == "pager-mismatch" else page
+    viewstate = "" if fault == "empty-viewstate" else f"{query}-page-{page}"
     return f"""
     <form method="post" action="./searchresults.aspx">
       <input type="hidden" name="__EVENTTARGET" value="">
       <input type="hidden" name="__EVENTARGUMENT" value="">
-      <input type="hidden" name="__VIEWSTATE" value="{query}-page-{page}">
+      <input type="hidden" name="__VIEWSTATE" value="{viewstate}">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <div id="ctl00_ContentPlaceHolder1_lvResults_RadDataPager1">
@@ -114,18 +127,63 @@ def _result_page(query: str, page: int) -> bytes:
       </div>
       {rendered_rows}
       <div id="ctl00_ContentPlaceHolder1_lvResults_pager">
-        <span>Page {page} of 2</span>
-        <a class="rdpCurrentPage">{page}</a>
+        <span>Page {bottom_page} of 2</span>
+        <a class="rdpCurrentPage">{bottom_page}</a>
       </div>
     </form>
     """.encode()
 
 
+def _detail_page(reference: str, recno: int, *, document_count: int = 2) -> bytes:
+    rows = "".join(
+        f"""
+        <tr id="ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__{index}">
+          <td><a id="document-{index}" href="#"
+            onclick="return RowClicked({index});">{published} - {title}</a></td>
+          <td>({size})</td>
+        </tr>
+        """
+        for index, published, title, size in (
+            (0, "20/08/2026", "Application Form - Without Personal Data", "620kb"),
+            (1, "21/08/2026", "Location Plan", "1mb"),
+        )[:document_count]
+    )
+    return f"""
+    <div id="ctl00_ContentPlaceHolder1_pvDetails">
+      <span class="applabel">Application No</span><p class="appdata">{reference}</p>
+      <span class="applabel">Status</span><p class="appdata">Out To Consultation</p>
+      <span class="applabel">Type</span><p class="appdata">Full Planning Application</p>
+      <span class="applabel">Proposal</span><p class="appdata">Build two homes &amp; plant four trees</p>
+      <span class="applabel">Valid Date</span><p class="appdata">15/09/2026</p>
+      <span class="applabel">Decision</span><p class="appdata"></p>
+      <span class="applabel">Authority</span><p class="appdata">Dorset Council</p>
+      <span class="applabel">Record Number</span><p class="appdata">{recno}</p>
+    </div>
+    <div id="ctl00_ContentPlaceHolder1_pvLocation">
+      <span class="applabel">Address</span><p class="appdata">1 High Street, Dorset</p>
+      <span class="applabel">Easting</span><p class="appdata">406008</p>
+      <span class="applabel">Northing</span><p class="appdata">100386</p>
+      <span class="applabel">Ward</span><p class="appdata">Ferndown North Ward</p>
+      <span class="applabel">Parish</span><p class="appdata">Ferndown Town</p>
+    </div>
+    <table id="ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00">
+      <thead><tr><th>Document</th><th>Size</th></tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <script>
+      var grid = {{"_gridTableViewsData":[{{"AllowPaging":false,
+        "PageCount":1,"VirtualItemCount":{document_count}}}]}};
+      function RowClicked(index) {{ return index; }}
+    </script>
+    """.encode()
+
+
 class _DorsetMock:
-    def __init__(self) -> None:
+    def __init__(self, *, fault: str | None = None) -> None:
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.query: str | None = None
         self.page = 0
+        self.fault = fault
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         fields = tuple(parse_qsl(request.content.decode(), keep_blank_values=True))
@@ -149,6 +207,21 @@ class _DorsetMock:
                 content=b"accepted",
                 headers={"set-cookie": "dorset-planning=accepted; Path=/"},
             )
+        if request.method == "GET" and request.url.path == "/plandisp.aspx":
+            if not accepted:
+                return httpx.Response(200, content=_disclaimer_form())
+            recno = int(request.url.params["recno"])
+            reference = next(
+                row.reference for row in (*RECEIVED, *OUTSTANDING) if row.recno == recno
+            )
+            count = 1 if self.fault == "document-count" else 2
+            body = _detail_page(reference, recno, document_count=count)
+            if self.fault == "document-count":
+                body = body.replace(b'"VirtualItemCount":1', b'"VirtualItemCount":2')
+            return httpx.Response(
+                200,
+                content=body,
+            )
         if request.method == "POST" and request.url.path == ADVANCED_PATH:
             assert accepted
             names = {name for name, _value in fields}
@@ -158,13 +231,19 @@ class _DorsetMock:
                 else "outstanding"
             )
             self.page = 1
-            return httpx.Response(200, content=_result_page(self.query, self.page))
+            return httpx.Response(
+                200,
+                content=_result_page(self.query, self.page, self.fault),
+            )
         if request.method == "POST" and request.url.path == RESULTS_PATH:
             assert accepted
             assert self.query is not None
             assert fields[-1] == (NEXT_BUTTON, " ")
             self.page += 1
-            return httpx.Response(200, content=_result_page(self.query, self.page))
+            return httpx.Response(
+                200,
+                content=_result_page(self.query, self.page, self.fault),
+            )
         message = f"unexpected request {request.method} {request.url}"
         raise AssertionError(message)
 
@@ -307,3 +386,140 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
         )
     ]
     assert terminal_mock.requests == []
+
+
+def test_dorset_live_detail_accepts_disclaimer_and_retains_document_metadata() -> None:
+    """A queued detail can establish consent without invoking a document action."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    mock = _DorsetMock()
+    session = _session(mock)
+    reference = SourceReference(
+        source_id=SourceId("dorset-planning-register"),
+        reference=RECEIVED[0].reference,
+        locator=str(RECEIVED[0].recno),
+    )
+
+    async def collect_detail() -> Any:
+        collected = await package.collect(session, reference)
+        await session.aclose()
+        return collected
+
+    collected = asyncio.run(collect_detail())
+
+    assert collected.normalised.reference == reference
+    assert collected.normalised.proposal == "Build two homes & plant four trees"
+    assert collected.normalised.status == "out-to-consultation"
+    assert collected.normalised.metadata.application_type == "Full Planning Application"
+    assert collected.normalised.metadata.decision is None
+    assert collected.normalised.metadata.address == "1 High Street, Dorset"
+    assert collected.normalised.metadata.validated_date == date(2026, 9, 15)
+    assert collected.normalised.metadata.location is not None
+    assert collected.normalised.metadata.location.bng_easting == 406_008
+    assert collected.normalised.metadata.location.bng_northing == 100_386
+    assert [document.title for document in collected.normalised.documents] == [
+        "20/08/2026 - Application Form - Without Personal Data (620kb)",
+        "21/08/2026 - Location Plan (1mb)",
+    ]
+    assert {str(document.url) for document in collected.normalised.documents} == {
+        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"
+    }
+    assert collected.normalised.completeness.application.kind == "complete"
+    assert collected.normalised.completeness.documents.kind == "complete"
+    assert collected.normalised.completeness.documents.item_count == 2
+    assert collected.normalised.completeness.comments.kind == "unavailable"
+    assert "public comment text" in collected.normalised.completeness.comments.reason
+    assert "Application Form - Without Personal Data" in collected.native_json
+    assert len(collected.evidence) == 1
+    assert str(collected.evidence[0].url) == (
+        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"
+    )
+    assert session.attachment_body_requests == 0
+    assert all(
+        "DocumentsGrid" not in dict(fields)
+        for method, _path, fields in mock.requests
+        if method == "POST"
+    )
+
+
+def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> None:
+    """A fresh session collects queued detail, then replays committed page proof."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    first_session = _session(_DorsetMock())
+
+    async def first_page() -> DurableDiscoveryBatch:
+        discovery = cast(
+            "AsyncGenerator[DurableDiscoveryBatch]",
+            package.discover(first_session, WINDOW, None),
+        )
+        try:
+            return await anext(discovery)
+        finally:
+            await discovery.aclose()
+            await first_session.aclose()
+
+    first = asyncio.run(first_page())
+    resume_mock = _DorsetMock()
+    resume_session = _session(resume_mock)
+
+    async def resume_after_detail() -> list[DurableDiscoveryBatch]:
+        await package.collect(resume_session, first.references[0])
+        batches = [
+            batch
+            async for batch in package.discover(
+                resume_session,
+                WINDOW,
+                first.next_checkpoint,
+            )
+        ]
+        await resume_session.aclose()
+        return batches
+
+    resumed = asyncio.run(resume_after_detail())
+
+    assert [len(batch.references) for batch in resumed] == [1, 9, 1]
+    assert resumed[-1].complete
+    assert len(_pairs(resume_mock, DISCLAIMER_PATH)) == 1
+    assert len(_pairs(resume_mock, RESULTS_PATH)) == 2
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("duplicate-reference", "duplicate result"),
+        ("duplicate-locator", "duplicate result"),
+        ("underfull", "nonterminal result rows"),
+        ("pager-mismatch", "page markers"),
+        ("empty-viewstate", "result form viewstate"),
+        ("terminal-next", "next page"),
+    ],
+)
+def test_dorset_live_discovery_fails_closed(fault: str, message: str) -> None:
+    """Malformed page evidence never advances the durable checkpoint."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    session = _session(_DorsetMock(fault=fault))
+
+    async def discover_all() -> None:
+        with pytest.raises(ValueError, match=message):
+            async for _batch in package.discover(session, WINDOW, None):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
+
+
+def test_dorset_live_detail_rejects_incomplete_document_grid() -> None:
+    """Document-grid count disagreement is not represented as completeness."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    session = _session(_DorsetMock(fault="document-count"))
+    reference = SourceReference(
+        source_id=SourceId("dorset-planning-register"),
+        reference=RECEIVED[0].reference,
+        locator=str(RECEIVED[0].recno),
+    )
+
+    async def collect_detail() -> None:
+        with pytest.raises(ValueError, match="document grid"):
+            await package.collect(session, reference)
+        await session.aclose()
+
+    asyncio.run(collect_detail())
