@@ -626,6 +626,12 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b"</div></main>"
         ),
         (
+            b'<main style="display:none!important;display:block"><div '
+            b'class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b"No Results Found.</strong></div></div></main>"
+        ),
+        (
             b'<head><div class="col-sm-12 col-md-12 animation-fadeIn '
             b'application-list"><div class="push-30-t"><strong '
             b'class="text-danger">No Results Found.</strong></div></div></head>'
