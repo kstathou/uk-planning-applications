@@ -1488,6 +1488,46 @@ def test_devon_terminal_and_parser_boundaries() -> None:
             locator=f"{devon.BASE_URL}/Appeals/Display/DCC/1",
         ),
     )
+    with pytest.raises(devon.DevonParseError, match="planning singleton locator"):
+        devon._parse_discovery_page(
+            _devon_detail(),
+            expected_page=1,
+            response_url=HttpUrl(
+                "https://attacker.example/Planning/Display/DCC/4473/2026"
+            ),
+        )
+    with pytest.raises(devon.DevonParseError, match="planning singleton locator"):
+        devon._parse_discovery_page(
+            _devon_detail(),
+            expected_page=1,
+            response_url=HttpUrl("https://attacker.example/Search/Results"),
+        )
+    with pytest.raises(devon.DevonParseError, match="planning singleton locator"):
+        devon._parse_discovery_page(
+            _devon_detail(),
+            expected_page=1,
+            response_url=HttpUrl(f"{devon.BASE_URL}/Search/Advanced"),
+        )
+    with pytest.raises(devon.DevonParseError, match="planning singleton locator"):
+        devon._parse_discovery_page(
+            _devon_detail(),
+            expected_page=1,
+            response_url=HttpUrl(f"{devon.BASE_URL}/Appeals/Display/DCC/4473/2026"),
+        )
+    with pytest.raises(devon.DevonParseError, match="planning singleton reference"):
+        devon._parse_discovery_page(
+            _devon_detail(),
+            expected_page=1,
+            response_url=HttpUrl(f"{devon.BASE_URL}/Planning/Display/WRONG/1"),
+        )
+    planning_singleton = devon._parse_discovery_page(
+        _devon_detail(),
+        expected_page=1,
+        response_url=HttpUrl(f"{devon.BASE_URL}/Planning/Display/DCC/4473/2026"),
+    )
+    assert planning_singleton.references[0].locator == (
+        f"{devon.BASE_URL}/Planning/Display/DCC/4473/2026"
+    )
     assert (
         devon._parse_discovery_page(b"<p>No records</p>", expected_page=1).references
         == ()
@@ -1999,6 +2039,18 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
 
 def test_devon_result_and_pager_fail_closed_boundaries() -> None:
     one = _devon_results(("DCC/1/2026",))
+    with pytest.raises(devon.DevonPaginationError, match="pager-host"):
+        devon._parse_discovery_page(
+            one,
+            expected_page=1,
+            response_url=HttpUrl("https://attacker.example/Search/Results"),
+        )
+    with pytest.raises(devon.DevonPaginationError, match="response-page-mismatch"):
+        devon._parse_discovery_page(
+            one,
+            expected_page=1,
+            response_url=HttpUrl(f"{devon.BASE_URL}/Search/Results/2"),
+        )
     with pytest.raises(devon.DevonParseError, match="mixed result"):
         devon._parse_discovery_page(one + _devon_detail(), expected_page=1)
     with pytest.raises(devon.DevonParseError, match="duplicate result"):
@@ -2574,6 +2626,29 @@ def test_devon_qualification_binds_evidence_to_its_subject(
     capsys.readouterr()
 
     database = data_dir / "yimby.sqlite3"
+    with closing(sqlite3.connect(database)) as connection:
+        discovery_response = connection.execute(
+            "SELECT rowid, response_url FROM discovery_evidence "
+            "WHERE query_key LIKE 'received:%' AND page = 1"
+        ).fetchone()
+        assert discovery_response is not None
+        connection.execute(
+            "UPDATE discovery_evidence SET response_url = ? WHERE rowid = ?",
+            ("https://attacker.example/Search/Results", discovery_response[0]),
+        )
+        connection.commit()
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["discovery-evidence"],
+    }
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE discovery_evidence SET response_url = ? WHERE rowid = ?",
+            (discovery_response[1], discovery_response[0]),
+        )
+        connection.commit()
+
     with closing(sqlite3.connect(database)) as connection:
         observation_rows = tuple(
             connection.execute(

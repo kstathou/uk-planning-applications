@@ -1213,7 +1213,7 @@ def discovery_request_matches(  # noqa: C901, PLR0911
     return all(values[name] == [value] for name, value in expected_values.items())
 
 
-def _parse_discovery_page(  # noqa: C901, PLR0912
+def _parse_discovery_page(  # noqa: C901, PLR0912, PLR0915
     body: bytes,
     *,
     expected_page: int,
@@ -1235,17 +1235,32 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
         if expected_page != 1:
             _raise_parse("page-one singleton detail")
         if expected_source == APPEAL_SOURCE:
-            if response_url is None or _detail_route(response_url) != "appeal":
+            if response_url is None:
                 _raise_parse("appeal singleton locator")
-            reference = _detail_url_reference(response_url, "appeal")
+            reference = _singleton_response_reference(response_url, "appeal")
             locator = str(response_url)
         else:
             fields = _parse_labelled_fields(body)
             reference = _required_field(
                 fields, "application number", "reference", "application reference"
             )
-            routed = quote(reference, safe="/")
-            locator = f"{BASE_URL}/Planning/Display/{routed}"
+            if (
+                response_url is None
+                or urlsplit(str(response_url)).path.rstrip("/") == "/Search/Results"
+            ):
+                if response_url is not None and not _REDIRECT_BOUNDARY.allows(
+                    str(response_url)
+                ):
+                    _raise_parse("planning singleton locator")
+                routed = quote(reference, safe="/")
+                locator = f"{BASE_URL}/Planning/Display/{routed}"
+            else:
+                returned_reference = _singleton_response_reference(
+                    response_url, "planning"
+                )
+                if returned_reference != reference:
+                    _raise_parse("planning singleton reference")
+                locator = str(response_url)
         return _DiscoveryPage(
             references=(
                 SourceReference(
@@ -1260,6 +1275,8 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
             next_locator=None,
             terminal=True,
         )
+    if response_url is not None and _page_from_locator(response_url) != expected_page:
+        _raise_pagination("response-page-mismatch")
     references = tuple(_parse_result_reference(block) for block in result_blocks)
     if any(item.source_id != expected_source for item in references):
         _raise_parse("query result route")
@@ -1307,6 +1324,21 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
         next_locator=next_locator,
         terminal=terminal,
     )
+
+
+def _singleton_response_reference(
+    response_url: HttpUrl,
+    route: Literal["planning", "appeal"],
+) -> str:
+    if not _REDIRECT_BOUNDARY.allows(str(response_url)):
+        _raise_parse(f"{route} singleton locator")
+    try:
+        actual_route = _detail_route(response_url)
+    except DevonRoutingError:
+        _raise_parse(f"{route} singleton locator")
+    if actual_route != route:
+        _raise_parse(f"{route} singleton locator")
+    return _detail_url_reference(response_url, route)
 
 
 def _parse_result_reference(block: Tag) -> SourceReference:

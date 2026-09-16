@@ -21,6 +21,7 @@ from pydantic import Field, HttpUrl
 
 from yimby.authorities.devon import DEVON_PACKAGE
 from yimby.authorities.devon.adapter import (
+    _REDIRECT_BOUNDARY,
     _RESULTS_URL,
     DevonCheckpointV1,
     DevonDiscoveryRequestV1,
@@ -376,13 +377,19 @@ def _parsed_discovery_evidence(
     return next(iter(parsed_pages.values()))
 
 
-def _parse_retained_discovery_page(
+def _parse_retained_discovery_page(  # noqa: PLR0911
     query: _DevonQuery,
     page_number: int,
     registration: RetainedDiscoveryEvidenceRegistration,
     data_dir: Path,
 ) -> _DiscoveryPage | Literal[False] | None:
     if registration.response_url is None:
+        return False
+    try:
+        response_url = HttpUrl(registration.response_url)
+    except ValueError:
+        return False
+    if not _REDIRECT_BOUNDARY.allows(str(response_url)):
         return False
     body = _retained_body(data_dir, registration.path)
     if body is None:
@@ -394,7 +401,7 @@ def _parse_retained_discovery_page(
             body,
             expected_page=page_number,
             expected_source=_query_source(query),
-            response_url=HttpUrl(registration.response_url),
+            response_url=response_url,
         )
     except ValueError:
         return False
