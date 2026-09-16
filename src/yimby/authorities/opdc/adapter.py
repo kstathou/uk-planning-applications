@@ -297,7 +297,12 @@ class OpdcAdapter:
         name="Old Oak and Park Royal Development Corporation",
         kind=AuthorityKind.DEVELOPMENT_CORPORATION,
         sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(BASE_URL)),),
-        capabilities=AuthorityCapabilities(discovery=CapabilityState.UNKNOWN),
+        capabilities=AuthorityCapabilities(
+            discovery=CapabilityState.SUPPORTED,
+            documents=CapabilityState.SUPPORTED,
+            comments=CapabilityState.SUPPORTED,
+            coordinates=CapabilityState.SUPPORTED,
+        ),
     )
 
     async def discover(
