@@ -24,11 +24,15 @@ from yimby.collection import Collector
 from yimby.domain import (
     AuthorityId,
     DiscoveryWindow,
+    DurableDiscoveryBatch,
     EvidenceCapture,
     FrozenModel,
     QualificationSnapshot,
+    RunMetrics,
+    RunOutcome,
     RunStatus,
     SourceReference,
+    StoredCheckpoint,
     TransportMode,
 )
 from yimby.evidence import EvidenceStore
@@ -149,6 +153,7 @@ class DorsetQualificationReceiptV1(FrozenModel):
 class _Config(FrozenModel):
     data_dir: Path
     scope: DorsetQualificationScope
+    restart_discovery: bool
 
 
 class QualificationConfigError(ValueError):
@@ -214,6 +219,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-open", action="store_true")
     parser.add_argument("--data-dir", default=str(_DEFAULT_DATA_DIR))
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--restart-discovery", action="store_true")
     return parser
 
 
@@ -228,7 +234,11 @@ def _config(argv: Sequence[str]) -> _Config:
         raise QualificationConfigError(_DATA_DIR_NOT_DIRECTORY)
     if data_dir.exists() and any(data_dir.iterdir()) and not arguments.resume:
         raise QualificationConfigError(_RESUME_REQUIRED)
-    return _Config(data_dir=data_dir, scope=DorsetQualificationScope())
+    return _Config(
+        data_dir=data_dir,
+        scope=DorsetQualificationScope(),
+        restart_discovery=arguments.restart_discovery,
+    )
 
 
 async def _collect_once(
@@ -426,6 +436,55 @@ def _require(checks: Sequence[DorsetQualificationCheck]) -> None:
         raise QualificationFailedError(failed)
 
 
+def _restart_discovery_checkpoint(
+    store: SqliteStore,
+    scope: DorsetQualificationScope,
+) -> None:
+    state = store.discovery_state(_AUTHORITY_ID)
+    stored = state.checkpoint
+    if stored is None or stored.schema_version != 1:
+        raise QualificationFailedError(("restart-checkpoint",))
+    try:
+        current = DorsetCheckpointV1.model_validate_json(stored.payload_json)
+    except ValueError as error:
+        raise QualificationFailedError(("restart-checkpoint",)) from error
+    expected_scope = DorsetDiscoveryScope(
+        start=scope.start,
+        end=scope.end,
+        include_open=scope.include_open,
+    )
+    if current.live_scope != expected_scope or current.live_complete:
+        raise QualificationFailedError(("restart-checkpoint",))
+    reset = DorsetCheckpointV1(object_offset="live", live_scope=expected_scope)
+    run_id = store.begin_run(_AUTHORITY_ID)
+    store.commit_discovery(
+        run_id,
+        _AUTHORITY_ID,
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json=reset.model_dump_json(),
+            ),
+            complete=False,
+        ),
+    )
+    store.finish_run(
+        run_id,
+        _AUTHORITY_ID,
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=0,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.NOT_RUN,
+        ),
+    )
+
+
 async def _qualify(
     store: SqliteStore,
     config: _Config,
@@ -439,6 +498,8 @@ async def _qualify(
         end=config.scope.end,
         include_open=config.scope.include_open,
     )
+    if config.restart_discovery:
+        _restart_discovery_checkpoint(store, config.scope)
     prior_status_count = len(store.run_statuses())
     initial = await _collect_once(collector, window, session_factory)
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)

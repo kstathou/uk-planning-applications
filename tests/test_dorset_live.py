@@ -797,14 +797,20 @@ def test_dorset_qualification_restarts_stale_partial_discovery(tmp_path: Path) -
         str(tmp_path),
     ]
 
-    assert module.main(
-        arguments,
-        session_factory=lambda: _session(_DorsetMock(fault="document-count")),
-    ) == 1
-    assert module.main(
-        [*arguments, "--resume", "--restart-discovery"],
-        session_factory=lambda: _session(_DorsetMock()),
-    ) == 0
+    assert (
+        module.main(
+            arguments,
+            session_factory=lambda: _session(_DorsetMock(fault="document-count")),
+        )
+        == 1
+    )
+    assert (
+        module.main(
+            [*arguments, "--resume", "--restart-discovery"],
+            session_factory=lambda: _session(_DorsetMock()),
+        )
+        == 0
+    )
 
     receipt = module.DorsetQualificationReceiptV1.model_validate_json(
         (tmp_path / "dorset-qualification-v1.json").read_text()
