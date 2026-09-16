@@ -313,8 +313,14 @@ def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
       <dt>Case Officer</dt><dd>Officer Two</dd>
       <dt>Date Received</dt><dd>20/08/2026</dd>
       <dt>Date Valid</dt><dd>21 August 2026</dd>
+      <dt>Consultation Expiry</dt><dd>08/10/2026</dd>
+      <dt>Decision Level</dt><dd>Delegated</dd>
       <dt>Decision Date</dt><dd>-</dd>
+      <dt>Committee Date</dt><dd>01/10/2026</dd>
       <dt>Decision</dt><dd>Awaiting decision</dd>
+      <dt>Issue Date</dt><dd>-</dd>
+      <dt>Applicant's Address</dt><dd>Applicant House, Devon</dd>
+      <dt>Agent's Address</dt><dd>Agent House, Devon</dd>
     </dl>
     <dl class="details-grid">
       <dt>District(s)</dt><dd>North Devon</dd>
@@ -322,12 +328,34 @@ def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
       <dt>Parish(es)</dt><dd>Georgeham</dd>
       <dt>Applicant</dt><dd>Applicant Two</dd>
       <dt>Agent</dt><dd>Agent Two</dd>
+      <dt>Local Member(s)</dt><dd>Member One\nMember Two</dd>
     </dl>
+    <script>var easting = 300476; var northing = 91039;</script>
     <div id="PlanningdocTable" aria-label="Document grid"></div>
-    <table class="tblTest table sortable document-list"><tbody><tr><td>
-      <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=1&amp;imageId=2&amp;isPlan=true&amp;fileName=site-plan.pdf">Site plan</a>
-      <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=3&amp;imageId=4&amp;isPlan=false">Consultation response</a>
-    </td></tr></tbody></table>
+    <table class="tblTest table sortable document-list">
+      <thead><tr><th>All</th><th>Description</th><th>Created date</th></tr></thead>
+      <tbody>
+        <tr class="header active"><th colspan="3">PLANS &amp; DRAWINGS</th></tr>
+        <tr><td><input type="checkbox"></td><td>
+          <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=1&amp;imageId=2&amp;isPlan=true&amp;fileName=site-plan.pdf">Site plan</a>
+        </td><td>20/08/2026</td></tr>
+      </tbody>
+      <tbody>
+        <tr class="header active"><th colspan="3">CONSULTATION RESPONSES</th></tr>
+        <tr><td><input type="checkbox"></td><td>
+          <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=3&amp;imageId=4&amp;isPlan=false">Consultation response</a>
+        </td><td>22/08/2026</td></tr>
+      </tbody>
+    </table>
+    <table summary="Planning Constraints"><thead><tr><th>Description</th></tr></thead>
+      <tbody><tr><td>Mineral safeguarding area</td></tr></tbody>
+    </table>
+    <table summary="Planning Consultees"><thead><tr>
+      <th>Consultee Name</th><th>Date Letter Sent</th>
+      <th>Consultation Expiry Date</th><th>Reply Received</th>
+    </tr></thead><tbody><tr>
+      <td>Environment Agency</td><td>20/08/2026</td><td>08/10/2026</td><td>-</td>
+    </tr></tbody></table>
     """.encode()
 
 
@@ -357,6 +385,12 @@ class _DevonMock:
             return _devon_results(("DCC/4473/2026", "DCC/4472/2026", "PRE/1820/2026"))
         if kind == "determined":
             return _devon_detail("PRE/1820/2026")
+        if kind == "appeal-received":
+            return _devon_results(("DCC/4473/2026",))
+        if kind == "appeal-determined":
+            return b"<p>No records</p>"
+        if kind == "outstanding-appeals":
+            return _devon_results(("PRE/1820/2026",))
         start = (page - 1) * 10
         if page == 1 and self.shift_first_open:
             start += 1
@@ -374,15 +408,38 @@ class _DevonMock:
         values: dict[str, list[str]] = {}
         for field in request.form:
             values.setdefault(field.name, []).append(field.value)
-        if "true" in values.get("Outstanding", []):
+        def iso_date(value: str) -> str:
+            day, month, year = value.split("/")
+            return f"{year}-{month}-{day}"
+
+        appeals = "true" in values.get("SearchAppeals", [])
+        outstanding = "true" in values.get("Outstanding", [])
+        if outstanding and appeals:
+            key = "outstanding:appeals:true"
+            kind = "outstanding-appeals"
+        elif outstanding:
             key = "outstanding:planning:true"
             kind = "outstanding"
         elif values.get("DateReceivedFrom", [""])[0]:
-            key = "received:2026-08-18:2026-09-16"
+            start = iso_date(values["DateReceivedFrom"][0])
+            end = iso_date(values["DateReceivedTo"][0])
+            key = f"received:{start}:{end}"
             kind = "received"
-        else:
-            key = "determined:2026-08-18:2026-09-16"
+        elif values.get("DateDeterminedFrom", [""])[0]:
+            start = iso_date(values["DateDeterminedFrom"][0])
+            end = iso_date(values["DateDeterminedTo"][0])
+            key = f"determined:{start}:{end}"
             kind = "determined"
+        elif values.get("DateAppealFrom", [""])[0]:
+            start = iso_date(values["DateAppealFrom"][0])
+            end = iso_date(values["DateAppealTo"][0])
+            key = f"appeal-received:{start}:{end}"
+            kind = "appeal-received"
+        else:
+            start = iso_date(values["DateAppealDecisionFrom"][0])
+            end = iso_date(values["DateAppealDecisionTo"][0])
+            key = f"appeal-determined:{start}:{end}"
+            kind = "appeal-determined"
         self.query_keys.append(key)
         self.pending = kind, 1
 
@@ -589,6 +646,8 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
     assert responder.query_keys == [
         "received:2026-08-18:2026-09-16",
         "determined:2026-08-18:2026-09-16",
+        "appeal-received:2026-08-18:2026-09-16",
+        "appeal-determined:2026-08-18:2026-09-16",
     ]
     stored = store.get_application(report.applications[0])
     assert sorted(item.title for item in stored.documents) == [
@@ -596,15 +655,45 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
         "Site plan",
     ]
     assert stored.completeness.comments.kind == "unavailable"
+    assert {item.category for item in stored.documents} == {
+        "CONSULTATION RESPONSES",
+        "PLANS & DRAWINGS",
+    }
+    assert {item.published_date for item in stored.documents} == {
+        date(2026, 8, 20),
+        date(2026, 8, 22),
+    }
     assert report.attachment_body_requests == 0
     assert all("Document/Download" not in url for url in report.requested_urls)
     assert (
-        sum(request.method == RequestMethod.POST for request in session.requests) == 9
+        sum(request.method == RequestMethod.POST for request in session.requests) == 15
     )
     view = store.application_view(report.applications[0])
     assert view.metadata.address == "North Devon recycling centre"
     assert view.metadata.validated_date == date(2026, 8, 21)
     assert view.metadata.decision_date is None
+    assert view.metadata.location is not None
+    assert view.metadata.location.bng_easting == 300476
+    assert view.metadata.location.bng_northing == 91039
+    assert view.metadata.constraints == ("Mineral safeguarding area",)
+    assert view.metadata.consultations == (
+        "Environment Agency | 20/08/2026 | 08/10/2026 | -",
+    )
+    assert {event.event_type for event in view.metadata.events} == {
+        "committee",
+        "consultation-expiry",
+    }
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        metadata = tuple(
+            connection.execute(
+                "SELECT category, published_date FROM document_metadata "
+                "ORDER BY category"
+            )
+        )
+    assert metadata == (
+        ("CONSULTATION RESPONSES", "2026-08-22"),
+        ("PLANS & DRAWINGS", "2026-08-20"),
+    )
     store.close()
 
 
@@ -670,9 +759,14 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
     resumed_responder = _DevonMock()
     resumed_session = _Session(resumed_responder)
     resumed = asyncio.run(_batches(adapter, resumed_session, window, checkpoint))
-    assert [len(batch.references) for batch in resumed] == [10, 10, 10, 10, 5]
+    assert [len(batch.references) for batch in resumed] == [10, 10, 10, 10, 5, 0, 0, 0]
     assert resumed[-1].complete
-    assert resumed_responder.query_keys == ["outstanding:planning:true"]
+    assert resumed_responder.query_keys == [
+        "outstanding:planning:true",
+        "appeal-received:2026-08-18:2026-09-16",
+        "appeal-determined:2026-08-18:2026-09-16",
+        "outstanding:appeals:true",
+    ]
     assert tuple(
         urlsplit(str(request.url)).path
         for request in resumed_session.requests
@@ -689,6 +783,9 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
             "received:2026-08-18:2026-09-16",
             "determined:2026-08-18:2026-09-16",
             "outstanding:planning:true",
+            "appeal-received:2026-08-18:2026-09-16",
+            "appeal-determined:2026-08-18:2026-09-16",
+            "outstanding:appeals:true",
         )
     )
     assert audit.query_summaries == (
@@ -707,8 +804,45 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
             row_count=55,
             page_count=6,
         ),
+        devon.DevonQuerySummaryV1(
+            query_key="appeal-received:2026-08-18:2026-09-16",
+            row_count=1,
+            page_count=1,
+        ),
+        devon.DevonQuerySummaryV1(
+            query_key="appeal-determined:2026-08-18:2026-09-16",
+            row_count=0,
+            page_count=1,
+        ),
+        devon.DevonQuerySummaryV1(
+            query_key="outstanding:appeals:true",
+            row_count=1,
+            page_count=1,
+        ),
     )
     assert len(audit.references) == 58
+
+    next_window = DiscoveryWindow(
+        start=date(2026, 8, 25), end=date(2026, 9, 23), include_open=True
+    )
+    next_responder = _DevonMock()
+    next_cycle = asyncio.run(
+        _batches(adapter, _Session(next_responder), next_window, final)
+    )
+    assert next_cycle[-1].complete
+    assert next_cycle[-1].next_checkpoint.live_scope == devon.DevonDiscoveryScope(
+        start=next_window.start,
+        end=next_window.end,
+        include_open=True,
+    )
+    assert next_responder.query_keys == [
+        "received:2026-08-25:2026-09-23",
+        "determined:2026-08-25:2026-09-23",
+        "outstanding:planning:true",
+        "appeal-received:2026-08-25:2026-09-23",
+        "appeal-determined:2026-08-25:2026-09-23",
+        "outstanding:appeals:true",
+    ]
 
     with pytest.raises(devon.DevonCheckpointError, match="replay"):
         asyncio.run(
@@ -1089,6 +1223,17 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         )
     with pytest.raises(devon.DevonParseError, match="details-grid"):
         devon._parse_labelled_fields(b'<dl class="details-grid"><dt>Orphan</dt></dl>')
+    malformed_fields = devon._parse_labelled_fields(
+        b'<dl class="details-grid"><dt>Proposal</dt><dd>Exact proposal'
+        b'<dt>Location</dt><dd>Exact location</dd></dl>'
+    )
+    assert malformed_fields == {
+        "proposal": "Exact proposal",
+        "location": "Exact location",
+    }
+    assert devon._parse_coordinates(b"<html></html>") == (None, None)
+    with pytest.raises(devon.DevonParseError, match="coordinates"):
+        devon._parse_coordinates(b"<script>var easting = 300476;</script>")
     assert devon._optional_field({"second": "value"}, "first", "second") == "value"
     assert devon._optional_field({}, "missing") is None
     with pytest.raises(devon.DevonParseError, match="detail missing"):
@@ -1356,6 +1501,21 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
     assert ("FirstChoice", "first") in pairs
     assert ("SelectedChoice", "selected") in pairs
     assert all(name != "Ignored" for name, _ in pairs)
+    appeal_form = devon._parse_advanced_form(_devon_advanced_form())
+    appeal_fields = devon._advanced_fields(
+        appeal_form,
+        devon._DevonQuery(
+            kind="appeal-received",
+            key="appeal-received:2026-08-18:2026-09-16",
+            start=scope.start,
+            end=scope.end,
+        ),
+    )
+    appeal_pairs = tuple((field.name, field.value) for field in appeal_fields)
+    assert ("SearchPlanning", "true") not in appeal_pairs
+    assert ("SearchAppeals", "true") in appeal_pairs
+    assert ("DateAppealFrom", "18/08/2026") in appeal_pairs
+    assert ("DateAppealTo", "16/09/2026") in appeal_pairs
 
     adapter = devon.DevonAdapter()
     window = DiscoveryWindow(start=scope.start, end=scope.end, include_open=True)
@@ -1483,7 +1643,7 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
     assert unavailable_state.kind == "unavailable"
     with pytest.raises(devon.DevonParseError, match="document section"):
         devon._parse_documents(_devon_detail().replace(b'id="PlanningdocTable"', b""))
-    with pytest.raises(devon.DevonParseError, match="document links"):
+    with pytest.raises(devon.DevonParseError, match="document locator"):
         devon._parse_documents(
             _devon_detail().replace(b"/Document/Download", b"/changed")
         )
@@ -1495,6 +1655,12 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
                 1,
             )
         )
+    with pytest.raises(devon.DevonParseError, match="document row"):
+        devon._parse_documents(
+            _devon_detail().replace(b'href="/Document/Download', b'data-href="x', 1)
+        )
+    with pytest.raises(devon.DevonParseError, match="document date"):
+        devon._parse_documents(_devon_detail().replace(b"20/08/2026", b"bad", 1))
     with pytest.raises(devon.DevonParseError, match="document locator"):
         devon._parse_documents(
             _devon_detail().replace(
@@ -1571,10 +1737,10 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         == 0
     )
     output = json.loads(capsys.readouterr().out)
-    receipt_path = data_dir / "devon-qualification-v2.json"
+    receipt_path = data_dir / "devon-qualification-v3.json"
     receipt = json.loads(receipt_path.read_text())
     assert output == receipt
-    assert receipt["schema_version"] == 2
+    assert receipt["schema_version"] == 3
     assert receipt["authority_id"] == "devon"
     assert receipt["scope"] == {
         "start": "2026-08-18",
@@ -1585,6 +1751,9 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         "received:2026-08-18:2026-09-16",
         "determined:2026-08-18:2026-09-16",
         "outstanding:planning:true",
+        "appeal-received:2026-08-18:2026-09-16",
+        "appeal-determined:2026-08-18:2026-09-16",
+        "outstanding:appeals:true",
     ]
     assert receipt["expected_queries"] == expected_queries
     assert receipt["completed_queries"] == expected_queries
@@ -1603,6 +1772,21 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
             "query_key": expected_queries[2],
             "row_count": 55,
             "page_count": 6,
+        },
+        {
+            "query_key": expected_queries[3],
+            "row_count": 1,
+            "page_count": 1,
+        },
+        {
+            "query_key": expected_queries[4],
+            "row_count": 0,
+            "page_count": 1,
+        },
+        {
+            "query_key": expected_queries[5],
+            "row_count": 1,
+            "page_count": 1,
         },
     ]
     assert receipt["counts"] == {
@@ -1648,7 +1832,19 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     assert len(sessions) == 2
     assert sessions[0].requested_urls
     assert sessions[1].requested_urls == ()
-    assert not (data_dir / ".devon-qualification-v2.json.tmp").exists()
+    assert not (data_dir / ".devon-qualification-v3.json.tmp").exists()
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        retained_status = next(
+            connection.execute(
+                "SELECT live_readiness, live_reason FROM authorities "
+                "WHERE authority_id = 'devon'"
+            )
+        )
+    assert retained_status == (
+        "discovery-only",
+        "exact planning and appeal discovery is live-qualified; "
+        "two later weekly cycles remain pending",
+    )
 
     resumed_sessions: list[_Session] = []
 
@@ -1670,6 +1866,23 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     assert all(session.requested_urls == () for session in resumed_sessions)
     assert resumed_output == receipt
     assert json.loads(receipt_path.read_text()) == receipt
+
+    receipt_path.unlink()
+    session_count = len(resumed_sessions)
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=resumed_factory,
+            now=lambda: module.datetime(2026, 9, 16, 14, tzinfo=module.UTC),
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["preserved-live-receipt"],
+    }
+    assert len(resumed_sessions) == session_count
+    assert not receipt_path.exists()
 
 
 def test_devon_qualification_reconciles_registered_evidence(

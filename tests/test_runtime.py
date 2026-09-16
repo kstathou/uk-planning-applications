@@ -183,8 +183,8 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     devon_status = registry.manifest(AuthorityId("devon")).live_status
     assert devon_status.readiness == LiveReadiness.DISCOVERY_ONLY
     assert devon_status.reason == (
-        "exact 30-day received, determined, and outstanding planning discovery "
-        "is live-qualified; two later weekly cycles remain pending"
+        "exact planning and appeal discovery is live-qualified; "
+        "two later weekly cycles remain pending"
     )
     assert devon_status.evidence == (
         (
