@@ -135,6 +135,8 @@ def _advanced_form() -> bytes:
 
 def _result_page(query: str, page: int, fault: str | None = None) -> bytes:
     rows = RECEIVED if query == "received-valid" else OUTSTANDING
+    if fault == "outstanding-removed" and query == "outstanding":
+        rows = (*OUTSTANDING[:-1], RECEIVED[1])
     page_rows = list(rows[(page - 1) * 10 : page * 10])
     if fault == "duplicate-reference" and query == "received-valid" and page == 1:
         page_rows[-1] = page_rows[0]
@@ -1112,6 +1114,48 @@ def test_dorset_qualification_explicitly_restarts_terminal_discovery(
     assert len(mocks) == 4
     assert mocks[2].requests
     assert mocks[3].requests == []
+
+
+def test_dorset_qualification_scopes_inventory_to_terminal_discovery(
+    tmp_path: Path,
+) -> None:
+    """A formerly open application remains historical, not currently discovered."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+
+    assert (
+        module.main(
+            arguments,
+            session_factory=lambda: _session(_DorsetMock()),
+        )
+        == 0
+    )
+    assert (
+        module.main(
+            [*arguments, "--resume", "--restart-discovery"],
+            session_factory=lambda: _session(_DorsetMock(fault="outstanding-removed")),
+        )
+        == 0
+    )
+
+    receipt = module.DorsetQualificationReceiptV1.model_validate_json(
+        (tmp_path / "dorset-qualification-v1.json").read_text()
+    )
+    assert receipt.reference_agreement.count == 20
+    assert receipt.counts.applications == 20
+    assert receipt.counts.discovered_references == 20
+    connection = sqlite3.connect(tmp_path / "yimby.sqlite3")
+    try:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM applications WHERE authority_id = 'dorset'"
+        ).fetchone() == (21,)
+    finally:
+        connection.close()
 
 
 def test_dorset_qualification_hashes_actual_application_identities(
