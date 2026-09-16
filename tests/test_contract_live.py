@@ -265,6 +265,7 @@ def _devon_advanced_form() -> bytes:
 def _devon_results(
     references: tuple[str, ...],
     *,
+    route: str = "Planning",
     page: int = 1,
     total_pages: int = 1,
     current_markers: int = 1,
@@ -274,7 +275,7 @@ def _devon_results(
         f"""
         <dl class="searchResultsList">
           <dt>Application number</dt>
-          <dd><a href="/Planning/Display/{reference}">{reference}</a></dd>
+          <dd><a href="/{route}/Display/{reference}">{reference}</a></dd>
           <dt>Proposal</dt><dd>Upgrade recycling centre</dd>
         </dl>
         """
@@ -359,6 +360,80 @@ def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
     """.encode()
 
 
+def _devon_appeal_detail(reference: str = "APP/J1155/W/22/3299799") -> bytes:
+    return f"""
+    <dl class="details-grid">
+      <dt>Planning Ref</dt><dd>DCC/3945/2017</dd>
+      <dt>Enforcement Ref</dt><dd>-</dd>
+      <dt>Location</dt><dd>Straitgate Farm, Exeter Road</dd>
+      <dt>UPRN</dt><dd>-</dd>
+      <dt>Site</dt><dd>MD/500901/M</dd>
+      <dt>Proposal</dt><dd>Minerals appeal</dd>
+      <dt>Type</dt><dd>s78 Appeal</dd>
+      <dt>Appeal Method</dt><dd>Inquiry</dd>
+      <dt>Appellant</dt><dd>Appeal Company</dd>
+      <dt>Agent</dt><dd>Appeal Agent</dd>
+      <dt>Appellant Address</dt><dd>Appellant House, Devon</dd>
+      <dt>Agents Address</dt><dd>Agent House, Devon</dd>
+    </dl>
+    <dl class="details-grid">
+      <dt>Start Date</dt><dd>21/06/2022</dd>
+      <dt>Site Visit</dt><dd>-</dd>
+      <dt>Questionnaire Sent</dt><dd>-</dd>
+      <dt>Questionnaire Due</dt><dd>28/06/2022</dd>
+      <dt>Statement Sent</dt><dd>-</dd>
+      <dt>Statement Due</dt><dd>26/07/2022</dd>
+      <dt>Proof of Evidence Sent</dt><dd>-</dd>
+      <dt>Proof of Evidence Due</dt><dd>06/09/2022</dd>
+      <dt>Inquiry Date</dt><dd>04/10/2022</dd>
+      <dt>Appeal Officer</dt><dd>Officer Three</dd>
+      <dt>Venue</dt><dd>-</dd>
+      <dt>Available From</dt><dd>-</dd>
+      <dt>Available To</dt><dd>-</dd>
+      <dt>PINS Ref</dt><dd>3299799</dd>
+      <dt>PINS Officer</dt><dd>-</dd>
+    </dl>
+    <dl class="details-grid">
+      <dt>Parish</dt><dd>Ottery St Mary</dd>
+      <dt>Ward</dt><dd>West Hill &amp; Aylesbeare</dd>
+      <dt>Inspector</dt><dd>-</dd>
+      <dt>Planning Officer</dt><dd>Officer Four</dd>
+      <dt>Easting</dt><dd>307500</dd>
+      <dt>Northing</dt><dd>97200</dd>
+    </dl>
+    <dl class="details-grid">
+      <dt>Decision Date</dt><dd>-</dd>
+      <dt>In Abeyance</dt><dd>-</dd>
+      <dt>Abeyance Date</dt><dd>-</dd>
+      <dt>Appeal Decision</dt><dd>-</dd>
+      <dt>Decision</dt><dd>-</dd>
+    </dl>
+    <dl class="details-grid">
+      <dt>Council Applied</dt><dd>-</dd>
+      <dt>Council Awarded</dt><dd>-</dd>
+      <dt>Appellant Applied</dt><dd>-</dd>
+      <dt>Appellant Awarded</dt><dd>-</dd>
+    </dl>
+    <div id="PlanningdocTable" aria-label="Document grid"></div>
+    <table class="tblTest table sortable document-list">
+      <thead><tr><th>All</th><th>Description <span>▼</span></th><th>Created date <span></span></th></tr></thead>
+      <tbody>
+        <tr class="header active"><th colspan="3">APPEAL DOCUMENTS</th></tr>
+        <tr><td><input type="checkbox"></td><td>
+          <a href="/Document/Download?module=APP&amp;recordNumber=44&amp;planId=0&amp;imageId=2&amp;isPlan=false&amp;fileName=start-letter.pdf">Start letter</a>
+        </td><td>21/06/2022</td></tr>
+      </tbody>
+    </table>
+    <table summary="Appeal Consultees"><thead><tr>
+      <td>Consultee Name</td><td>Date Letter Sent</td>
+      <td>Consultation Expiry Date</td><td>Reply Received</td>
+    </tr></thead><tbody><tr>
+      <td>West Hill Parish Council</td><td>-</td><td>-</td><td>-</td>
+    </tr></tbody></table>
+    <p data-appeal-reference="{reference}"></p>
+    """.encode()
+
+
 class _DevonMock:
     def __init__(
         self,
@@ -386,11 +461,11 @@ class _DevonMock:
         if kind == "determined":
             return _devon_detail("PRE/1820/2026")
         if kind == "appeal-received":
-            return _devon_results(("DCC/4473/2026",))
+            return b"<p>No records</p>"
         if kind == "appeal-determined":
             return b"<p>No records</p>"
         if kind == "outstanding-appeals":
-            return _devon_results(("PRE/1820/2026",))
+            return _devon_results(("APP/J1155/W/22/3299799",), route="Appeals")
         start = (page - 1) * 10
         if page == 1 and self.shift_first_open:
             start += 1
@@ -453,6 +528,8 @@ class _DevonMock:
                 return _devon_advanced_form()
             if "results" in url:
                 return self._result()
+            if "appeal-detail" in url:
+                return _devon_appeal_detail(cast("str", self.detail_reference))
             return _devon_detail(
                 "WRONG/1"
                 if self.mismatch_detail
@@ -479,6 +556,12 @@ class _DevonMock:
             if self.direct:
                 return _devon_detail("WRONG/1" if self.mismatch_detail else reference)
             return _devon_disclaimer("detail")
+        if "/Appeals/Display/" in url:
+            reference = urlsplit(url).path.partition("/Appeals/Display/")[2]
+            self.detail_reference = reference
+            if self.direct:
+                return _devon_appeal_detail(reference)
+            return _devon_disclaimer("appeal-detail")
         raise AssertionError(url)
 
 
@@ -697,6 +780,38 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
         ("PLANS & DRAWINGS", "2026-08-20"),
     )
     store.close()
+
+
+def test_devon_collects_exact_appeal_route_and_native_fields() -> None:
+    adapter = devon.DevonAdapter()
+    reference = SourceReference(
+        source_id=devon.SOURCE,
+        reference="APP/J1155/W/22/3299799",
+        locator=(f"{devon.BASE_URL}/Appeals/Display/APP/J1155/W/22/3299799"),
+    )
+    snapshot = asyncio.run(adapter.fetch(_Session(_DevonMock(direct=True)), reference))
+    assert snapshot.payload.council_reference == reference.reference
+    assert snapshot.payload.record_kind == "appeal"
+    assert snapshot.payload.related_planning_reference == "DCC/3945/2017"
+    assert snapshot.payload.appeal_method == "Inquiry"
+    assert snapshot.payload.pins_reference == "3299799"
+    assert snapshot.payload.consultations == (
+        devon.DevonConsultationV1(values=("West Hill Parish Council", "-", "-", "-")),
+    )
+    assert snapshot.payload.documents[0].category == "APPEAL DOCUMENTS"
+    normalised = adapter.normalise(snapshot)
+    assert normalised.status == "appeal"
+    assert normalised.metadata.application_type == "s78 Appeal"
+    assert normalised.metadata.received_date == date(2022, 6, 21)
+    assert normalised.metadata.location is not None
+    assert normalised.metadata.location.bng_easting == 307500
+    assert {event.event_type for event in normalised.metadata.events} >= {
+        "appeal-start",
+        "questionnaire-due",
+        "statement-due",
+        "proof-of-evidence-due",
+        "inquiry",
+    }
 
 
 def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
@@ -1832,7 +1947,7 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         },
         {
             "query_key": expected_queries[3],
-            "row_count": 1,
+            "row_count": 0,
             "page_count": 1,
         },
         {
@@ -1847,11 +1962,11 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         },
     ]
     assert receipt["counts"] == {
-        "applications": 58,
-        "discovered_references": 58,
-        "native_versions": 58,
-        "application_versions": 58,
-        "document_versions": 58,
+        "applications": 59,
+        "discovered_references": 59,
+        "native_versions": 59,
+        "application_versions": 59,
+        "document_versions": 59,
         "comment_versions": 0,
         "pending_retries": 0,
         "failed_sections": 0,
