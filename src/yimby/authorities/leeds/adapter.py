@@ -1010,7 +1010,12 @@ def _parse_document_row(row: Tag) -> LeedsDocumentV1:
     )
 
 
-def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
+def _reported_count(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+    allow_empty_first_page_marker: bool = False,
+) -> int:
     element = soup.select_one("[data-result-count]")
     if isinstance(element, Tag):
         return int(str(element.get("data-result-count")))
@@ -1035,9 +1040,14 @@ def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
             _raise_parse("reported result count")
-        current_pages = tuple(
-            int(str(control.get("value")))
-            for control in soup.select('input[name="searchCriteria.page"][value]')
+        visible_page = _visible_result_page(soup, displayed_range)
+        current_pages = (
+            (visible_page,)
+            if visible_page is not None
+            else _current_result_pages(
+                soup,
+                allow_empty_first_page_marker=allow_empty_first_page_marker,
+            )
         )
         numbered_pages = tuple(
             int(value)
@@ -1061,6 +1071,58 @@ def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _visible_result_page(
+    soup: BeautifulSoup,
+    displayed_range: tuple[int, int, int],
+) -> int | None:
+    labels = tuple(
+        marker.get_text(" ", strip=True)
+        for pager in soup.select(".pager")
+        for marker in pager.find_all("strong", recursive=False)
+    )
+    if not labels:
+        return None
+    pages = tuple(
+        int(match.group(0))
+        for label in labels
+        if (match := re.fullmatch(r"[1-9]\d*", label)) is not None
+    )
+    if len(pages) != len(labels) or any(page != pages[0] for page in pages[1:]):
+        return _raise_parse("reported result count")
+    selected_capacities = soup.select(
+        'select[name="searchCriteria.resultsPerPage"] option[selected]'
+    )
+    try:
+        (selected_capacity,) = selected_capacities
+        capacity = int(str(selected_capacity.get("value", "")).strip())
+    except ValueError:
+        return _raise_parse("reported result count")
+    page = pages[0]
+    first, last, total = displayed_range
+    expected_first = (page - 1) * capacity + 1
+    expected_last = min(expected_first + capacity - 1, total)
+    if capacity <= 0 or (first, last) != (expected_first, expected_last):
+        return _raise_parse("reported result count")
+    return page
+
+
+def _current_result_pages(
+    soup: BeautifulSoup,
+    *,
+    allow_empty_first_page_marker: bool,
+) -> tuple[int, ...]:
+    page_values = tuple(
+        str(control.get("value", "")).strip()
+        for control in soup.select('input[name="searchCriteria.page"][value]')
+    )
+    if allow_empty_first_page_marker and page_values == ("",):
+        return (1,)
+    try:
+        return tuple(int(value) for value in page_values)
+    except ValueError:
+        return _raise_parse("reported result count")
 
 
 def _is_uncounted_terminal_first_page(
