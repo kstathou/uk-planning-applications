@@ -1746,6 +1746,30 @@ def test_dorset_outstanding_query_requires_published_checkbox(fault: str) -> Non
         )
 
 
+def test_dorset_received_query_rejects_prechecked_outstanding_control() -> None:
+    """Received-date discovery cannot inherit an outstanding-only filter."""
+
+    def check_outstanding(soup: BeautifulSoup) -> None:
+        control = soup.select_one(
+            'input[name="ctl00$ContentPlaceHolder1$chkOutstanding"]'
+        )
+        assert isinstance(control, Tag)
+        control["checked"] = "checked"
+
+    form = _form(_mutated(_advanced_form(), check_outstanding))
+
+    with pytest.raises(ValueError, match="advanced outstanding control"):
+        dorset_adapter._advanced_request(
+            form,
+            dorset_adapter._LIVE_QUERIES[0],
+            dorset_adapter.DorsetDiscoveryScope(
+                start=WINDOW.start,
+                end=WINDOW.end,
+                include_open=True,
+            ),
+        )
+
+
 def test_dorset_checkpoint_requires_page_one_for_a_fresh_query() -> None:
     """A terminal-looking later page cannot stand in for an unscanned query."""
     with pytest.raises(ValueError, match="first page"):
