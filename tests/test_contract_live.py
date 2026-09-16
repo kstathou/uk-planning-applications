@@ -1881,6 +1881,19 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
     )
     expected_url = HttpUrl(f"{devon.BASE_URL}/Search/Results")
     assert devon.discovery_request_matches(dated_query, 1, request, expected_url)
+    assert devon.discovery_request_matches(
+        dated_query,
+        1,
+        request.model_copy(
+            update={
+                "form": tuple(
+                    (name, "True") if name == "AdvancedSearch" else (name, value)
+                    for name, value in request.form
+                )
+            }
+        ),
+        expected_url,
+    )
     assert not devon.discovery_request_matches(
         dated_query,
         1,

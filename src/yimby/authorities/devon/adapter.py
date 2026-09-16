@@ -1203,7 +1203,7 @@ def discovery_request_matches(  # noqa: C901, PLR0911
         return False
     if not values["__RequestVerificationToken"][0]:
         return False
-    if values["AdvancedSearch"] != ["true"]:
+    if values["AdvancedSearch"][0].casefold() != "true":
         return False
     if any(
         values[name] != (["true", "false"] if value else ["false"])
