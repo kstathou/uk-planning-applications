@@ -101,8 +101,7 @@ class CheshireEastAdapter:
             async for batch in self._discover_fixture(session, window, checkpoint):
                 yield batch
             return
-        async for batch in self._discover_live(session, window, checkpoint):
-            yield batch
+        raise CheshireEastResultCompletenessUnavailableError
 
     async def _discover_fixture(
         self,
@@ -129,47 +128,6 @@ class CheshireEastAdapter:
             next_checkpoint=CheshireEastCheckpointV1(search_page=next_page),
             complete=next_page == "complete",
         )
-
-    async def _discover_live(
-        self,
-        session: PortalSession,
-        window: DiscoveryWindow,
-        checkpoint: CheshireEastCheckpointV1 | None,
-    ) -> AsyncIterator[DiscoveryBatch[CheshireEastCheckpointV1]]:
-        progress = checkpoint or CheshireEastCheckpointV1(search_page="live")
-        _assert_window(progress, window)
-        if progress.table_observed:
-            raise CheshireEastResultCompletenessUnavailableError
-        form_capture = await session.fetch(
-            PortalRequest(url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH)
-        )
-        form = _parse_search_form(form_capture.body)
-        result_capture = await session.fetch(_valid_date_request(form, window))
-        results = _parse_result_table(result_capture.body)
-        seen = set(progress.seen_references)
-        references = []
-        for result in results:
-            if result.public_reference not in seen:
-                seen.add(result.public_reference)
-                references.append(
-                    SourceReference(
-                        source_id=SOURCE,
-                        reference=result.public_reference,
-                        locator=str(result.detail_locator),
-                    )
-                )
-        observed = progress.model_copy(
-            update={
-                "window_start": window.start,
-                "window_end": window.end,
-                "seen_references": tuple(seen),
-                "table_observed": True,
-            }
-        )
-        yield DiscoveryBatch(
-            references=tuple(references), next_checkpoint=observed, complete=False
-        )
-        raise CheshireEastResultCompletenessUnavailableError
 
     async def fetch(
         self,
