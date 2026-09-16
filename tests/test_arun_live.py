@@ -78,7 +78,10 @@ def _complete_results(references: tuple[str, ...]) -> bytes:
         f'{reference}&amp;from=planningSearch">{reference}</a></td></tr>'
         for reference in references
     )
-    return f"<table><tr><th>Reference</th></tr>{rows}</table>".encode()
+    return (
+        f"<strong>{len(references)} records found</strong>"
+        f"<table><tr><th>Reference</th></tr>{rows}</table>"
+    ).encode()
 
 
 def _detail_with_documents(reference: str) -> bytes:
@@ -278,6 +281,27 @@ def test_arun_plan_without_open_contains_only_the_bounded_first_pass() -> None:
     assert [query.kind for query in plan] == ["received", "decided"]
 
 
+def test_arun_open_plan_stops_at_a_pre_2024_scope_end() -> None:
+    scope = arun.ArunDiscoveryScope(
+        start=date(2020, 8, 18),
+        end=date(2020, 9, 16),
+        include_open=True,
+    )
+
+    plan = arun._canonical_query_plan(scope)
+
+    open_queries = cast("tuple[arun.ArunOpenReceivedQuery, ...]", plan[2:])
+    assert open_queries[0] == arun.ArunOpenReceivedQuery(
+        start=date(1948, 1, 1),
+        end=date(1999, 12, 31),
+    )
+    assert open_queries[-1] == arun.ArunOpenReceivedQuery(
+        start=date(2020, 1, 1),
+        end=date(2020, 9, 16),
+    )
+    assert all(query.end <= scope.end for query in open_queries)
+
+
 def test_arun_search_requests_replay_the_exact_portal_controls() -> None:
     form = arun._parse_search_form(_search_form())
     queries = (
@@ -385,6 +409,48 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         b'<a href="planningDetails?reference=A">A</a><p>1 result</p>'
     )
     assert single.reported == 1
+
+    with pytest.raises(arun.ArunParseError, match="reported result count"):
+        arun._parse_search_results(
+            b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>'
+        )
+    with pytest.raises(arun.ArunParseError, match="result pagination"):
+        arun._parse_search_results(
+            b'<strong>1 record</strong><a rel="next" href="?page=2">Next</a>'
+            b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>'
+        )
+
+
+@pytest.mark.parametrize(
+    "href",
+    (
+        "https://elsewhere.invalid/planningDetails?reference=BR/1/26/PL",
+        f"{arun.BASE_URL}/other/planningDetails?reference=BR/1/26/PL",
+        f"{arun.BASE_URL}/planningDetails?reference=BR/1/26/PL&extra=1",
+    ),
+)
+def test_arun_result_links_stay_on_the_exact_official_route(href: str) -> None:
+    with pytest.raises(arun.ArunParseError, match="result reference"):
+        arun._parse_search_results(
+            f'<strong>1 record</strong><a href="{href}">BR/1/26/PL</a>'.encode()
+        )
+
+
+def test_arun_fetch_rejects_an_untrusted_retained_locator() -> None:
+    reference = SourceReference(
+        source_id=arun.SOURCE,
+        reference="BR/1/26/PL",
+        locator=(
+            "https://elsewhere.invalid/planningDetails?"
+            "reference=BR%2F1%2F26%2FPL&from=planningSearch"
+        ),
+    )
+    session = _Session(_QualificationResponder())
+
+    with pytest.raises(arun.ArunRoutingError):
+        asyncio.run(arun.ArunAdapter().fetch(session, reference))
+
+    assert session.requests == []
 
 
 def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
@@ -843,6 +909,19 @@ def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> Non
         arun._document_request(detail, "OTHER/1")
     with pytest.raises(arun.ArunParseError, match="document action"):
         arun._document_request(detail + detail, "BR/1/26/PL")
+    with pytest.raises(arun.ArunParseError, match="document action"):
+        arun._document_request(
+            detail.replace(
+                b"showDocuments?reference=BR/1/26/PL&amp;module=pl",
+                b"other/showDocuments?reference=BR/1/26/PL&amp;module=pl",
+            ),
+            "BR/1/26/PL",
+        )
+    with pytest.raises(arun.ArunParseError, match="document action"):
+        arun._document_request(
+            detail.replace(b"&amp;module=pl", b"&amp;module=pl&amp;extra=1"),
+            "BR/1/26/PL",
+        )
     with pytest.raises(arun.ArunParseError, match="document pagination"):
         arun._parse_document_index(
             _document_index() + b'<nav class="pagination">next</nav>'
