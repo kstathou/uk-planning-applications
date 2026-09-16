@@ -35,7 +35,7 @@ requirement.
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
 | Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
-| Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
+| Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded; portal blocked on 16 September 2026 | Discovery-only adapter; exact received-date and older-open routes unproved during outage | Open | Open |
 | West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Ten weekly and eight active-state partitions completed with strict pagination, exact form values, persisted details, and no attachment bodies | Verified, 730 applications, receipt dated 16 September 2026 | Open |
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
@@ -62,3 +62,10 @@ without persisting every discovered application through the operational
 collection store. West Suffolk has since passed that boundary through the dated
 qualification receipt. Leeds still stops explicitly before its unverified
 detail surface.
+
+The later Durham qualification attempt resolved the Public Access host to
+`217.23.233.121`, but bounded probes on ports 80 and 443 timed out before an
+HTTP response. The council's main planning page remained healthy. The current
+advanced form and current-case list could not be captured, so the exact 30-day
+received-date route and complete older-open query inventory remain unproved.
+No qualification receipt was emitted. Durham remains discovery-only.
