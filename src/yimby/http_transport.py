@@ -166,7 +166,9 @@ class HttpxPortalSession:
         safe_url = _safe_url(url)
         form = [(field.name, field.value) for field in portal_request.form]
         encoded_form = urlencode(form).encode() if form else None
-        headers = {header.name: header.value for header in portal_request.headers}
+        headers: dict[str, str] = {
+            header.name: header.value for header in portal_request.headers
+        }
         if form:
             headers["content-type"] = "application/x-www-form-urlencoded"
         for attempt in range(1, self._max_attempts + 1):
