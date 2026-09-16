@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: INP001, T201
-
-"""Qualify Peak District live collection without promoting registry readiness."""
+# ruff: noqa: D100, D101, D103, D107, INP001, T201
 
 from __future__ import annotations
 
@@ -9,6 +7,7 @@ import argparse
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -57,16 +56,12 @@ Clock = Callable[[], datetime]
 
 
 class QualificationScope(FrozenModel):
-    """Exact inclusive discovery scope proven by the receipt."""
-
     start: date
     end: date
     include_open: bool
 
 
 class QualificationCounts(FrozenModel):
-    """Durable authority counts after collection."""
-
     applications: int = Field(ge=0)
     discovered_references: int = Field(ge=0)
     native_versions: int = Field(ge=0)
@@ -79,44 +74,32 @@ class QualificationCounts(FrozenModel):
 
 
 class QualificationCost(FrozenModel):
-    """Observable transport cost for one qualification pass."""
-
     request_count: int = Field(ge=0)
     transferred_bytes: int = Field(ge=0)
     attachment_body_requests: int = Field(ge=0)
 
 
 class QualificationCosts(FrozenModel):
-    """Bootstrap and immediate idempotence proof costs."""
-
     initial: QualificationCost
     rerun: QualificationCost
 
 
 class QualificationCheck(FrozenModel):
-    """One named acceptance invariant."""
-
     name: str
     ok: bool
 
 
 class RetryPolicy(FrozenModel):
-    """Transport retry policy used by the live qualification command."""
-
     max_attempts: Literal[1] = 1
 
 
 class WeeklyCycle(FrozenModel):
-    """One genuinely later weekly cycle that cannot complete on bootstrap day."""
-
     cycle: Literal[1, 2]
     eligible_on: date
     status: Literal["pending"] = "pending"
 
 
 class PeakDistrictQualificationReceiptV1(FrozenModel):
-    """Versioned result of a complete local Peak District bootstrap."""
-
     schema_version: Literal[1] = 1
     authority_id: Literal["peak-district"] = "peak-district"
     created_at: datetime
@@ -136,18 +119,12 @@ class _Config(FrozenModel):
 
 
 class QualificationConfigError(ValueError):
-    """One required safety option or scope value is invalid."""
-
     def __init__(self, code: str) -> None:
-        """Retain the stable error code emitted by the command."""
         super().__init__(code)
 
 
 class QualificationFailedError(RuntimeError):
-    """Qualification invariants did not all hold."""
-
     def __init__(self, failed_checks: tuple[str, ...]) -> None:
-        """Retain the stable names of failed invariants."""
         super().__init__("qualification checks failed")
         self.failed_checks = failed_checks
 
@@ -479,7 +456,6 @@ def main(
     session_factory: SessionFactory = _default_session,
     now: Clock = _default_clock,
 ) -> int:
-    """Run explicit live qualification and emit its atomic receipt."""
     try:
         config = _config(sys.argv[1:] if argv is None else argv)
     except QualificationConfigError as error:
@@ -501,7 +477,7 @@ def main(
             1,
             failed_checks=list(error.failed_checks),
         )
-    except Exception as error:  # noqa: BLE001
+    except (LookupError, OSError, RuntimeError, ValueError, sqlite3.Error) as error:
         return _error("runtime-failure", 1, exception=type(error).__name__)
     print(receipt.model_dump_json())
     return 0

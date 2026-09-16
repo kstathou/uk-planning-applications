@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, E501, PLR2004, RUF012, SLF001
-
-"""Peak District AssureLive request and checkpoint contracts."""
+# ruff: noqa: ANN401, D100, D103, E501, PLR2004, SLF001
 
 from __future__ import annotations
 
@@ -12,7 +10,7 @@ import sys
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -332,13 +330,16 @@ def _qualification_module() -> ModuleType:
     return module
 
 
+type _ReferencePages = dict[str, tuple[tuple[str, ...], ...]]
+
+
 class _PeakAssureMock:
-    date_references = {
+    date_references: ClassVar[_ReferencePages] = {
         "Received": (("NP/DDD/0926/0909", "NP/DIS/0926/0917"), ("NP/SM/0826/0810",)),
         "Validated": (("NP/DIS/0926/0917",),),
         "Decided": ((),),
     }
-    status_references = {
+    status_references: ClassVar[_ReferencePages] = {
         "REGISTERED": (("NP/DDD/0126/0001", "NP/DDD/0926/0909"),),
         "APPEAL LODGED": (("NP/DDD/1125/1200",),),
     }
@@ -1239,7 +1240,7 @@ def test_peak_district_qualification_only_formats_expected_runtime_failures(
         ]
 
     def expected_failure() -> _Session:
-        raise RuntimeError("source failed")
+        raise RuntimeError
 
     assert module.main(arguments("expected"), session_factory=expected_failure) == 1
     assert json.loads(capsys.readouterr().err) == {
@@ -1248,9 +1249,9 @@ def test_peak_district_qualification_only_formats_expected_runtime_failures(
     }
 
     def programming_bug() -> _Session:
-        raise TypeError("programming bug")
+        raise TypeError
 
-    with pytest.raises(TypeError, match="programming bug"):
+    with pytest.raises(TypeError):
         module.main(arguments("bug"), session_factory=programming_bug)
 
 
