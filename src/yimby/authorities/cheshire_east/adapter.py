@@ -717,15 +717,6 @@ def _normalise_label(value: str) -> str:
     return " ".join(value.strip().rstrip(":").casefold().split())
 
 
-def _assert_window(
-    checkpoint: CheshireEastCheckpointV1, window: DiscoveryWindow
-) -> None:
-    if checkpoint.window_start is not None and (
-        checkpoint.window_start != window.start or checkpoint.window_end != window.end
-    ):
-        raise CheshireEastCheckpointError
-
-
 def _required_fixture(value: str, pattern: str, field: str) -> str:
     match = re.search(pattern, value)
     if match is None:
@@ -772,10 +763,6 @@ class CheshireEastRoutingError(ValueError):
     def __init__(self, reference: str) -> None:
         """Identify the public reference only."""
         super().__init__(f"Cheshire East cannot route reference {reference}")
-
-
-class CheshireEastCheckpointError(ValueError):
-    """A saved table cursor belongs to another date window."""
 
 
 def _raise_parse(field: str) -> NoReturn:

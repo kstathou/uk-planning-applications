@@ -190,8 +190,7 @@ def test_cheshire_form_boundary_failures(body: bytes, error: type[Exception]) ->
         cheshire.parse_search_form(body)
 
 
-def test_cheshire_result_and_checkpoint_boundaries() -> None:
-    """Malformed rows and cross-window checkpoints fail without detail guesses."""
+def test_cheshire_result_boundaries() -> None:
     for body in (
         b"<html></html>",
         b'<table id="application_results_table"></table>',
@@ -201,11 +200,6 @@ def test_cheshire_result_and_checkpoint_boundaries() -> None:
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire._parse_result_table(body)
-    stale = cheshire.CheshireEastCheckpointV1(
-        search_page="live", window_start=date(2026, 1, 1), window_end=date(2026, 1, 2)
-    )
-    with pytest.raises(cheshire.CheshireEastCheckpointError):
-        cheshire._assert_window(stale, RECENT)
     assert cheshire._optional_mapping({"optional": ""}, "missing") is None
     with pytest.raises(cheshire.CheshireEastParseError):
         cheshire._required_mapping({}, "reference")
