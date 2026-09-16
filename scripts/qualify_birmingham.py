@@ -1044,6 +1044,11 @@ async def _qualify(
     *,
     verify_replay: bool = True,
 ) -> BirminghamBlockedQualificationReceiptV1:
+    if (config.scope.start, config.scope.end) != (
+        _QUALIFICATION_START,
+        _QUALIFICATION_END,
+    ):
+        _fail_invariant("qualification-scope-mismatch")
     evidence_store = EvidenceStore(config.data_dir / "evidence")
     inventory: list[QueryObservationV1] = []
     session = session_factory()
