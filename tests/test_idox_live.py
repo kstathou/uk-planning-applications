@@ -2461,3 +2461,78 @@ def test_west_suffolk_qualification_rejects_incoherent_terminal_checkpoints(
     assert len(empty_sessions) == 1
     assert empty_sessions[0].requested_urls == ()
     assert empty_sessions[0].closed is True
+
+
+def test_west_suffolk_qualification_accepts_live_week_key_rendering(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Treat the recorded textual Monday rendering as the same week."""
+    module = _qualification_module()
+    data_dir = tmp_path / "live-week-rendering"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--resume",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    store = _store(data_dir)
+    stored = store.discovery_state(AuthorityId("west-suffolk")).checkpoint
+    assert stored is not None
+    checkpoint = west_suffolk_adapter.WestSuffolkCheckpointV1.model_validate_json(
+        stored.payload_json
+    )
+    live_keys = tuple(
+        key.replace("14/09/2026", "14 Sep 2026") for key in checkpoint.completed_queries
+    )
+    run_id = store.begin_run(AuthorityId("west-suffolk"))
+    store.commit_discovery(
+        run_id,
+        AuthorityId("west-suffolk"),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json=checkpoint.model_copy(
+                    update={"completed_queries": live_keys}
+                ).model_dump_json(),
+            ),
+            complete=True,
+        ),
+    )
+    store.finish_run(
+        run_id,
+        AuthorityId("west-suffolk"),
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=0,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.LIVE,
+        ),
+    )
+    store.close()
+    (data_dir / "west-suffolk-qualification-v1.json").unlink()
+    sessions.clear()
+
+    assert module.main(args, session_factory=session_factory) == 0
+    assert len(sessions) == 2
+    assert all(session.requested_urls == () for session in sessions)
+    assert all(session.closed for session in sessions)
