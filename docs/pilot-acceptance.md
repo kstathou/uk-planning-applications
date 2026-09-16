@@ -40,8 +40,8 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed verified live
-bootstraps. West Suffolk's versioned receipt proves 730 discovered references,
+As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed
+verified live bootstraps. West Suffolk's versioned receipt proves 730 discovered references,
 730 persisted applications, terminal checkpoint coherence, no pending retries,
 no failed current sections, database integrity, retained evidence-path
 presence, no unmapped records, no attachment-body requests, and an immediate
@@ -53,10 +53,10 @@ digests, 165 ordered application-to-capture associations, and an immediate
 zero-network rerun. Its SHA-256 commitment covers each application's source
 identity and ordered capture URL, media type, and content digest without
 publishing the identity inventory. Peak District's receipt records 377
-applications, zero failed sections, zero retries, zero attachment-body requests,
-complete database and evidence integrity, and an immediate zero-network rerun.
-Its two later weekly cycles remain pending, so it is not operationally qualified
-or `LIVE_READY`. The other twelve authorities still
+applications, 95 decision dates, zero failed sections, zero retry entries, zero
+attachment-body requests, complete database and all-row evidence integrity, and
+an immediate zero-network rerun. Its two later weekly cycles remain pending, so
+it is not operationally qualified or `LIVE_READY`. The other twelve authorities still
 require verified live bootstraps. All fifteen still require two successful
 later weekly cycles, so operational qualification remains zero of fifteen.
 

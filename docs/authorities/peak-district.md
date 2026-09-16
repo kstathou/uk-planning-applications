@@ -69,11 +69,12 @@ The accepted local evidence directory is
 - the inclusive scope from 18 August through 16 September 2026;
 - the exact five-query inventory and a one-attempt transport policy;
 - 377 discovered references and 377 applications;
-- 389 native versions, 377 application versions, and 377 document versions;
-- zero pending retries, failed sections, unmapped records, and attachment-body
-  requests;
+- 484 native versions, 472 application versions, and 472 document versions;
+- 95 persisted decision dates recovered through current official overviews;
+- zero pending or historical retry entries, failed sections, unmapped records,
+  and attachment-body requests;
 - agreement among checkpoint, discovery queue, and retained applications;
-- database, evidence-path, and SHA-256 evidence integrity;
+- database, evidence-path, and SHA-256 integrity for all 1,560 evidence rows;
 - an unchanged immediate rerun with zero requests and zero transferred bytes.
 
 During qualification, stored official evidence exposed windowed pagination on
@@ -83,6 +84,15 @@ had windowed document pagers and one later document page had been unavailable
 on its original single attempt. The accepted run used one attempt per request,
 left the retry queue empty, and replaced all twelve with complete current
 observations.
+
+A fresh independent review then found four gaps. Active queries now restart at
+page zero after interruption so first-page drift cannot be skipped. Receipt
+integrity covers every retained evidence row, not only current rebuild inputs.
+The native and common schemas retain published decision dates. The receipt also
+requires the complete retry inventory to be empty. A targeted corrective run
+refreshed the 95 records whose retained official overviews exposed decision
+dates, made 325 one-attempt requests, and again completed an immediate
+zero-request rerun.
 
 ## Acceptance boundary
 

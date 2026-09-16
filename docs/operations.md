@@ -137,9 +137,10 @@ rerun all pass. Use `--resume` only with the same directory and exact scope
 after an interruption or fail-closed correction.
 
 The accepted 16 September 2026 receipt records 377 references and applications,
-zero failed sections, zero pending retries, and zero attachment-body requests.
-Peak District remains below `LIVE_READY` until successful weekly cycles occur
-on or after 23 September and 30 September 2026.
+95 decision dates, zero failed sections, zero pending or historical retry
+entries, and zero attachment-body requests. It validates all 1,560 retained
+evidence rows. Peak District remains below `LIVE_READY` until successful weekly
+cycles occur on or after 23 September and 30 September 2026.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:
