@@ -618,24 +618,34 @@ def test_haringey_terminal_checkpoint_requires_exact_durable_inventory() -> None
         unresolved,
         scope,
         ("HGY/1999/0250",),
+        frozenset(),
+    )
+    resolution = haringey.HaringeyLegacyResolutionV1(
+        pkid="19085",
+        public_reference="HGY/1999/0250",
+        salesforce_record_id="a0i8d000002Flr2AAC",
+        evidence_digest="0" * 64,
     )
     missing_query = unresolved.model_copy(
         update={
             "completed_queries": completed[:-1],
-            "legacy_resolutions": (
-                haringey.HaringeyLegacyResolutionV1(
-                    pkid="19085",
-                    public_reference="HGY/1999/0250",
-                    salesforce_record_id="a0i8d000002Flr2AAC",
-                    evidence_digest="0" * 64,
-                ),
-            ),
+            "legacy_resolutions": (resolution,),
         }
     )
     assert not module._checkpoint_inventory_complete(
         missing_query,
         scope,
         ("HGY/1999/0250",),
+        frozenset(),
+    )
+    unretained_evidence = unresolved.model_copy(
+        update={"legacy_resolutions": (resolution,)}
+    )
+    assert not module._checkpoint_inventory_complete(
+        unretained_evidence,
+        scope,
+        ("HGY/1999/0250",),
+        frozenset(),
     )
 
 
