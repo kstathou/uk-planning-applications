@@ -393,6 +393,7 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         b"<html></html>",
         _weekly_form().replace(b'method="post"', b'method="get"'),
         _weekly_form().replace(b'name="week"', b'name="other"'),
+        _weekly_form().replace(b'name="fa" value=""', b'name="fa" value="x"'),
     )
     for body in invalid_forms:
         with pytest.raises(cheshire.CheshireEastParseError):
