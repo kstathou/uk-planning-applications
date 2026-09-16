@@ -78,6 +78,14 @@ its response digests bind the findings to the two official API snapshots
 without publishing catalogue contacts, application identities, session
 material, or source bodies.
 
+`derive_barnet_open_data_assessment` and
+`verify_barnet_open_data_assessment` provide the offline evidence path. They
+parse retained metadata responses, recompute both response digests, reconcile
+the dataset resource IDs and update timestamp with the full catalogue, scan
+dataset, description, and resource metadata for the planning-application
+phrase, and require exact equality with the committed assessment. Sanitized
+fixtures exercise that path without retaining contacts or application keys.
+
 ## Request contract capture
 
 The weekly-list request was rechecked on 16 September 2026. The form posts to

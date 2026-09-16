@@ -141,6 +141,14 @@ as an insufficient historical fallback; it does not cover either the rolling
 PDF or CSV bodies as part of live qualification, and do not use it to mark the
 HTTP 429 bootstrap complete.
 
+Use `verify_barnet_open_data_assessment` with the retained dataset and full
+catalogue JSON responses to reproduce the evidence offline. Verification
+recomputes the response hashes, reconciles the planning dataset's resource IDs
+and update timestamp across both responses, derives the catalogue match set,
+and compares every derived field with the committed artifact. The verifier
+ignores contact fields and emits no source metadata, resource body, or
+attachment body.
+
 A missing lineage table is accepted by the exporter only for genuine
 pre-lineage history with neither Barnet's legacy 006 filename nor its current
 009 filename recorded. Once either Barnet lineage migration is recorded, its
