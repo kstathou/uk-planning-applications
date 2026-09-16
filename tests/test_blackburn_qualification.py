@@ -231,6 +231,7 @@ def test_blackburn_qualification_persists_complete_zero_network_receipt(
     assert receipt["costs"]["rerun"] == {
         "request_count": 0,
         "transferred_bytes": 0,
+        "browser_time_ms": 0,
         "attachment_body_requests": 0,
     }
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
