@@ -192,7 +192,7 @@ class _DocumentPage(FrozenModel):
 
 
 class PeakDistrictAdapter:
-    """Own the legacy weekly and visible-loading-state boundaries."""
+    """Own legacy fixtures and the current AssureLive collection contract."""
 
     manifest = AuthorityManifest(
         id=AuthorityId("peak-district"),
@@ -217,7 +217,7 @@ class PeakDistrictAdapter:
         window: DiscoveryWindow,
         checkpoint: PeakDistrictCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[PeakDistrictCheckpointV1]]:
-        """Use fixtures or enumerate every row in the legacy weekly table."""
+        """Use deterministic fixtures or exhaust the live AssureLive query plan."""
         if session.mode == TransportMode.FIXTURE:
             async for batch in self._discover_fixture(session, window, checkpoint):
                 yield batch
