@@ -925,11 +925,14 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         "2026-09-16",
         "--include-open",
     ]
-    assert module.main(
-        arguments,
-        session_factory=_QualificationSession,
-        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
-    ) == 1
+    assert (
+        module.main(
+            arguments,
+            session_factory=_QualificationSession,
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
+        == 1
+    )
     capsys.readouterr()
     receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
     payload = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -940,11 +943,14 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         message = "tampered resume constructed a portal session"
         raise AssertionError(message)
 
-    assert module.main(
-        [*arguments, "--resume"],
-        session_factory=forbidden_factory,
-        now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
-    ) == 1
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
     captured = capsys.readouterr()
     assert captured.out == ""
     assert '"error": "runtime-failure"' in captured.err

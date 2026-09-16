@@ -15,7 +15,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, Self
+from typing import Literal, Never, Self
 
 from pydantic import Field, HttpUrl, ValidationError, model_validator
 
@@ -46,6 +46,11 @@ _RECEIPT_REQUIRED = "receipt-required"
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
+
+
+def _raise_invariant(code: str) -> Never:
+    """Raise one stable receipt invariant code."""
+    raise ValueError(code)
 
 
 class QualificationScopeV1(FrozenModel):
@@ -125,6 +130,13 @@ class DetailContractV1(FrozenModel):
     document_count: int = Field(ge=0)
     documents: tuple[DocumentContractV1, ...]
 
+    @model_validator(mode="after")
+    def count_matches_documents(self) -> Self:
+        """Require the published count to describe the retained metadata rows."""
+        if self.document_count != len(self.documents):
+            _raise_invariant("document-count-mismatch")
+        return self
+
 
 class SourceContractV1(FrozenModel):
     """All official observations used by the blocker decision."""
@@ -133,6 +145,28 @@ class SourceContractV1(FrozenModel):
     recent: RecentContractV1
     weekly: WeeklyContractV1
     detail: DetailContractV1
+
+
+def _recent_window_contradicted(
+    scope: QualificationScopeV1,
+    source_contract: SourceContractV1,
+) -> bool:
+    return (
+        scope.start <= source_contract.detail.valid_date <= scope.end
+        and source_contract.detail.public_reference
+        not in source_contract.recent.visible_references
+    )
+
+
+def _weekly_terminality_unproved(weekly: WeeklyContractV1) -> bool:
+    published_count_agrees = (
+        weekly.reported_total is None or weekly.reported_total == weekly.row_count
+    )
+    return not (
+        not weekly.pagination_links
+        and published_count_agrees
+        and (weekly.terminal_marker or weekly.reported_total is not None)
+    )
 
 
 class QualificationBlockerV1(FrozenModel):
@@ -193,6 +227,101 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
     evidence: tuple[RetainedEvidenceV1, ...] = Field(min_length=1)
     operational_store: Literal["not-created"] = "not-created"
     weekly_cycles: tuple[PendingWeeklyCycleV1, PendingWeeklyCycleV1]
+
+    @model_validator(mode="after")
+    def semantic_invariants(self) -> Self:
+        """Reject receipts whose independently useful facts disagree."""
+        planned = _planned_query_inventory(self.scope)
+        attempted = tuple(request.key for request in self.attempted_requests)
+        expected_pending = planned[len(attempted) :]
+        if (
+            attempted != planned[: len(attempted)]
+            or self.query_inventory != attempted
+            or self.pending_query_inventory != expected_pending
+            or len(self.evidence) != len(attempted)
+            or self.costs.request_count != len(attempted)
+            or self.costs.attachment_body_requests != 0
+            or self.costs.transferred_bytes
+            != sum(item.byte_count for item in self.evidence)
+            or self.weekly_cycles
+            != (
+                PendingWeeklyCycleV1(due_on=self.scope.end + timedelta(days=7)),
+                PendingWeeklyCycleV1(due_on=self.scope.end + timedelta(days=14)),
+            )
+        ):
+            _raise_invariant("receipt-invariant-mismatch")
+
+        checks = {check.name: check.status for check in self.checks}
+        if len(checks) != len(self.checks):
+            _raise_invariant("receipt-check-duplicate")
+        expected_checks: dict[str, str] = {
+            "exact-query-inventory": "passed",
+            "attachment-policy": "passed",
+            "source-evidence-integrity": "passed",
+            "sqlite-integrity": "not-run",
+            "durable-queue-agreement": "not-run",
+        }
+        if self.source_contract is None:
+            if len(self.blockers) != 1 or self.blockers[0].code not in {
+                "official-search-form-unavailable",
+                "official-source-contract-drift",
+            }:
+                _raise_invariant("receipt-source-blocker-mismatch")
+            expected_checks.update(
+                {
+                    "official-search-form": (
+                        "failed"
+                        if self.blockers[0].code == "official-search-form-unavailable"
+                        else "passed"
+                    ),
+                    "source-contract": "failed",
+                    "recent-window-fidelity": "not-run",
+                    "weekly-list-terminality": "not-run",
+                    "older-open-inventory": "not-run",
+                    "detail-and-documents": "not-run",
+                }
+            )
+        else:
+            recent_contradicted = _recent_window_contradicted(
+                self.scope,
+                self.source_contract,
+            )
+            weekly_unproved = _weekly_terminality_unproved(self.source_contract.weekly)
+            expected_code_list = []
+            if recent_contradicted:
+                expected_code_list.append("recent-window-fidelity-contradicted")
+            if weekly_unproved:
+                expected_code_list.append("weekly-list-terminality-unproven")
+            expected_code_list.append("older-open-inventory-unproven")
+            expected_codes = tuple(expected_code_list)
+            semantic_requests = tuple(
+                request
+                for request in self.attempted_requests
+                if not request.key.startswith("source-access|")
+            )
+            if (
+                attempted != planned
+                or tuple(blocker.code for blocker in self.blockers) != expected_codes
+                or self.source_contract.queries != semantic_requests
+            ):
+                _raise_invariant("receipt-source-contract-mismatch")
+            expected_checks.update(
+                {
+                    "official-search-form": "passed",
+                    "source-contract": "passed",
+                    "recent-window-fidelity": (
+                        "failed" if recent_contradicted else "passed"
+                    ),
+                    "weekly-list-terminality": (
+                        "failed" if weekly_unproved else "passed"
+                    ),
+                    "older-open-inventory": "failed",
+                    "detail-and-documents": "passed",
+                }
+            )
+        if checks != expected_checks:
+            _raise_invariant("receipt-check-mismatch")
+        return self
 
 
 class _Config(FrozenModel):
@@ -502,22 +631,11 @@ def _receipt(
                 PendingWeeklyCycleV1(due_on=scope.end + timedelta(days=14)),
             ),
         )
-    recent_contradicted = (
-        probe.source_contract.detail.valid_date >= scope.start
-        and probe.source_contract.detail.valid_date <= scope.end
-        and probe.source_contract.detail.public_reference
-        not in probe.source_contract.recent.visible_references
+    recent_contradicted = _recent_window_contradicted(
+        scope,
+        probe.source_contract,
     )
-    weekly = probe.source_contract.weekly
-    published_count_agrees = (
-        weekly.reported_total is None or weekly.reported_total == weekly.row_count
-    )
-    weekly_complete = (
-        not weekly.pagination_links
-        and published_count_agrees
-        and (weekly.terminal_marker or weekly.reported_total is not None)
-    )
-    weekly_unproved = not weekly_complete
+    weekly_unproved = _weekly_terminality_unproved(probe.source_contract.weekly)
     blockers = []
     if recent_contradicted:
         blockers.append(
@@ -557,6 +675,8 @@ def _receipt(
         source_contract=probe.source_contract,
         blockers=tuple(blockers),
         checks=(
+            QualificationCheckV1(name="official-search-form", status="passed"),
+            QualificationCheckV1(name="source-contract", status="passed"),
             QualificationCheckV1(name="exact-query-inventory", status="passed"),
             QualificationCheckV1(
                 name="recent-window-fidelity",
