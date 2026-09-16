@@ -19,6 +19,7 @@ from typing import Literal
 from pydantic import Field
 
 from yimby.authorities.camden import CAMDEN_PACKAGE
+from yimby.authorities.camden.browser_session import CamdenBrowserPortalSession
 from yimby.authorities.camden.discovery import (
     CAMDEN_SOURCE,
     CamdenCheckpointV1,
@@ -40,7 +41,6 @@ from yimby.domain import (
     SourceReference,
 )
 from yimby.evidence import EvidenceStore
-from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
@@ -546,8 +546,8 @@ def _write_receipt(path: Path, receipt: CamdenQualificationReceiptV1) -> None:
         os.close(directory)
 
 
-def _default_session() -> HttpxPortalSession:
-    return HttpxPortalSession()
+def _default_session() -> CamdenBrowserPortalSession:
+    return CamdenBrowserPortalSession()
 
 
 def _default_clock() -> datetime:
