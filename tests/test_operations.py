@@ -896,7 +896,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5, 6)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 8)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -932,7 +932,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 8)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()
