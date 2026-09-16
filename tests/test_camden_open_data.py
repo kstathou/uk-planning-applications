@@ -10,6 +10,7 @@ import importlib.util
 import json
 from datetime import date
 from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, cast
 
 import httpx
@@ -22,6 +23,7 @@ from yimby.authorities.camden.fixtures import fixture_session
 from yimby.collection import Collector
 from yimby.domain import (
     AuthorityId,
+    CollectionReport,
     DiscoveryWindow,
     SourceId,
     SourceReference,
@@ -75,13 +77,23 @@ class Feed:
         if "$select" in query:
             self.summaries += 1
             total = len({str(item["pk"]) for item in self.rows})
+            references = len(
+                {str(item["application_number"]) for item in self.rows}
+            )
+            pairs = len(
+                {
+                    (str(item["pk"]), str(item["application_number"]))
+                    for item in self.rows
+                }
+            )
             payload = (
                 self.summary_override
                 if self.summary_override is not None
                 else [
                     {
                         "total": str(total),
-                        "references": str(total),
+                        "references": str(references),
+                        "pairs": str(pairs),
                         "watermark": "changed"
                         if self.drift and self.summaries > 1
                         else "stamp",
@@ -228,6 +240,19 @@ def test_discovery_fails_closed(failure: str, monkeypatch: pytest.MonkeyPatch) -
     )
     with pytest.raises(api.CamdenOpenDataError):
         asyncio.run(discover(feed, checkpoint))
+
+
+def test_summary_proves_one_to_one_identity_pairs() -> None:
+    feed = Feed(
+        [
+            row(1, application_number="A"),
+            row(1, application_number="B", socrata_id="12"),
+            row(2, application_number="A"),
+        ]
+    )
+    with pytest.raises(api.CamdenOpenDataError, match="one-to-one"):
+        asyncio.run(discover(feed))
+    assert len(feed.requests) == 1
 
 
 def test_empty_and_invalid_windows() -> None:
@@ -379,15 +404,20 @@ def test_abandoned_page_cache_does_not_cross_sessions() -> None:
     asyncio.run(run())
 
 
-def test_api_qualification_command(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def _qualifier_module() -> ModuleType:
     path = Path(__file__).parents[1] / "scripts" / "qualify_camden.py"
     spec = importlib.util.spec_from_file_location("_test_camden_api_qualify", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_api_qualification_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _qualifier_module()
     feed = Feed([row(1)])
     monkeypatch.setattr(module, "create_session", lambda: session(feed))
     arguments = [
@@ -412,3 +442,42 @@ def test_api_qualification_command(
     with pytest.raises(SystemExit):
         module.main([*arguments, "--confirm-live"])
     assert module.main([*arguments, "--confirm-live", "--resume"]) == 0
+
+
+@pytest.mark.parametrize("fault", ["count", "attachment"])
+def test_api_qualification_rejects_acceptance_faults(
+    fault: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualifier_module()
+    real_collect = module.Collector.collect
+
+    async def faulty_collect(
+        collector: object,
+        authority: AuthorityId,
+        window: DiscoveryWindow,
+        live_session: HttpxPortalSession,
+    ) -> CollectionReport:
+        report = await real_collect(collector, authority, window, live_session)
+        if fault == "count":
+            return report.model_copy(update={"applications": ()})
+        return report.model_copy(update={"attachment_body_requests": 1})
+
+    monkeypatch.setattr(module.Collector, "collect", faulty_collect)
+    monkeypatch.setattr(module, "create_session", lambda: session(Feed([row(1)])))
+    with pytest.raises(ValueError, match="counts or attachment"):
+        asyncio.run(module.qualify(tmp_path / fault, WINDOW))
+
+
+def test_api_qualification_rejects_changed_immediate_refresh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualifier_module()
+    feeds = iter(
+        [Feed([row(1)]), Feed([row(1, development_description="Changed")])]
+    )
+    monkeypatch.setattr(module, "create_session", lambda: session(next(feeds)))
+    with pytest.raises(ValueError, match="immediate refresh changed"):
+        asyncio.run(module.qualify(tmp_path / "changed", WINDOW))
