@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
-from datetime import date
+import sys
+from datetime import UTC, date, datetime
 from hashlib import sha256
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -40,6 +43,7 @@ from yimby.transport import SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from types import ModuleType
 
     from yimby.transport import PortalRequest
 
@@ -55,6 +59,10 @@ _COMPLETE_PAGE = "complete"
 _EASTING = 521000
 _NORTHING = 182000
 _DETAIL_EVIDENCE_COUNT = 3
+_CONFIG_ERROR = 2
+_QUALIFICATION_SESSION_COUNT = 2
+_QUALIFICATION_REQUEST_COUNT = 15
+_QUALIFICATION_APPLICATION_COUNT = 4
 
 
 def _query_urls(window: DiscoveryWindow = WINDOW) -> tuple[str, ...]:
@@ -228,6 +236,36 @@ def _responses_body(*, duplicate: bool = False) -> bytes:
     if duplicate:
         responses.append({**responses[0], "replyLongText": "Duplicate"})
     return json.dumps(responses).encode()
+
+
+def _qualification_responses() -> dict[str, bytes | Exception]:
+    responses = _complete_responses()
+    for locator, reference in (
+        (1, "26/0001/FULOPDC"),
+        (2, "26/0002/FULOPDC"),
+        (3, "26/0003/FULOPDC"),
+        (4, "15/0004/FULOPDC"),
+    ):
+        value = str(locator)
+        responses[_detail_url(value)] = _detail_body(
+            locator=locator,
+            reference=reference,
+        )
+        responses[_detail_url(value, "/document")] = _documents_body()
+        responses[_detail_url(value, "/responses")] = _responses_body()
+    return responses
+
+
+def _qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_opdc.py"
+    name = "_test_qualify_opdc"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_opdc_live_discovery_exhausts_exact_full_array_queries() -> None:
@@ -619,3 +657,218 @@ def test_opdc_live_detail_requires_locator_shape_and_identity_agreement() -> Non
     )
     with pytest.raises(OpdcParseError, match="detail proposal"):
         asyncio.run(adapter.fetch(missing_proposal, reference))
+
+
+def test_opdc_qualification_requires_safe_exact_scope_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Live consent, older-open scope, valid dates, and safe reuse are explicit."""
+    module = _qualification_module()
+    created = 0
+
+    def session_factory() -> _OpdcSession:
+        nonlocal created
+        created += 1
+        return _OpdcSession(_qualification_responses())
+
+    base = [
+        "--data-dir",
+        str(tmp_path / "missing-confirmation"),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(base, session_factory=session_factory) == _CONFIG_ERROR
+    assert json.loads(capsys.readouterr().err)["error"] == "confirmation-required"
+
+    without_open = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "missing-open"),
+        "--end",
+        "2026-09-16",
+    ]
+    assert module.main(without_open, session_factory=session_factory) == _CONFIG_ERROR
+    assert json.loads(capsys.readouterr().err)["error"] == "include-open-required"
+
+    invalid = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "invalid-date"),
+        "--end",
+        "not-a-date",
+        "--include-open",
+    ]
+    assert module.main(invalid, session_factory=session_factory) == _CONFIG_ERROR
+    assert json.loads(capsys.readouterr().err)["error"] == "invalid-date"
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "preserve").write_text("keep", encoding="utf-8")
+    occupied_args = [
+        "--confirm-live",
+        "--data-dir",
+        str(occupied),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(occupied_args, session_factory=session_factory) == _CONFIG_ERROR
+    assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
+    assert (occupied / "preserve").read_text(encoding="utf-8") == "keep"
+    assert created == 0
+
+
+def test_opdc_qualification_persists_typed_proof_and_zero_network_rerun(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A complete persisted bootstrap emits a versioned success-only receipt."""
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert (
+        module.main(
+            args,
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+        )
+        == 0
+    )
+
+    assert len(sessions) == _QUALIFICATION_SESSION_COUNT
+    assert all(session.closed for session in sessions)
+    assert len(sessions[0].requested_urls) == _QUALIFICATION_REQUEST_COUNT
+    assert sessions[1].requested_urls == ()
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "opdc"
+    assert receipt["source_contract"] == "agile-citizen-portal-v1"
+    assert receipt["created_at"] == "2026-09-16T12:00:00Z"
+    assert receipt["scope"] == {
+        "start": "2026-08-18",
+        "end": "2026-09-16",
+        "include_open": True,
+    }
+    assert receipt["query_inventory"] == [
+        {"query": "registered-window", "result_total": 2},
+        {"query": "determined-window", "result_total": 2},
+        {"query": "registered-open", "result_total": 2},
+    ]
+    assert len(receipt["identities"]) == _QUALIFICATION_APPLICATION_COUNT
+    assert receipt["counts"]["applications"] == _QUALIFICATION_APPLICATION_COUNT
+    assert (
+        receipt["counts"]["discovered_references"] == _QUALIFICATION_APPLICATION_COUNT
+    )
+    assert receipt["counts"]["pending_retries"] == 0
+    assert receipt["counts"]["failed_sections"] == 0
+    assert receipt["counts"]["unmapped_records"] == 0
+    assert receipt["costs"]["initial"]["request_count"] == _QUALIFICATION_REQUEST_COUNT
+    assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
+    assert receipt["costs"]["rerun"] == {
+        "request_count": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert all(check["ok"] for check in receipt["checks"])
+    receipt_path = data_dir / "opdc-qualification-v1.json"
+    assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+
+    sessions.clear()
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 0
+    resumed = json.loads(capsys.readouterr().out)
+    assert len(sessions) == _QUALIFICATION_SESSION_COUNT
+    assert all(session.closed for session in sessions)
+    assert all(session.requested_urls == () for session in sessions)
+    assert resumed["costs"]["initial"]["request_count"] == 0
+    assert resumed["costs"]["rerun"]["request_count"] == 0
+
+
+def test_opdc_qualification_rejects_failed_sections_without_a_receipt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A child-section failure remains visible and blocks qualification."""
+    module = _qualification_module()
+    data_dir = tmp_path / "failed"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        responses = _qualification_responses()
+        responses[_detail_url("1", "/document")] = SourceUnavailableError(
+            "documents unavailable"
+        )
+        session = _OpdcSession(responses)
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+    )
+
+    assert result == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "failed-sections" in error["failed_checks"]
+    assert "application-evidence" in error["failed_checks"]
+    assert len(sessions) == 1
+    assert sessions[0].closed is True
+    assert not (data_dir / "opdc-qualification-v1.json").exists()
+
+
+def test_opdc_qualification_refuses_a_changed_scope_before_network(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A non-empty qualification store cannot accumulate another date scope."""
+    module = _qualification_module()
+    data_dir = tmp_path / "scope"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    original = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(original, session_factory=session_factory) == 0
+    capsys.readouterr()
+    sessions.clear()
+
+    changed = original.copy()
+    changed[4] = "2026-09-17"
+    changed.append("--resume")
+    assert module.main(changed, session_factory=session_factory) == _CONFIG_ERROR
+    assert json.loads(capsys.readouterr().err)["error"] == "scope-mismatch"
+    assert sessions == []
