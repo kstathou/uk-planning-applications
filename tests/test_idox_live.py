@@ -199,7 +199,7 @@ def _advanced_form(
       <select name="searchCriteria.appealStatus">
         <option value="" selected>All</option>
         <option value="Appeal lodged">Appeal lodged</option>
-        <option value="Appeal Remitted to Secretary of State">Remitted</option>
+        <option value="Appeal Remitted to Secretary of State ">Appeal Remitted to Secretary of State </option>
         {high_court_option}
         <option value="Pending Appeal Decision">Pending Appeal Decision</option>
       </select>
@@ -471,7 +471,7 @@ def _west_suffolk_open_page(
                 current_page="",
             )
         if value in {
-            "Appeal Remitted to Secretary of State",
+            "Appeal Remitted to Secretary of State ",
             "High Court Appeal Lodged",
         }:
             return b"<p>No results found.</p>"
@@ -1155,7 +1155,7 @@ def test_west_suffolk_open_discovery_exhausts_all_active_partitions() -> None:
         ("searchCriteria.appealStatus", "Appeal lodged"),
         (
             "searchCriteria.appealStatus",
-            "Appeal Remitted to Secretary of State",
+            "Appeal Remitted to Secretary of State ",
         ),
         ("searchCriteria.appealStatus", "High Court Appeal Lodged"),
         ("searchCriteria.appealStatus", "Pending Appeal Decision"),
@@ -1281,7 +1281,7 @@ def test_west_suffolk_open_discovery_recovers_completed_progress() -> None:
             "advanced|searchCriteria.caseStatus|Received Awaiting Registration",
             "advanced|searchCriteria.caseStatus|Pending Appeal Decision",
             "advanced|searchCriteria.appealStatus|Appeal lodged",
-            "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State",
+            "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State ",
             "advanced|searchCriteria.appealStatus|High Court Appeal Lodged",
             "advanced|searchCriteria.appealStatus|Pending Appeal Decision",
         ),
