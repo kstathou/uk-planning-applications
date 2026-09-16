@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import UTC, date, datetime
 from html import unescape
 from typing import TYPE_CHECKING, Literal, NoReturn, Self
-from urllib.parse import parse_qs, quote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -18,6 +18,7 @@ from pydantic import Field, HttpUrl, model_validator
 from yimby.domain import (
     ApplicationEvent,
     ApplicationMetadata,
+    ApplicationRelationship,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
@@ -51,7 +52,9 @@ if TYPE_CHECKING:
     from yimby.domain import EvidenceCapture
     from yimby.transport import PortalSession
 
-SOURCE = SourceId("devon-custom-register")
+PLANNING_SOURCE = SourceId("devon-planning-register")
+APPEAL_SOURCE = SourceId("devon-appeal-register")
+SOURCE = PLANNING_SOURCE
 BASE_URL = "https://planning.devon.gov.uk"
 _ADVANCED_FORM_URL = f"{BASE_URL}/Search/Advanced"
 _RESULTS_URL = f"{BASE_URL}/Search/Results"
@@ -174,9 +177,11 @@ class DevonCheckpointV1(FrozenModel):
             self.completed_queries
         ):
             _raise_checkpoint("completed-query-summaries")
-        if len({item.reference for item in self.seen_references}) != len(
-            self.seen_references
-        ) or any(item.locator is None for item in self.seen_references):
+        if len(
+            {(item.source_id, item.reference) for item in self.seen_references}
+        ) != len(self.seen_references) or any(
+            item.locator is None for item in self.seen_references
+        ):
             _raise_checkpoint("seen-references")
         if self.live_complete:
             if (
@@ -342,7 +347,10 @@ class DevonAdapter:
         id=AuthorityId("devon"),
         name="Devon County Council",
         kind=AuthorityKind.COUNTY,
-        sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),),
+        sources=(
+            SourceDefinition(id=PLANNING_SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),
+            SourceDefinition(id=APPEAL_SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),
+        ),
     )
 
     async def discover(
@@ -423,9 +431,20 @@ class DevonAdapter:
                     form=_advanced_fields(form, query),
                 ),
             )
-            current = _parse_discovery_page(first_capture[-1].body, expected_page=1)
+            current = _parse_discovery_page(
+                first_capture[-1].body,
+                expected_page=1,
+                expected_source=_query_source(query),
+                response_url=first_capture[-1].url,
+            )
+            current_evidence = (*form_capture, *first_capture)
             if progress.active_query == query.key:
-                current = await _replay_committed_pages(session, progress, current)
+                current, current_evidence = await _replay_committed_pages(
+                    session,
+                    progress,
+                    current,
+                    query,
+                )
             while True:
                 progress, fresh = _advance_checkpoint(
                     progress,
@@ -437,13 +456,17 @@ class DevonAdapter:
                     references=fresh,
                     next_checkpoint=progress,
                     complete=progress.live_complete,
+                    evidence=current_evidence,
+                    evidence_key=query.key,
+                    evidence_page=current.page,
                 )
                 if current.terminal:
                     break
-                current = await _fetch_result_page(
+                current, current_evidence = await _fetch_result_page(
                     session,
                     current.committed_proof().next_locator,
                     progress.next_page,
+                    query,
                 )
 
     async def fetch(
@@ -503,16 +526,32 @@ class DevonAdapter:
         session: PortalSession,
         reference: SourceReference,
     ) -> NativeSnapshot[DevonApplicationV1]:
-        if reference.source_id != SOURCE or reference.locator is None:
+        if reference.source_id not in {PLANNING_SOURCE, APPEAL_SOURCE} or (
+            reference.locator is None
+        ):
             raise DevonRoutingError(reference.reference)
-        captures = await _fetch_protected(
-            session,
-            PortalRequest(url=HttpUrl(reference.locator), intent=RequestIntent.DETAIL),
+        request = PortalRequest(
+            url=HttpUrl(reference.locator), intent=RequestIntent.DETAIL
         )
+        _validate_protected_request(request)
+        route = _detail_route(request.url)
+        expected_source = PLANNING_SOURCE if route == "planning" else APPEAL_SOURCE
+        if reference.source_id != expected_source:
+            raise DevonRoutingError(reference.reference)
+        captures = await _fetch_protected(session, request)
         detail = captures[-1]
+        final_route = _detail_route(detail.url)
+        if final_route != route:
+            raise DevonRoutingError(reference.reference)
+        if route == "appeal":
+            final_reference = _detail_url_reference(detail.url, route)
+            if final_reference != reference.reference:
+                raise DevonReferenceMismatchError(
+                    reference.reference,
+                    final_reference,
+                )
         fields = _parse_labelled_fields(detail.body)
         documents, document_state = _parse_documents(detail.body)
-        route = _detail_route(HttpUrl(reference.locator))
         payload = (
             _planning_payload(reference, fields, detail.body, documents)
             if route == "planning"
@@ -546,17 +585,31 @@ class DevonAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="devon-v5",
+            normaliser_version="devon-v6",
             metadata=ApplicationMetadata(
+                aliases=tuple(
+                    value
+                    for value in (_published_value(payload.pins_reference),)
+                    if value is not None
+                ),
                 application_type=payload.application_type,
-                decision=payload.decision,
+                decision=(
+                    payload.appeal_decision
+                    if payload.record_kind == "appeal"
+                    else payload.decision
+                ),
                 address=payload.site_location,
                 received_date=payload.received_date,
                 validated_date=payload.validated_date,
                 decision_date=payload.decision_date,
                 location=bng_to_wgs84(payload.bng_easting, payload.bng_northing),
                 published_parties=tuple(
-                    value for value in (payload.applicant, payload.agent) if value
+                    value
+                    for value in (
+                        _published_value(payload.applicant),
+                        _published_value(payload.agent),
+                    )
+                    if value is not None
                 ),
                 officer_name=payload.case_officer,
                 constraints=payload.constraints,
@@ -593,6 +646,23 @@ class DevonAdapter:
                     )
                     if event_date is not None
                 ),
+                relationships=tuple(
+                    ApplicationRelationship(
+                        related_reference=value,
+                        relationship_type=relationship_type,
+                    )
+                    for relationship_type, value in (
+                        (
+                            "appeal-of-planning",
+                            _published_value(payload.related_planning_reference),
+                        ),
+                        (
+                            "appeal-of-enforcement",
+                            _published_value(payload.enforcement_reference),
+                        ),
+                    )
+                    if value is not None
+                ),
                 source_url=snapshot.evidence[-1].url,
             ),
         )
@@ -605,6 +675,23 @@ def _detail_route(locator: HttpUrl) -> Literal["planning", "appeal"]:
     if path.startswith("/Appeals/Display/"):
         return "appeal"
     raise DevonRoutingError(str(locator))
+
+
+def _detail_url_reference(
+    locator: HttpUrl,
+    route: Literal["planning", "appeal"],
+) -> str:
+    prefix = "/Planning/Display/" if route == "planning" else "/Appeals/Display/"
+    path = urlsplit(str(locator)).path
+    if not path.startswith(prefix):
+        raise DevonRoutingError(str(locator))
+    return unquote(path.removeprefix(prefix))
+
+
+def _published_value(value: str | None) -> str | None:
+    if value is None or not value.strip() or value.strip() == "-":
+        return None
+    return value.strip()
 
 
 def _planning_payload(
@@ -791,6 +878,16 @@ def _query_inventory(scope: DevonDiscoveryScope) -> tuple[_DevonQuery, ...]:
     )
 
 
+def _query_source(query: _DevonQuery) -> SourceId:
+    if query.kind in {
+        "appeal-received",
+        "appeal-determined",
+        "outstanding-appeals",
+    }:
+        return APPEAL_SOURCE
+    return PLANNING_SOURCE
+
+
 def _query_keys(scope: DevonDiscoveryScope) -> tuple[str, ...]:
     return tuple(query.key for query in _query_inventory(scope))
 
@@ -805,21 +902,24 @@ async def _replay_committed_pages(
     session: PortalSession,
     progress: DevonCheckpointV1,
     first_page: _DiscoveryPage,
-) -> _DiscoveryPage:
+    query: _DevonQuery,
+) -> tuple[_DiscoveryPage, tuple[EvidenceCapture, ...]]:
     current = first_page
     for index, expected in enumerate(progress.active_pages):
         if current.terminal or current.committed_proof() != expected:
             _raise_checkpoint("replay-mismatch")
         if index + 1 < len(progress.active_pages):
-            current = await _fetch_result_page(
+            current, _ = await _fetch_result_page(
                 session,
                 current.committed_proof().next_locator,
                 current.page + 1,
+                query,
             )
     return await _fetch_result_page(
         session,
         current.committed_proof().next_locator,
         progress.next_page,
+        query,
     )
 
 
@@ -827,12 +927,21 @@ async def _fetch_result_page(
     session: PortalSession,
     locator: HttpUrl,
     page: int,
-) -> _DiscoveryPage:
+    query: _DevonQuery,
+) -> tuple[_DiscoveryPage, tuple[EvidenceCapture, ...]]:
     captures = await _fetch_protected(
         session,
         PortalRequest(url=locator, intent=RequestIntent.SEARCH),
     )
-    return _parse_discovery_page(captures[-1].body, expected_page=page)
+    return (
+        _parse_discovery_page(
+            captures[-1].body,
+            expected_page=page,
+            expected_source=_query_source(query),
+            response_url=captures[-1].url,
+        ),
+        captures,
+    )
 
 
 def _advance_checkpoint(
@@ -852,21 +961,22 @@ def _advance_checkpoint(
         if page.terminal != (page.page == announced_pages[-1]):
             _raise_checkpoint("pager-terminal-mismatch")
     active_references = {
-        reference.reference
+        (reference.source_id, reference.reference)
         for proof in progress.active_pages
         for reference in proof.references
     }
-    seen = {item.reference: item for item in progress.seen_references}
+    seen = {(item.source_id, item.reference): item for item in progress.seen_references}
     ordered = list(progress.seen_references)
     fresh = []
     for reference in page.references:
-        if reference.reference in active_references:
+        key = (reference.source_id, reference.reference)
+        if key in active_references:
             _raise_checkpoint("query-duplicate")
-        prior = seen.get(reference.reference)
+        prior = seen.get(key)
         if prior is not None and prior.locator != reference.locator:
             _raise_checkpoint("reference-locator-changed")
         if prior is None:
-            seen[reference.reference] = reference
+            seen[key] = reference
             ordered.append(reference)
             fresh.append(reference)
     if page.terminal:
@@ -1004,7 +1114,11 @@ def _advanced_fields(  # noqa: C901
 
 
 def _parse_discovery_page(  # noqa: C901, PLR0912
-    body: bytes, *, expected_page: int
+    body: bytes,
+    *,
+    expected_page: int,
+    expected_source: SourceId = PLANNING_SOURCE,
+    response_url: HttpUrl | None = None,
 ) -> _DiscoveryPage:
     soup = BeautifulSoup(body, "html.parser")
     text = soup.get_text(" ", strip=True)
@@ -1020,17 +1134,24 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
             _raise_pagination("singleton-detail-pager")
         if expected_page != 1:
             _raise_parse("page-one singleton detail")
-        fields = _parse_labelled_fields(body)
-        reference = _required_field(
-            fields, "application number", "reference", "application reference"
-        )
-        routed = quote(reference, safe="/")
+        if expected_source == APPEAL_SOURCE:
+            if response_url is None or _detail_route(response_url) != "appeal":
+                _raise_parse("appeal singleton locator")
+            reference = _detail_url_reference(response_url, "appeal")
+            locator = str(response_url)
+        else:
+            fields = _parse_labelled_fields(body)
+            reference = _required_field(
+                fields, "application number", "reference", "application reference"
+            )
+            routed = quote(reference, safe="/")
+            locator = f"{BASE_URL}/Planning/Display/{routed}"
         return _DiscoveryPage(
             references=(
                 SourceReference(
-                    source_id=SOURCE,
+                    source_id=expected_source,
                     reference=reference,
-                    locator=f"{BASE_URL}/Planning/Display/{routed}",
+                    locator=locator,
                 ),
             ),
             page=1,
@@ -1040,7 +1161,11 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
             terminal=True,
         )
     references = tuple(_parse_result_reference(block) for block in result_blocks)
-    if len({item.reference for item in references}) != len(references):
+    if any(item.source_id != expected_source for item in references):
+        _raise_parse("query result route")
+    if len({(item.source_id, item.reference) for item in references}) != len(
+        references
+    ):
         _raise_parse("duplicate result reference")
     if not references:
         if pagers or "no records" not in text.casefold():
@@ -1104,7 +1229,10 @@ def _parse_result_reference(block: Tag) -> SourceReference:
         _raise_parse("search result detail locator")
     if not value:
         value = route.group(1)
-    return SourceReference(source_id=SOURCE, reference=value, locator=locator)
+    source_id = (
+        PLANNING_SOURCE if parts.path.startswith("/Planning/") else APPEAL_SOURCE
+    )
+    return SourceReference(source_id=source_id, reference=value, locator=locator)
 
 
 def _parse_pager(  # noqa: C901, PLR0912
@@ -1219,6 +1347,8 @@ async def _fetch_protected(
     )
     if _parse_disclaimer(accepted.body) is not None:
         raise DevonDisclaimerAcceptanceError
+    if urlsplit(str(accepted.url)).path == "/Disclaimer/Accept":
+        accepted = accepted.model_copy(update={"url": request.url})
     return first, accepted
 
 

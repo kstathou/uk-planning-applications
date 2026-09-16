@@ -415,6 +415,7 @@ def test_semantic_ordering_does_not_create_false_changes(tmp_path: Path) -> None
 def test_current_events_replace_obsolete_values_and_capabilities_do_not_downgrade(
     tmp_path: Path,
 ) -> None:
+    """Current projections replace stale rows and capabilities only strengthen."""
     store = _store(tmp_path)
     store.register_authorities(barnet_registry().manifests())
     original = _rich_observation()
@@ -883,6 +884,65 @@ def test_evidence_audit_preserves_observation_history(tmp_path: Path) -> None:
     assert audit.unlinked_digests == ()
     assert audit.current_rebuild_coherent
     store.close()
+
+
+def test_discovery_evidence_requires_page_scope_and_audits_missing_rows(
+    tmp_path: Path,
+) -> None:
+    """Discovery bodies require page identity and missing registry rows are visible."""
+    store = _store(tmp_path)
+    run_id = store.begin_run(AuthorityId("barnet"))
+    body = b"discovery"
+    digest = EvidenceDigest(sha256(body).hexdigest())
+    capture = EvidenceCapture(
+        url=HttpUrl("https://example.test/search"),
+        media_type="text/html",
+        body=body,
+        digest=digest,
+    )
+    checkpoint = StoredCheckpoint(schema_version=1, payload_json="{}")
+    for invalid in (
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=checkpoint,
+            complete=False,
+            evidence=(capture,),
+        ),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=checkpoint,
+            complete=False,
+            evidence_key="received",
+            evidence_page=1,
+        ),
+    ):
+        with pytest.raises(ValueError, match="query key and page"):
+            store.commit_discovery(run_id, AuthorityId("barnet"), invalid)
+    store.commit_discovery(
+        run_id,
+        AuthorityId("barnet"),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=checkpoint,
+            complete=True,
+            evidence=(capture,),
+            evidence_key="received",
+            evidence_page=1,
+        ),
+    )
+    audit = store.evidence_registration_audit(AuthorityId("barnet"))
+    assert len(audit.discovery_registrations) == 1
+    assert audit.missing_digests == ()
+    store.close()
+
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM evidence WHERE digest = ?", (digest,))
+        connection.commit()
+    reopened = _store(tmp_path)
+    missing = reopened.evidence_registration_audit(AuthorityId("barnet"))
+    assert missing.discovery_registrations == ()
+    assert missing.missing_digests == (digest,)
+    reopened.close()
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:

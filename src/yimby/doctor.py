@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 
     from yimby.store import SqliteStore
 
-EXPECTED_MIGRATIONS = (1, 2, 3, 4, 5, 6, 7, 8)
+EXPECTED_MIGRATIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9)
 DEFAULT_MINIMUM_FREE_BYTES = 100 * 1024 * 1024
 
 

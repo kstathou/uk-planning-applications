@@ -91,6 +91,16 @@ class RetainedEvidenceRegistration(FrozenModel):
     path: str
 
 
+class RetainedDiscoveryEvidenceRegistration(FrozenModel):
+    """One discovery response linked to its exact query page."""
+
+    run_id: str
+    query_key: str
+    page: int
+    digest: EvidenceDigest
+    path: str
+
+
 class RegisteredEvidenceObject(FrozenModel):
     """One digest and storage path present in the evidence registry."""
 
@@ -106,6 +116,7 @@ class EvidenceRegistrationAudit(FrozenModel):
     applications_with_evidence: int
     observations_with_evidence: int
     registrations: tuple[RetainedEvidenceRegistration, ...]
+    discovery_registrations: tuple[RetainedDiscoveryEvidenceRegistration, ...]
     database_objects: tuple[RegisteredEvidenceObject, ...]
     missing_digests: tuple[EvidenceDigest, ...]
     unlinked_digests: tuple[EvidenceDigest, ...]
@@ -237,32 +248,15 @@ class SqliteStore:
         batch: DurableDiscoveryBatch,
     ) -> None:
         """Retain evidence, queue references, and advance the checkpoint atomically."""
+        if bool(batch.evidence) != bool(
+            batch.evidence_key is not None and batch.evidence_page is not None
+        ):
+            msg = "discovery evidence requires a query key and page"
+            raise ValueError(msg)
         evidence_paths = [
             (capture, self._evidence.put(capture)) for capture in batch.evidence
         ]
         with self._connection:
-            for capture, path in evidence_paths:
-                self._connection.execute(
-                    """
-                    INSERT OR IGNORE INTO evidence(
-                        digest, path, source_url, media_type
-                    ) VALUES (?, ?, ?, ?)
-                    """,
-                    (
-                        capture.digest,
-                        self._evidence.relative_path(path),
-                        str(capture.url),
-                        capture.media_type,
-                    ),
-                )
-                self._connection.execute(
-                    """
-                    INSERT OR IGNORE INTO discovery_evidence(
-                        authority_id, run_id, digest
-                    ) VALUES (?, ?, ?)
-                    """,
-                    (authority_id, run_id, capture.digest),
-                )
             for reference in batch.references:
                 self._connection.execute(
                     """
@@ -281,6 +275,34 @@ class SqliteStore:
                         reference.locator,
                         run_id,
                         run_id,
+                    ),
+                )
+            for capture, path in evidence_paths:
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO evidence(
+                        digest, path, source_url, media_type
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        capture.digest,
+                        self._evidence.relative_path(path),
+                        str(capture.url),
+                        capture.media_type,
+                    ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO discovery_evidence(
+                        authority_id, run_id, query_key, page, digest
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        authority_id,
+                        run_id,
+                        batch.evidence_key,
+                        batch.evidence_page,
+                        capture.digest,
                     ),
                 )
             self._connection.execute(
@@ -1430,6 +1452,25 @@ class SqliteStore:
         )
         return int(row["count"])
 
+    def application_identities(
+        self, authority_id: AuthorityId
+    ) -> tuple[SourceReference, ...]:
+        """Return persisted source-qualified application identities."""
+        return tuple(
+            SourceReference(
+                source_id=SourceId(row["source_id"]),
+                reference=row["reference"],
+                locator=row["locator"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT source_id, reference, locator FROM applications
+                WHERE authority_id = ? ORDER BY source_id, reference
+                """,
+                (authority_id,),
+            )
+        )
+
     def observed_change_count(self) -> int:
         """Count source-observed section transitions, including reversions."""
         row = next(
@@ -1556,6 +1597,31 @@ class SqliteStore:
                     path=row["path"],
                 )
             )
+        discovery_registrations: list[RetainedDiscoveryEvidenceRegistration] = []
+        for row in self._connection.execute(
+            """
+            SELECT linked.run_id, linked.query_key, linked.page,
+                linked.digest, evidence.path
+            FROM discovery_evidence AS linked
+            LEFT JOIN evidence ON evidence.digest = linked.digest
+            WHERE linked.authority_id = ?
+            ORDER BY linked.run_id, linked.query_key, linked.page, linked.digest
+            """,
+            (authority_id,),
+        ):
+            digest = EvidenceDigest(row["digest"])
+            if row["path"] is None:
+                missing.append(digest)
+                continue
+            discovery_registrations.append(
+                RetainedDiscoveryEvidenceRegistration(
+                    run_id=row["run_id"],
+                    query_key=row["query_key"],
+                    page=row["page"],
+                    digest=digest,
+                    path=row["path"],
+                )
+            )
         database_objects = tuple(
             RegisteredEvidenceObject(
                 digest=EvidenceDigest(row["digest"]),
@@ -1571,6 +1637,12 @@ class SqliteStore:
                 "SELECT DISTINCT digest FROM observation_evidence"
             )
         }
+        linked_digests.update(
+            EvidenceDigest(row["digest"])
+            for row in self._connection.execute(
+                "SELECT DISTINCT digest FROM discovery_evidence"
+            )
+        )
         application_count = int(
             next(
                 self._connection.execute(
@@ -1646,6 +1718,7 @@ class SqliteStore:
                 {item.observation_id for item in registrations}
             ),
             registrations=tuple(registrations),
+            discovery_registrations=tuple(discovery_registrations),
             database_objects=database_objects,
             missing_digests=tuple(missing),
             unlinked_digests=tuple(
@@ -1971,7 +2044,7 @@ class SqliteStore:
             self._replace_documents(application_id, normalised.documents)
         if comments_complete:
             self._replace_comments(application_id, normalised.comments)
-        self._insert_events(application_id, metadata)
+        self._replace_events(application_id, metadata)
         self._replace_relationships(application_id, metadata)
 
     def _replace_location(
@@ -2088,11 +2161,15 @@ class SqliteStore:
                 (application_id, comment.comment_id, comment.text),
             )
 
-    def _insert_events(
+    def _replace_events(
         self,
         application_id: ApplicationId,
         metadata: ApplicationMetadata,
     ) -> None:
+        self._connection.execute(
+            "DELETE FROM application_events WHERE application_id = ?",
+            (application_id,),
+        )
         for event in metadata.events:
             digest = sha256(event.model_dump_json().encode()).hexdigest()
             self._connection.execute(
@@ -2191,11 +2268,13 @@ class SqliteStore:
         )
         updated = capabilities.model_copy(
             update={
-                "documents": self._capability_state(
-                    normalised.completeness.documents.kind
+                "documents": self._merge_capability_state(
+                    capabilities.documents,
+                    normalised.completeness.documents.kind,
                 ),
-                "comments": self._capability_state(
-                    normalised.completeness.comments.kind
+                "comments": self._merge_capability_state(
+                    capabilities.comments,
+                    normalised.completeness.comments.kind,
                 ),
                 "coordinates": (
                     CapabilityState.SUPPORTED
@@ -2283,6 +2362,17 @@ class SqliteStore:
         if kind == "unavailable":
             return CapabilityState.UNSUPPORTED
         return CapabilityState.UNKNOWN
+
+    @classmethod
+    def _merge_capability_state(
+        cls,
+        current: CapabilityState,
+        section_kind: str,
+    ) -> CapabilityState:
+        observed = cls._capability_state(section_kind)
+        if current == CapabilityState.SUPPORTED or observed == CapabilityState.UNKNOWN:
+            return current
+        return observed
 
     def _section_payload(self, application_id: ApplicationId, section: str) -> str:
         row = self._connection.execute(

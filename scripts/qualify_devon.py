@@ -34,6 +34,7 @@ from yimby.domain import (
     FrozenModel,
     QualificationSnapshot,
     RunStatus,
+    SourceReference,
 )
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HttpxPortalSession
@@ -43,7 +44,7 @@ from yimby.store import EvidenceRegistrationAudit, SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("devon")
-_RECEIPT_NAME = "devon-qualification-v3.json"
+_RECEIPT_NAME = "devon-qualification-v4.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -109,10 +110,10 @@ class PendingWeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class DevonQualificationReceiptV3(FrozenModel):
+class DevonQualificationReceiptV4(FrozenModel):
     """Versioned result of a complete local live qualification."""
 
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     authority_id: Literal["devon"] = "devon"
     created_at: datetime
     scope: QualificationScope
@@ -225,32 +226,47 @@ def _checkpoint_audit(
         return None
 
 
-def _application_references(store: SqliteStore) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            view.application.reference
-            for view in store.application_views()
-            if view.application.authority_id == _AUTHORITY_ID
-        )
-    )
+def _application_identities(store: SqliteStore) -> tuple[SourceReference, ...]:
+    return store.application_identities(_AUTHORITY_ID)
 
 
 def _reference_agreement(
     audit: DevonQualificationAuditV1 | None,
     state: DiscoveryState,
-    applications: tuple[str, ...],
+    applications: tuple[SourceReference, ...],
 ) -> bool:
     if audit is None or not audit.references:
         return False
-    audited = {(item.reference, item.locator) for item in audit.references}
-    durable = {(item.reference, item.locator) for item in state.queued}
-    humans = {item.reference for item in audit.references}
+    audited = {
+        (item.source_id, item.reference, item.locator) for item in audit.references
+    }
+    durable = {(item.source_id, item.reference, item.locator) for item in state.queued}
+    persisted = {
+        (item.source_id, item.reference, item.locator) for item in applications
+    }
     return (
         len(audited) == len(audit.references)
         and audited == durable
-        and humans == set(applications)
-        and len(applications) == len(set(applications))
+        and audited == persisted
+        and len(applications) == len(persisted)
     )
+
+
+def _discovery_evidence_complete(
+    receipt_audit: DevonQualificationAuditV1 | None,
+    evidence_audit: EvidenceRegistrationAudit,
+) -> bool:
+    if receipt_audit is None or not evidence_audit.discovery_registrations:
+        return False
+    retained_pages = {
+        (item.query_key, item.page) for item in evidence_audit.discovery_registrations
+    }
+    expected_pages = {
+        (summary.query_key, page)
+        for summary in receipt_audit.query_summaries
+        for page in range(1, summary.page_count + 1)
+    }
+    return retained_pages == expected_pages
 
 
 def _evidence_inventory(data_dir: Path) -> tuple[str, ...]:
@@ -322,7 +338,7 @@ def _base_checks(
 ) -> tuple[QualificationCheck, ...]:
     audit = _checkpoint_audit(store, scope)
     state = store.discovery_state(_AUTHORITY_ID)
-    applications = _application_references(store)
+    applications = _application_identities(store)
     evidence_audit = store.evidence_registration_audit(_AUTHORITY_ID)
     return (
         QualificationCheck(
@@ -366,6 +382,10 @@ def _base_checks(
             ),
         ),
         QualificationCheck(
+            name="discovery-evidence",
+            ok=_discovery_evidence_complete(audit, evidence_audit),
+        ),
+        QualificationCheck(
             name="unmapped-records",
             ok=snapshot.unmapped_records == 0,
         ),
@@ -383,7 +403,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> DevonQualificationReceiptV3:
+) -> DevonQualificationReceiptV4:
     registry = AuthorityRegistry((DEVON_PACKAGE,), PILOT_LIVE_STATUS)
     collector = Collector(registry, store)
     window = DiscoveryWindow(
@@ -395,7 +415,7 @@ async def _qualify(
     initial = await _collect_once(collector, window, session_factory)
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     first_state = store.discovery_state(_AUTHORITY_ID)
-    first_applications = _application_references(store)
+    first_applications = _application_identities(store)
     first_evidence = _evidence_inventory(config.data_dir)
     initial_checks = _base_checks(
         store,
@@ -409,7 +429,7 @@ async def _qualify(
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     final_state = store.discovery_state(_AUTHORITY_ID)
-    final_applications = _application_references(store)
+    final_applications = _application_identities(store)
     final_evidence = _evidence_inventory(config.data_dir)
     run_statuses = store.run_statuses()[prior_status_count:]
     final_checks = (
@@ -438,7 +458,7 @@ async def _qualify(
     )
     _require(final_checks)
     audit = cast("DevonQualificationAuditV1", _checkpoint_audit(store, config.scope))
-    return DevonQualificationReceiptV3(
+    return DevonQualificationReceiptV4(
         created_at=now(),
         scope=config.scope,
         expected_queries=audit.expected_queries,
@@ -457,7 +477,7 @@ async def _qualify(
     )
 
 
-def _write_receipt(path: Path, receipt: DevonQualificationReceiptV3) -> None:
+def _write_receipt(path: Path, receipt: DevonQualificationReceiptV4) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:
@@ -476,17 +496,17 @@ def _preserved_receipt(
     store: SqliteStore,
     config: _Config,
     path: Path,
-) -> DevonQualificationReceiptV3 | None:
+) -> DevonQualificationReceiptV4 | None:
     """Require original live transport proof whenever durable history exists."""
     has_history = bool(
         store.run_statuses()
         or store.discovery_state(_AUTHORITY_ID).checkpoint is not None
-        or _application_references(store)
+        or _application_identities(store)
     )
     if not has_history:
         return None
     try:
-        prior = DevonQualificationReceiptV3.model_validate_json(path.read_text())
+        prior = DevonQualificationReceiptV4.model_validate_json(path.read_text())
     except (OSError, ValueError) as error:
         raise QualificationFailedError(("preserved-live-receipt",)) from error
     if (
@@ -502,9 +522,9 @@ def _preserved_receipt(
 
 
 def _receipt_to_persist(
-    prior: DevonQualificationReceiptV3 | None,
-    candidate: DevonQualificationReceiptV3,
-) -> DevonQualificationReceiptV3:
+    prior: DevonQualificationReceiptV4 | None,
+    candidate: DevonQualificationReceiptV4,
+) -> DevonQualificationReceiptV4:
     if candidate.costs.initial.request_count != 0:
         if prior is not None:
             raise QualificationFailedError(("preserved-live-receipt",))

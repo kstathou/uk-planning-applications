@@ -191,6 +191,15 @@ class SourceReference(FrozenModel):
     locator: str | None = None
 
 
+class EvidenceCapture(FrozenModel):
+    """One permitted response retained as source evidence."""
+
+    url: HttpUrl
+    media_type: str
+    body: bytes
+    digest: EvidenceDigest
+
+
 class StoredCheckpoint(FrozenModel):
     """Type-erased checkpoint persisted by the common runner."""
 
@@ -214,6 +223,8 @@ class DiscoveryBatch[CheckpointT: BaseModel](FrozenModel):
     next_checkpoint: CheckpointT
     complete: bool
     evidence: tuple[EvidenceCapture, ...] = ()
+    evidence_key: str | None = None
+    evidence_page: int | None = Field(default=None, ge=1)
 
 
 class DurableDiscoveryBatch(FrozenModel):
@@ -223,6 +234,8 @@ class DurableDiscoveryBatch(FrozenModel):
     next_checkpoint: StoredCheckpoint
     complete: bool
     evidence: tuple[EvidenceCapture, ...] = ()
+    evidence_key: str | None = None
+    evidence_page: int | None = Field(default=None, ge=1)
 
 
 class NativeDocument(FrozenModel):

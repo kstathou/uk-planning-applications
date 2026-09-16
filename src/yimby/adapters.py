@@ -133,6 +133,8 @@ class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
                 ),
                 complete=batch.complete,
                 evidence=batch.evidence,
+                evidence_key=batch.evidence_key,
+                evidence_page=batch.evidence_page,
             )
 
     async def collect(

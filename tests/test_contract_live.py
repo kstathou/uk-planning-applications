@@ -1153,6 +1153,27 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
                 _Session(_DevonMock()), reference.model_copy(update={"locator": None})
             )
         )
+    with pytest.raises(devon.DevonRoutingError):
+        asyncio.run(
+            adapter.fetch(
+                _Session(_DevonMock(direct=True)),
+                reference.model_copy(update={"source_id": devon.APPEAL_SOURCE}),
+            )
+        )
+
+    class _CrossRouteSession(_Session):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            capture = await super().fetch(request)
+            return capture.model_copy(
+                update={
+                    "url": HttpUrl(f"{devon.BASE_URL}/Appeals/Display/DCC/4473/2026")
+                }
+            )
+
+    with pytest.raises(devon.DevonRoutingError):
+        asyncio.run(
+            adapter.fetch(_CrossRouteSession(_DevonMock(direct=True)), reference)
+        )
     for locator in (
         "https://evil.test/Planning/Display/DCC/4473/2026",
         f"{devon.BASE_URL}/Document/Download?id=1",
@@ -1182,6 +1203,26 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
             )
         )
     assert len(session.requests) == 1
+
+    class _RedirectingDisclaimerSession(_Session):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            capture = await super().fetch(request)
+            if "/Disclaimer/Accept" in str(request.url):
+                return capture.model_copy(
+                    update={"url": HttpUrl(devon._ADVANCED_FORM_URL)}
+                )
+            return capture
+
+    redirected = asyncio.run(
+        devon._fetch_protected(
+            _RedirectingDisclaimerSession(_DevonMock()),
+            PortalRequest(
+                url=HttpUrl(devon._ADVANCED_FORM_URL),
+                intent=RequestIntent.SEARCH,
+            ),
+        )
+    )
+    assert redirected[-1].url == HttpUrl(devon._ADVANCED_FORM_URL)
 
 
 def test_camden_discovery_search_document_and_identity_boundaries() -> None:
@@ -1362,11 +1403,24 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     )
     assert fallback.references[0].reference == "DCC/1"
     appeal_result = devon._parse_discovery_page(
-        _devon_results(("DCC/1",), route="Appeals"), expected_page=1
+        _devon_results(("DCC/1",), route="Appeals"),
+        expected_page=1,
+        expected_source=devon.APPEAL_SOURCE,
     )
     assert fallback.references[0].source_id == devon.PLANNING_SOURCE
     assert appeal_result.references[0].source_id == devon.APPEAL_SOURCE
     assert fallback.references[0].reference == appeal_result.references[0].reference
+    with pytest.raises(devon.DevonParseError, match="query result route"):
+        devon._parse_discovery_page(
+            _devon_results(("DCC/1",), route="Appeals"),
+            expected_page=1,
+        )
+    with pytest.raises(devon.DevonParseError, match="appeal singleton locator"):
+        devon._parse_discovery_page(
+            _devon_appeal_detail("DCC/1"),
+            expected_page=1,
+            expected_source=devon.APPEAL_SOURCE,
+        )
     appeal_singleton = devon._parse_discovery_page(
         _devon_appeal_detail("DCC/1"),
         expected_page=1,
@@ -1420,6 +1474,10 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         devon._parse_appeal_coordinates({"easting": "invalid", "northing": "91039"})
     with pytest.raises(devon.DevonRoutingError):
         devon._detail_route(HttpUrl(f"{devon.BASE_URL}/Unknown/Display/DCC/1"))
+    with pytest.raises(devon.DevonRoutingError):
+        devon._detail_url_reference(
+            HttpUrl(f"{devon.BASE_URL}/Appeals/Display/DCC/1"), "planning"
+        )
     assert devon._parse_constraints(b"<html></html>") == ((), False)
     assert devon._parse_consultations(b"<html></html>") == ((), False)
     assert devon._parse_appeal_consultations(b"<html></html>") == ((), False)
