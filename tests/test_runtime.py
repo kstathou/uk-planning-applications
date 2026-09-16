@@ -418,6 +418,34 @@ def test_http_session_blocks_redirect_to_attachment_path() -> None:
     assert session.attachment_body_requests == 1
 
 
+def test_http_session_rejects_cross_host_redirect_before_destination_request() -> None:
+    requested_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requested_hosts.append(request.url.host)
+        if request.url.host == "source.test":
+            return httpx.Response(
+                302,
+                headers={"location": "https://foreign.test/page"},
+            )
+        return httpx.Response(200, content=b"foreign")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=True
+        ),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(SourceUnavailableError, match="source unavailable"):
+            await session.fetch(_request("https://source.test/start"))
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert requested_hosts == ["source.test"]
+
+
 def test_http_session_retry_after_and_transport_failures() -> None:
     """Retries are bounded and honor numeric and dated Retry-After values."""
     attempts = 0

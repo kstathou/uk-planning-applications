@@ -34,6 +34,7 @@ from yimby.transport import (
     PortalRequest,
     RequestIntent,
     RequestMethod,
+    SourceUnavailableError,
 )
 
 if TYPE_CHECKING:
@@ -356,6 +357,44 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
     )
 
 
+def test_cheshire_form_boundary_rejects_external_associated_controls() -> None:
+    body = _search_form() + b'<input form="form" name="external_token" value="x">'
+
+    with pytest.raises(cheshire.CheshireEastParseError):
+        cheshire.parse_search_form(body)
+
+
+def test_cheshire_successful_select_options_match_browser_disabledness() -> None:
+    form = BeautifulSoup(
+        """
+        <form>
+          <select name="kind" multiple>
+            <option selected disabled value="disabled">Disabled</option>
+            <optgroup disabled><option selected value="group">Group</option></optgroup>
+            <option selected> Text fallback </option>
+          </select>
+          <input type="checkbox" name="default_checkbox" checked>
+        </form>
+        """,
+        "html.parser",
+    ).select_one("form")
+    assert isinstance(form, Tag)
+
+    request = cheshire.valid_date_request(
+        form,
+        DiscoveryWindow(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+    )
+
+    assert tuple((field.name, field.value) for field in request.form) == (
+        ("kind", "Text fallback"),
+        ("default_checkbox", "on"),
+    )
+
+
 def test_cheshire_weekly_boundary_records_an_unproved_fifty_row_cap() -> None:
     form = cheshire.parse_weekly_form(_weekly_form())
     request = cheshire.weekly_received_request(form, date(2024, 1, 1))
@@ -416,6 +455,16 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         b"No Results Found.</strong></div></div>"
     )
     assert zero.explicit_zero is True
+
+    paged = cheshire.parse_search_boundary(
+        _search_results().replace(
+            b"</table>",
+            b'</table><span data-result-count="2"></span>'
+            b'<nav class="pagination"><a href="?page=2">Next</a></nav>',
+        )
+    )
+    assert paged.reported_total == 2
+    assert paged.pagination_links == ("?page=2",)
 
     for body in (
         b"<main></main>",
@@ -483,6 +532,19 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_results().replace(
             b'<div class="centered application-list">',
             b'<div class="centered application-list" hidden>',
+        ),
+        _search_results().replace(b"<tr><td>26/3335", b"<tr hidden><td>26/3335"),
+        _search_results().replace(
+            b'<button class="view_application" data-id="406569">View</button>',
+            b'<button class="view_application" data-id="406569">View</button>'
+            b'<button class="view_application" data-id="9" hidden>View</button>',
+        ),
+        _search_results().replace(b'data-id="406569"', b'data-id="not-numeric"'),
+        _search_results().replace(b"<th>Reference</th>", b"<th>Reference Notes</th>"),
+        _search_results().replace(
+            b"</table>",
+            b'</table><nav class="pagination" hidden>'
+            b'<a href="?page=2">Next</a></nav>',
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -557,7 +619,7 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         + b"<button>All Results Loaded</button></section>"
     )
     boundary = cheshire.parse_weekly_boundary(counted)
-    assert boundary.reported_total == 50
+    assert boundary.reported_total is None
     assert boundary.pagination_links == ("?page=2",)
     assert boundary.terminal_marker is False
     unrelated = (
@@ -608,7 +670,15 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
             b"/planning/index.html?fa=getApplication&amp;id=400001",
             b"/planning/wrong?fa=getApplication&amp;id=400001",
         ),
-        _weekly_results().replace(b"<table>", b'<table data-result-count="many">'),
+        _weekly_results().replace(b"<table>", b'<table hidden data-result-count="50">'),
+        _weekly_results().replace(b"<tr><td>24/0001D", b"<tr hidden><td>24/0001D"),
+        _weekly_results().replace(
+            b'<a href="/planning/index.html?fa=getApplication&amp;id=400001">View</a>',
+            b'<a hidden href="/planning/index.html?fa=getApplication&amp;id=400001">View</a>',
+        ),
+        _weekly_results().replace(b"<td>24/0001D</td>", b"<td></td>"),
+        _weekly_results().replace(b"24/0002D", b"24/0001D"),
+        _weekly_results().replace(b"id=400002", b"id=400001"),
     )
     for body in invalid_pages:
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -695,6 +765,35 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
         ),
         (
             _detail().replace(b"public_record_id=406569", b"public_record_id=9"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<div id="application_details"',
+                b'<div hidden id="application_details"',
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<div class="row pad-bottom-5"><div><strong>Valid Date:',
+                b'<div hidden class="row pad-bottom-5"><div><strong>Valid Date:',
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"<tbody><tr>", b"<tbody><tr hidden>"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<a href="/planning/?fa=downloadDocument',
+                b'<a hidden href="/planning/?fa=downloadDocument',
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b'style="display:none"', b'style="display:none-block"'),
             cheshire.CheshireEastParseError,
         ),
     )
@@ -904,6 +1003,72 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
     assert resumed == 1
 
 
+def test_cheshire_resume_continues_from_the_first_incomplete_stage(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    class InterruptedSession(_QualificationSession):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            if len(self.requests) == 2:
+                self.requests.append(request)
+                raise SourceUnavailableError("interrupted")
+            return await super().fetch(request)
+
+    first = InterruptedSession()
+    assert (
+        module.main(
+            arguments,
+            session_factory=lambda: first,
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
+        == 1
+    )
+    assert len(first.requests) == 3
+    assert (data_dir / "cheshire-east-qualification-journal-v1.json").is_file()
+    capsys.readouterr()
+
+    resumed_session = _QualificationSession()
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=lambda: resumed_session,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
+    assert [request.url for request in resumed_session.requests] == [
+        cheshire.weekly_received_form_request().url,
+        cheshire.weekly_received_request(
+            cheshire.parse_weekly_form(_weekly_form()), date(2024, 1, 1)
+        ).url,
+        cheshire.detail_request("406569").url,
+    ]
+    capsys.readouterr()
+
+
+def test_cheshire_qualification_implementation_is_covered_package_code() -> None:
+    implementation = _ROOT / "src" / "yimby" / "cheshire_qualification.py"
+    wrapper = (_ROOT / "scripts" / "qualify_cheshire_east.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert implementation.is_file()
+    assert "class CheshireEastQualificationBlockerReceiptV2" not in wrapper
+
+
 def test_cheshire_nonzero_recent_results_remain_unproved(tmp_path: Path) -> None:
     module = _qualification_module()
     data_dir = tmp_path / "qualification"
@@ -1064,6 +1229,23 @@ def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
             encoding="utf-8"
         )
     )
+    payload["evidence"][0]["media_type"] = "Text/HTML; charset=utf-8"
+    (data_dir / "cheshire-east-qualification-blocker-v2.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"error": "runtime-failure"' in captured.err
+
     for media_type in (
         "application/pdf",
         "Application/PDF",
