@@ -909,11 +909,12 @@ def _visible_result_page(
     )
     if not labels:
         return None
-    try:
-        pages = tuple(int(label) for label in labels)
-    except ValueError:
-        return _raise_parse("reported result count")
-    if pages[0] <= 0 or any(page != pages[0] for page in pages[1:]):
+    pages = tuple(
+        int(match.group(0))
+        for label in labels
+        if (match := re.fullmatch(r"[1-9]\d*", label)) is not None
+    )
+    if len(pages) != len(labels) or any(page != pages[0] for page in pages[1:]):
         return _raise_parse("reported result count")
     selected_capacities = soup.select(
         'select[name="searchCriteria.resultsPerPage"] option[selected]'
