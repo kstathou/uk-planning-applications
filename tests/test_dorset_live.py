@@ -32,13 +32,15 @@ from yimby.domain import (
 )
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.transport import (
+    AttachmentBodyBlockedError,
     FormField,
     PortalRequest,
     RequestIntent,
+    SourceUnavailableError,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, AsyncIterator
     from types import ModuleType
 
 WINDOW = DiscoveryWindow(
@@ -998,6 +1000,85 @@ def test_dorset_qualification_spaces_every_redirect_hop() -> None:
     asyncio.run(fetch_redirect())
     assert paths == [ADVANCED_PATH, DISCLAIMER_PATH]
     assert request_times == [0.0, 2.0]
+
+
+def test_dorset_qualification_rejects_official_redirect_to_other_host() -> None:
+    """Consent redirects cannot escape Dorset's official register boundary."""
+    module = _qualification_module()
+    hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "planning.dorsetcouncil.gov.uk":
+            return httpx.Response(
+                302,
+                headers={"location": "https://offsite.example/collect"},
+            )
+        return httpx.Response(200, content=b"offsite")
+
+    session = module._default_session(
+        transport=httpx.MockTransport(handler),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def fetch_redirect() -> None:
+        try:
+            with pytest.raises(SourceUnavailableError, match="redirect destination"):
+                await session.fetch(
+                    PortalRequest(
+                        url=HttpUrl(f"{BASE_URL}{ADVANCED_PATH}"),
+                        intent=RequestIntent.SEARCH,
+                    )
+                )
+        finally:
+            await session.aclose()
+
+    asyncio.run(fetch_redirect())
+    assert hosts == ["planning.dorsetcouncil.gov.uk"]
+
+
+def test_dorset_qualification_blocks_intermediate_attachment_body() -> None:
+    """Redirect response metadata blocks an attachment before its body is read."""
+    module = _qualification_module()
+    body_reads = 0
+
+    class ForbiddenStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal body_reads
+            body_reads += 1
+            yield b"must not be read"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302,
+            headers={
+                "location": DISCLAIMER_PATH,
+                "content-type": "application/pdf",
+                "content-disposition": 'attachment; filename="secret.pdf"',
+            },
+            stream=ForbiddenStream(),
+        )
+
+    session = module._default_session(
+        transport=httpx.MockTransport(handler),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def fetch_attachment_redirect() -> None:
+        try:
+            with pytest.raises(AttachmentBodyBlockedError):
+                await session.fetch(
+                    PortalRequest(
+                        url=HttpUrl(f"{BASE_URL}{ADVANCED_PATH}"),
+                        intent=RequestIntent.SEARCH,
+                    )
+                )
+        finally:
+            await session.aclose()
+
+    asyncio.run(fetch_attachment_redirect())
+    assert body_reads == 0
+    assert session.attachment_body_requests == 1
 
 
 def test_dorset_qualification_fails_closed_on_corrupt_evidence(tmp_path: Path) -> None:
