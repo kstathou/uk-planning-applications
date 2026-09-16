@@ -594,7 +594,7 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
         "Consultation response",
         "Site plan",
     ]
-    assert stored.completeness.comments.kind == "excluded"
+    assert stored.completeness.comments.kind == "unavailable"
     assert report.attachment_body_requests == 0
     assert all("Document/Download" not in url for url in report.requested_urls)
     assert (
@@ -1202,8 +1202,28 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
             page=devon._DiscoveryPage(
                 references=(references[0],),
                 page=2,
-                numbered_pages=(1, 2),
+                numbered_pages=proof.numbered_pages,
                 numbered_links=links,
+                next_locator=HttpUrl(f"{devon._RESULTS_URL}/3"),
+                terminal=False,
+            ),
+            all_query_keys=keys,
+        )
+    with pytest.raises(devon.DevonCheckpointError, match="pager-inventory"):
+        devon._advance_checkpoint(
+            progress,
+            query=query,
+            page=devon._DiscoveryPage(
+                references=(
+                    SourceReference(
+                        source_id=devon.SOURCE,
+                        reference="OPEN/011/2026",
+                        locator=f"{devon.BASE_URL}/Planning/Display/OPEN/011/2026",
+                    ),
+                ),
+                page=2,
+                numbered_pages=(),
+                numbered_links=(),
                 next_locator=None,
                 terminal=True,
             ),
@@ -1379,6 +1399,13 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
     assert devon._query_bool({}, "isPlan") is None
     with pytest.raises(devon.DevonParseError, match="document isPlan"):
         devon._query_bool({"isPlan": ["maybe"]}, "isPlan")
+    assert len(devon._parse_documents(_devon_detail())) == 2
+    with pytest.raises(devon.DevonParseError, match="document section"):
+        devon._parse_documents(_devon_detail().replace(b'id="documents"', b""))
+    with pytest.raises(devon.DevonParseError, match="document links"):
+        devon._parse_documents(
+            _devon_detail().replace(b"/Document/Download", b"/changed")
+        )
 
 
 def test_devon_qualification_requires_exact_safe_scope(tmp_path: Path) -> None:
@@ -1569,14 +1596,15 @@ def test_devon_qualification_reconciles_registered_evidence(
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         connection.execute(
             """
-            UPDATE native_rebuild_inputs
-            SET evidence_digests_json = ?
-            WHERE application_id = (
-                SELECT application_id FROM native_rebuild_inputs
-                ORDER BY application_id LIMIT 1
-            )
+            INSERT INTO evidence(digest, path, source_url, media_type)
+            VALUES (?, ?, ?, ?)
             """,
-            (json.dumps(["0" * 64]),),
+            (
+                "0" * 64,
+                f"00/{'0' * 64}.gz",
+                devon.BASE_URL,
+                "text/html",
+            ),
         )
         connection.commit()
     assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1

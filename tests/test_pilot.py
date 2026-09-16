@@ -137,7 +137,7 @@ CASES = (
         DevonParseError,
         "Upgrade recycling centre",
         "complete",
-        "excluded",
+        "unavailable",
         1,
         0,
     ),

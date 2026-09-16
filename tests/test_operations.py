@@ -578,8 +578,12 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     _collect_barnet(store)
     registered = store.evidence_registration_audit(AuthorityId("barnet"))
     assert registered.application_count == 1
+    assert registered.observation_count == 1
     assert registered.applications_with_evidence == 1
+    assert registered.observations_with_evidence == 1
     assert registered.registrations
+    assert registered.database_objects
+    assert registered.unlinked_digests == ()
     assert registered.missing_digests == ()
     store.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
@@ -749,6 +753,59 @@ def test_evidence_integrity_reports_broken_authority_links(
     }
     assert expected_code in codes
     reopened.close()
+
+
+def test_evidence_audit_preserves_observation_history(tmp_path: Path) -> None:
+    """Current rebuild input cannot orphan evidence retained by older observations."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    first = _rich_observation()
+    first_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(first_run, first)
+
+    second_body = b'{"native":"changed"}'
+    second_digest = EvidenceDigest(sha256(second_body).hexdigest())
+    second = first.model_copy(
+        update={
+            "native_json": second_body.decode(),
+            "normalised": first.normalised.model_copy(
+                update={
+                    "proposal": "Changed rich operational record",
+                    "provenance": (
+                        Provenance(field="proposal", evidence=second_digest),
+                    ),
+                }
+            ),
+            "evidence": (
+                EvidenceCapture(
+                    url=HttpUrl("https://example.test/application/RICH-2026-1"),
+                    media_type="application/json",
+                    body=second_body,
+                    digest=second_digest,
+                ),
+            ),
+            "observed_at": datetime(2026, 9, 8, tzinfo=UTC),
+        }
+    )
+    second_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(second_run, second)
+
+    audit = store.evidence_registration_audit(AuthorityId("barnet"))
+    assert audit.application_count == 1
+    assert audit.observation_count == 2
+    assert audit.applications_with_evidence == 1
+    assert audit.observations_with_evidence == 2
+    assert {item.digest for item in audit.registrations} == {
+        first.evidence[0].digest,
+        second_digest,
+    }
+    assert {item.digest for item in audit.database_objects} == {
+        first.evidence[0].digest,
+        second_digest,
+    }
+    assert audit.missing_digests == ()
+    assert audit.unlinked_digests == ()
+    store.close()
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:

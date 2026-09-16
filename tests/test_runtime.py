@@ -68,6 +68,8 @@ from yimby.transport import (
     FixtureSession,
     PortalRequest,
     RequestHeader,
+    RedirectBoundary,
+    RedirectBoundaryError,
     RequestIntent,
     SourceUnavailableError,
 )
@@ -554,6 +556,78 @@ def test_http_session_blocks_redirect_to_attachment_path() -> None:
     assert body_reads == 0
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ["https://evil.test/allowed", "https://example.test/unobserved"],
+)
+def test_http_session_rejects_redirects_outside_request_boundary(
+    destination: str,
+) -> None:
+    """Redirect destinations are approved before any request is sent to them."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(302, headers={"location": destination})
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/start", "/allowed"),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(RedirectBoundaryError):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl("https://example.test/start"),
+                    intent=RequestIntent.SEARCH,
+                    redirect_boundary=boundary,
+                )
+            )
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert calls == ["https://example.test/start"]
+
+
+def test_http_session_retains_allowed_redirect_destination() -> None:
+    """Evidence identifies the allowlisted final response rather than its entry URL."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(
+                302,
+                headers={"location": "/allowed?credential=secret"},
+            )
+        return httpx.Response(200, content=b"allowed")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/start", "/allowed"),
+    )
+
+    async def exercise() -> None:
+        capture = await session.fetch(
+            PortalRequest(
+                url=HttpUrl("https://example.test/start"),
+                intent=RequestIntent.SEARCH,
+                redirect_boundary=boundary,
+            )
+        )
+        assert str(capture.url) == "https://example.test/allowed"
+        await session.aclose()
+
+    asyncio.run(exercise())
 
 
 def test_http_session_retry_after_and_transport_failures() -> None:
