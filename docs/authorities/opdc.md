@@ -1,26 +1,90 @@
 # Old Oak and Park Royal Development Corporation portal walkthrough
 
-Observed on 15 September 2026.
+Observed and qualified on 16 September 2026.
 
-## Source
+## Sources
 
-- Portal: `https://planning.agileapplications.co.uk/opdc`
-- Expected shape: Agile Applications citizen portal
+- Citizen Portal: `https://planning.agileapplications.co.uk/opdc`
+- Public planning API: `https://planningapi.agileapplications.co.uk`
+- Portal family: Agile Applications Citizen Portal
 
-## Observed response
+The public API requires the same fixed routing headers used by the official
+browser client: `x-client: OPDC`, `x-product: CITIZENPORTAL`, and
+`x-service: PA`. They are public product selectors, not credentials.
 
-The browser reached a document titled `Citizen Portal Planning`, but its accessible page body was empty. A second bounded visit produced the same result. No visible search, application, document, or comment control was available.
+## Discovery contract
 
-This is an unresolved client bootstrap or source block, not an empty register. No application route or completeness state could be verified.
+The rendered portal exposes Registered and Determined searches. Its result
+pager slices a complete API array in the browser; it does not issue server-side
+page requests. The adapter therefore makes three exact requests and accepts a
+query only when the API's `total` equals the number of returned rows:
 
-## Collection consequences
+| Purpose | Exact parameters |
+|---|---|
+| Bounded registered | `registrationDateFrom=2026-08-18&registrationDateTo=2026-09-16&status=registered` |
+| Bounded determined | `decisionDateFrom=2026-08-18&decisionDateTo=2026-09-16&status=determined` |
+| Complete current registered/open set | `status=registered` |
 
-- Model the source as blocked until the client bootstrap and its public data requests are identified.
-- Do not advance a discovery checkpoint or infer zero applications from the blank document.
-- Retain OPDC as its own authority even if delegated cases are exposed by another authority or shared portal.
-- Record any delegated source and covered period separately once verified.
-- The fixture package may encode the authority boundary, but it cannot be described as live agreement.
+The inclusive 30-day qualification returned 10 registered rows, 10 determined
+rows, and 45 current registered rows. Their stable reference/application-ID
+union contained 55 applications. Overlap is accepted only when both the public
+reference and Agile ID agree. Duplicate or conflicting identities, a false
+total, an altered query order, or a partial terminal checkpoint fails closed.
+
+The unbounded `status=registered` request is the older-open strategy because it
+is the official portal's complete current Registered surface. The adapter does
+not invent a date partition or exclude records whose references look like test
+data.
+
+## Application sections
+
+Every discovered reference is routed by its Agile application ID and checked
+against both the returned ID and public reference. The adapter retrieves:
+
+- `/api/application/{id}` for the application record;
+- `/api/application/{id}/document` for the complete document metadata array;
+- `/api/application/{id}/responses` for the complete public response-text
+  array.
+
+The application model retains the proposal, status, site, application type,
+decision, dates, alternative reference, ward, and British National Grid
+coordinates used by the common schema. Document rows retain metadata and a
+derived attachment URL. Public response text is retained as comments.
+
+An empty JSON array is recorded as an empty section. A transport or parse
+failure is recorded as failed, never empty. The qualification receipt is
+withheld while any current section is failed.
+
+## Attachment policy
+
+Document bodies are outside the pilot. The metadata endpoint is allowed, but
+`/api/application/document/OPDC/{documentId}` is blocked before network access
+by the fixture, HTTP, and browser transports. The qualified run made zero
+attachment-body requests.
+
+## Persisted qualification
+
+The live bootstrap is stored in
+`.yimby/qualification-opdc-2026-09-16/`. Its versioned receipt is
+`opdc-qualification-v1.json`.
+
+The receipt records:
+
+- 55 applications and 55 discovered references;
+- 55 native, application, document, and comment versions;
+- zero pending retries, failed sections, and unmapped records;
+- SQLite integrity `ok` and no missing evidence paths;
+- 168 allowed initial requests transferring 630,334 bytes;
+- zero attachment-body attempts; and
+- an unchanged immediate rerun with zero requests and zero transferred bytes.
+
+Both collection runs completed with `succeeded` status. The terminal checkpoint
+contains the exact three-query inventory, each declared total, and the same 55
+source/reference/locator identities held by the durable queue and retained
+applications.
 
 ## Verification status
 
-`VERIFIED` only for the repeatable blank client document and title. Discovery, extraction, completeness, and incremental refresh remain `INCONCLUSIVE`.
+`LIVE_READY` for the recorded HTTP contract. The live bootstrap and browser/API
+agreement are verified. The two operational refresh cycles approximately seven
+and fourteen days later remain open; same-day reruns do not satisfy them.

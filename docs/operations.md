@@ -129,6 +129,25 @@ the rolling seven-day quick link and reports the source-provided totals. It
 does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
+OPDC has a persisted qualification command rather than a discovery-only smoke:
+
+```sh
+uv run python scripts/qualify_opdc.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-opdc-2026-09-16 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+The command derives the inclusive 30-day start date, refuses a non-empty target
+without `--resume`, and rejects a changed scope in an existing qualification
+store before opening a network session. It writes
+`opdc-qualification-v1.json` only after the exact query inventory, reference
+agreement, complete application evidence, SQLite integrity, zero retry and
+failure counts, attachment policy, and immediate zero-network rerun all pass.
+Its data directory contains the SQLite store and compressed source evidence;
+document bodies are never requested.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
@@ -186,4 +205,6 @@ succeeded. The repository does not enable unattended execution.
 
 The pilot is not accepted until every authority has completed live bootstrap
 and two later weekly refreshes, approximately seven and fourteen days after the
-bootstrap. Same-day reruns and simulated dates do not satisfy that requirement.
+bootstrap. OPDC completed its bootstrap on 16 September 2026; its later cycles
+remain pending. Same-day reruns and simulated dates do not satisfy that
+requirement.
