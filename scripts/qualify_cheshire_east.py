@@ -134,6 +134,7 @@ class QualificationBlockerV1(FrozenModel):
     """One completeness fact preventing live qualification."""
 
     code: Literal[
+        "official-search-form-unavailable",
         "recent-window-fidelity-contradicted",
         "weekly-list-terminality-unproven",
         "older-open-inventory-unproven",
@@ -177,7 +178,8 @@ class CheshireEastQualificationBlockerReceiptV1(FrozenModel):
     created_at: datetime
     scope: QualificationScopeV1
     query_inventory: tuple[str, ...]
-    source_contract: SourceContractV1
+    pending_query_inventory: tuple[str, ...]
+    source_contract: SourceContractV1 | None
     blockers: tuple[QualificationBlockerV1, ...] = Field(min_length=1)
     checks: tuple[QualificationCheckV1, ...]
     costs: QualificationCostsV1
@@ -201,7 +203,7 @@ class QualificationEvidenceError(RuntimeError):
 
 
 class _ProbeResult(FrozenModel):
-    source_contract: SourceContractV1
+    source_contract: SourceContractV1 | None
     captures: tuple[EvidenceCapture, ...]
     costs: QualificationCostsV1
 
@@ -246,7 +248,18 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
     captures: list[EvidenceCapture] = []
     search_form_capture = await session.fetch(cheshire.search_form_request())
     captures.append(search_form_capture)
-    search_form = cheshire.parse_search_form(search_form_capture.body)
+    try:
+        search_form = cheshire.parse_search_form(search_form_capture.body)
+    except cheshire.CheshireEastParseError:
+        return _ProbeResult(
+            source_contract=None,
+            captures=tuple(captures),
+            costs=QualificationCostsV1(
+                request_count=len(session.requested_urls),
+                transferred_bytes=session.transferred_bytes,
+                attachment_body_requests=session.attachment_body_requests,
+            ),
+        )
     recent_request = cheshire.valid_date_request(
         search_form,
         DiscoveryWindow(
@@ -379,6 +392,46 @@ def _receipt(
     evidence: tuple[RetainedEvidenceV1, ...],
     created_at: datetime,
 ) -> CheshireEastQualificationBlockerReceiptV1:
+    pending_queries = (
+        f"recent|valid|{scope.start.isoformat()}|{scope.end.isoformat()}",
+        f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}",
+        f"detail|{_DETAIL_LOCATOR}",
+    )
+    if probe.source_contract is None:
+        return CheshireEastQualificationBlockerReceiptV1(
+            created_at=created_at,
+            scope=scope,
+            query_inventory=("source-access|search-form",),
+            pending_query_inventory=pending_queries,
+            source_contract=None,
+            blockers=(
+                QualificationBlockerV1(
+                    code="official-search-form-unavailable",
+                    explanation=(
+                        "the official HTTP response did not expose the recorded "
+                        "search form, so no search or detail query was attempted"
+                    ),
+                ),
+            ),
+            checks=(
+                QualificationCheckV1(name="official-search-form", status="failed"),
+                QualificationCheckV1(name="exact-query-inventory", status="not-run"),
+                QualificationCheckV1(name="recent-window-fidelity", status="not-run"),
+                QualificationCheckV1(name="weekly-list-terminality", status="not-run"),
+                QualificationCheckV1(name="older-open-inventory", status="not-run"),
+                QualificationCheckV1(name="detail-and-documents", status="not-run"),
+                QualificationCheckV1(name="attachment-policy", status="passed"),
+                QualificationCheckV1(name="source-evidence-integrity", status="passed"),
+                QualificationCheckV1(name="sqlite-integrity", status="not-run"),
+                QualificationCheckV1(name="durable-queue-agreement", status="not-run"),
+            ),
+            costs=probe.costs,
+            evidence=evidence,
+            weekly_cycles=(
+                PendingWeeklyCycleV1(due_on=scope.end + timedelta(days=7)),
+                PendingWeeklyCycleV1(due_on=scope.end + timedelta(days=14)),
+            ),
+        )
     recent_contradicted = (
         probe.source_contract.detail.valid_date >= scope.start
         and probe.source_contract.detail.valid_date <= scope.end
@@ -424,6 +477,7 @@ def _receipt(
         created_at=created_at,
         scope=scope,
         query_inventory=tuple(query.key for query in probe.source_contract.queries),
+        pending_query_inventory=(),
         source_contract=probe.source_contract,
         blockers=tuple(blockers),
         checks=(
@@ -519,16 +573,22 @@ def main(
         return _error(str(error), 2)
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
-            if config.resume:
+            receipt_path = config.data_dir / _RECEIPT_NAME
+            if config.resume and receipt_path.is_file():
                 receipt = _verify_receipt(config.data_dir, config.scope)
             else:
                 probe = asyncio.run(_run_probe(config.scope, session_factory))
                 evidence_store = EvidenceStore(config.data_dir / "evidence")
                 evidence = _retain_evidence(evidence_store, probe.captures)
                 receipt = _receipt(config.scope, probe, evidence, now())
-                _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
+                _write_receipt(receipt_path, receipt)
     except Exception as error:  # noqa: BLE001
-        return _error("runtime-failure", 1, exception=type(error).__name__)
+        return _error(
+            "runtime-failure",
+            1,
+            exception=type(error).__name__,
+            error_code=getattr(error, "code", "unclassified"),
+        )
     print(receipt.model_dump_json())
     return 1
 
