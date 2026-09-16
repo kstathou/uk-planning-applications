@@ -354,6 +354,7 @@ class _LeedsDetailMock:
         header_only: bool = False,
         malformed_documents: bool = False,
         failed_documents: bool = False,
+        transient_summary_failures: int = 0,
     ) -> None:
         self.reference = reference
         self.blank_optional = blank_optional
@@ -361,6 +362,7 @@ class _LeedsDetailMock:
         self.header_only = header_only
         self.malformed_documents = malformed_documents
         self.failed_documents = failed_documents
+        self.transient_summary_failures = transient_summary_failures
         self.tabs: list[str] = []
         self.attachment_paths: list[str] = []
 
@@ -369,6 +371,15 @@ class _LeedsDetailMock:
             tab = request.url.params["activeTab"]
             self.tabs.append(tab)
             if tab == "summary":
+                if self.transient_summary_failures:
+                    self.transient_summary_failures -= 1
+                    return httpx.Response(
+                        200,
+                        content=(
+                            b"<p>Unable to perform this task. "
+                            b"A remote exception occurred.</p>"
+                        ),
+                    )
                 return httpx.Response(
                     200,
                     content=_summary(
@@ -457,6 +468,16 @@ def test_leeds_accepts_observed_weekday_date_rendering() -> None:
     snapshot = asyncio.run(_fetch(_LeedsDetailMock(validated_date="Wed 19 Aug 2026")))
 
     assert snapshot.payload.validated_date == date(2026, 8, 19)
+
+
+def test_leeds_retries_a_transient_summary_shell() -> None:
+    """A bounded retry recovers the portal's intermittent HTTP-200 error page."""
+    mock = _LeedsDetailMock(transient_summary_failures=1)
+
+    snapshot = asyncio.run(_fetch(mock))
+
+    assert snapshot.payload.application_reference == "26/05177/TR"
+    assert mock.tabs == ["summary", "summary", "documents"]
 
 
 @pytest.mark.parametrize("failure", ["malformed", "unavailable"])
