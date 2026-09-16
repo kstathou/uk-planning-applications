@@ -58,7 +58,7 @@ LEGACY_BASE = "https://portal.peakdistrict.gov.uk"
 ASSURE_BASE = "https://planning.peakdistrict.gov.uk/AssureLive"
 _ONLINE_BASE = f"{ASSURE_BASE}/ES/Presentation/Planning/OnlinePlanning"
 _SEARCH_URL = f"{_ONLINE_BASE}/OnlinePlanningSearch"
-_ADVANCED_FORM_URL = f"{_ONLINE_BASE}/AdvanceSearch?SearchFor=0"
+_ADVANCED_FORM_URL = f"{_ONLINE_BASE}/OnlinePlanningAdvanceSearchView?SearchFor=0"
 _RESULTS_URL = f"{_ONLINE_BASE}/OnlinePlanningSearchResults"
 _PAGINATION_URL = f"{_ONLINE_BASE}/SearchResultsForPagination"
 _DOCUMENTS_URL = f"{_ONLINE_BASE}/GetOnlineDocuments"
@@ -525,10 +525,7 @@ def _parse_search_form(
         if not isinstance(control, Tag) or str(control.get("value", "")) != expected:
             _raise_parse(f"search route {element_id}")
     advanced_soup = BeautifulSoup(advanced_body, "html.parser")
-    advanced = advanced_soup.select_one("#fldOnlinePlanningSearchAdvanceSearch")
-    if not isinstance(advanced, Tag):
-        _raise_parse("advanced search form")
-    status = advanced.select_one(f'select[name="{_STATUS_FIELD}"]')
+    status = advanced_soup.select_one(f'select[name="{_STATUS_FIELD}"]')
     if not isinstance(status, Tag):
         _raise_parse("open status options")
     options = tuple(
@@ -537,17 +534,29 @@ def _parse_search_form(
     if any(options.count(value) != 1 for value in ("-1", *_OPEN_STATUSES)):
         _raise_parse("open status options")
     for field in _DATE_QUERY_FIELDS:
-        radios = {
-            str(item.get("value", ""))
-            for item in advanced.select(f'input[type="radio"][name="{field}"]')
+        names = {
+            str(item.get("name", "")) for item in advanced_soup.select("input[name]")
         }
-        names = {str(item.get("name", "")) for item in advanced.select("input[name]")}
-        if radios != {"False", "True"} or not {
-            f"AdvanceSearch.{field}FromDate",
-            f"AdvanceSearch.{field}ToDate",
-        }.issubset(names):
+        any_time = advanced_soup.select(
+            f'input[type="radio"][name="AdvanceSearch.{field}AnyTime"]'
+            '[value="False"][checked]'
+        )
+        between = advanced_soup.select(
+            f'input[type="radio"][name="AdvanceSearch.{field}Between"]'
+            '[value="True"]:not([checked])'
+        )
+        if (
+            len(any_time) != 1
+            or len(between) != 1
+            or not {
+                f"AdvanceSearch.{field}AnyTime",
+                f"AdvanceSearch.{field}Between",
+                f"AdvanceSearch.{field}FromDate",
+                f"AdvanceSearch.{field}ToDate",
+            }.issubset(names)
+        ):
             _raise_parse(f"advanced date field {field}")
-    return (*_successful_controls(form), *_successful_controls(advanced))
+    return (*_successful_controls(form), *_successful_controls(advanced_soup))
 
 
 def _successful_controls(container: Tag) -> tuple[FormField, ...]:
@@ -577,8 +586,11 @@ def _successful_controls(container: Tag) -> tuple[FormField, ...]:
 def _replace_fields(
     fields: tuple[FormField, ...],
     values: dict[str, str],
+    *,
+    remove: tuple[str, ...] = (),
 ) -> tuple[FormField, ...]:
-    retained = tuple(field for field in fields if field.name not in values)
+    removed = {*values, *remove}
+    retained = tuple(field for field in fields if field.name not in removed)
     return (
         *retained,
         *(FormField(name=name, value=value) for name, value in values.items()),
@@ -597,19 +609,20 @@ def _query_request(
         "PagingParameters.PageSize": "20",
         "PagingParameters.TotalRecords": "0",
         _STATUS_FIELD: "-1",
-        **dict.fromkeys(_DATE_QUERY_FIELDS, "False"),
     }
+    remove: tuple[str, ...] = ()
     if query.kind == "bounded-date":
         start, separator, end = query.value.partition("..")
         if separator != ".." or query.field not in _DATE_QUERY_FIELDS:
             _raise_parse("bounded query")
         overrides.update(
             {
-                query.field: "True",
+                f"AdvanceSearch.{query.field}Between": "True",
                 f"AdvanceSearch.{query.field}FromDate": start,
                 f"AdvanceSearch.{query.field}ToDate": end,
             }
         )
+        remove = (f"AdvanceSearch.{query.field}AnyTime",)
     else:
         if query.field != _STATUS_FIELD or query.value not in _OPEN_STATUSES:
             _raise_parse("open query")
@@ -618,7 +631,7 @@ def _query_request(
         url=HttpUrl(_RESULTS_URL),
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
-        form=_replace_fields(form, overrides),
+        form=_replace_fields(form, overrides, remove=remove),
     )
 
 
