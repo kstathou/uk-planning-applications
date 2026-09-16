@@ -132,7 +132,9 @@ async def _assert_search_form(page: Page) -> None:
         _raise_form("POST /planning/index.html form")
     for name in ("fa", "submitted"):
         control = page.locator(f'input[name="{name}"]')
-        if await control.count() != 1 or await control.get_attribute("value") != "":
+        if await control.count() != 1:
+            _raise_form(f"single hidden {name} control")
+        if await control.get_attribute("value") not in (None, ""):
             _raise_form(f"empty hidden {name} control")
 
 
