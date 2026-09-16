@@ -117,6 +117,22 @@ def _document_index() -> bytes:
     )
 
 
+def _headerless_document_index() -> bytes:
+    return b"""
+    <table><tr><td>
+      <form method="post" action="showDocuments?reference=FG/95/26/HH&amp;module=pl&amp;filterBy=TYPE">
+        <select name="selectedtype"><option value=""></option></select>
+      </form>
+    </td></tr></table>
+    <strong>Documents</strong>
+    <table>
+      <tr><td><a href="viewDocument?file=one.pdf&amp;module=pl">Application</a></td>
+      <td></td><td>15-09-26</td><td></td>
+      <td>Application Form - Without Personal Data</td></tr>
+    </table>
+    """
+
+
 class _Session:
     def __init__(
         self,
@@ -744,6 +760,15 @@ def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> Non
         b"No documents found for this planning application"
     )
     assert documents == ()
+
+
+def test_arun_document_index_accepts_the_official_headerless_table() -> None:
+    documents = arun._parse_document_index(_headerless_document_index())
+
+    assert len(documents) == 1
+    assert documents[0].document_type == "Application"
+    assert documents[0].published_date == date(2026, 9, 15)
+    assert documents[0].description == "Application Form - Without Personal Data"
 
 
 @pytest.mark.parametrize(
