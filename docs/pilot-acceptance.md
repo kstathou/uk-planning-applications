@@ -30,7 +30,7 @@ requirement.
 | Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
 | Old Oak and Park Royal Development Corporation | Verified | Source blocked | Blocked | Open | Open |
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
-| Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
+| Cheshire East | Verified | Form, weekly list, direct detail, and five-row document index recorded; search fidelity contradicted | Blocked before live discovery because source access and exhaustive enumeration are unproved | Blocked | Pending: 23 and 30 September 2026 |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
 | Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
@@ -54,4 +54,7 @@ were healthy for completed weekly discovery smokes. These results do not move
 their live-bootstrap cells because the smokes checkpoint discovery but do not
 persist every discovered application through the operational collection store.
 West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
-unverified detail surface.
+unverified detail surface. Cheshire East retained a typed blocked receipt after
+one official request returned an unusable search document. Its exact recent,
+historical-week, and detail queries were not attempted, no operational SQLite
+store was created, and the immediate receipt resume performed no source I/O.

@@ -1,6 +1,6 @@
 # Pilot portal inventory
 
-This reference records the browser census taken on 15 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
+This reference records the browser census taken on 15 and 16 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
 
 | Authority | Observed sources | Portal shape | Browser result |
 |---|---|---|---|
@@ -12,7 +12,7 @@ This reference records the browser census taken on 15 September 2026. A successf
 | Arun | `www1.arun.gov.uk/aplanning/OcellaWeb/` | Ocella | One decided detail record and its document index were verified without opening attachment bodies. See `authorities/arun.md`. |
 | Old Oak and Park Royal Development Corporation | `planning.agileapplications.co.uk/opdc` | Agile Applications | Two direct loads reached the citizen-portal title but returned a blank accessible document. See `authorities/opdc.md`. |
 | Dorset | `gi.dorsetcouncil.gov.uk/dorsetexplorer/planning/public` | Dorset Explorer map client | The JavaScript map and planning search-provider configuration loaded, but no bounded application enumeration was exposed. See `authorities/dorset.md`. |
-| Cheshire East | `pa.cheshireeast.gov.uk/planning/index.html?fa=search` | Custom register | A valid-date search and its field inventory were verified. A selected result did not yield readable detail content. See `authorities/cheshire-east.md`. |
+| Cheshire East | Search, weekly received list, and numeric detail routes | Custom register | Direct detail and its complete five-row document metadata table were verified. The valid-date and active searches contradicted that record, a 50-row weekly list had no terminal signal, and automated source access returned an unusable document. See `authorities/cheshire-east.md`. |
 | Blackburn with Darwen | `planning.blackburn.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned the same maintenance page. See `authorities/blackburn-with-darwen.md`. |
 | Birmingham | `eplanning.birmingham.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned HTTP 503. See `authorities/birmingham.md`. |
 | Leeds | `publicaccess.leeds.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery returned explicit zero and 156-record outcomes for adjacent weeks. The selected detail returned a remote exception. See `authorities/leeds.md`. |
@@ -34,4 +34,4 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 
 ## Verification status
 
-Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, Peak District, and West Suffolk have recorded detail paths. Cheshire East and Leeds have recorded discovery paths but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn, Birmingham, and OPDC are blocked at their entry points. Every authority now has a dated walkthrough, while the unresolved paths remain explicit.
+Arun, Barnet, Camden, Cheshire East, Cornwall, Devon, Durham, Haringey, Peak District, and West Suffolk have recorded detail paths. Cheshire East remains blocked because recent and older-open enumeration are not trustworthy and the automated transport cannot recover the recorded search form. Leeds has recorded discovery but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn, Birmingham, and OPDC are blocked at their entry points. Every authority now has a dated walkthrough, while the unresolved paths remain explicit.

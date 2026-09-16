@@ -114,20 +114,35 @@ received-date paths. Camden resolves one explicit reference and deliberately
 rejects an unsupported bounded date search. These smokes also refuse before
 creating a live session unless `--confirm-live` is present.
 
-Cheshire East and Haringey expose their equally bounded contracts through two
-additional opt-in smokes:
+Haringey exposes its bounded browser contract through an additional opt-in
+smoke:
 
 ```sh
-uv run python scripts/smoke_cheshire_east.py --confirm-live
 uv run python scripts/smoke_haringey.py --confirm-live
 ```
 
-The Cheshire East smoke submits only the current date as the recorded
-valid-date-from input. It returns the visible references and then stops before
-claiming a complete result set. The Haringey smoke opens only the first page of
-the rolling seven-day quick link and reports the source-provided totals. It
-does not open application details or file links. Without `--confirm-live`,
-both commands exit before constructing a live session.
+The Haringey smoke opens only the first page of the rolling seven-day quick
+link and reports the source-provided totals. It does not open application
+details or file links. Without `--confirm-live`, the command exits before
+constructing a live session.
+
+Cheshire East has a separate fail-closed qualification command for the exact
+30-day scope and older-open requirement:
+
+```sh
+uv run python scripts/qualify_cheshire_east.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-cheshire-east-2026-09-16 \
+  --start 2026-08-18 --end 2026-09-16 --include-open --resume
+```
+
+The command's receipt schema can represent only a blocked outcome. A first run
+retains the official source evidence and atomically writes the receipt. A
+subsequent `--resume` validates that receipt and its compressed evidence
+without constructing a portal session. The command exits with status 1 for the
+recorded blocker and does not create an operational SQLite store. The authority
+must remain blocked until both enumeration gaps and automated source access are
+resolved, followed by a complete bootstrap and two real weekly cycles.
 
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a

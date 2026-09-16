@@ -1,20 +1,23 @@
 # Cheshire East portal walkthrough
 
-Observed on 15 September 2026.
+Observed on 15 and 16 September 2026.
 
 ## Source
 
 - Portal: `https://pa.cheshireeast.gov.uk/planning/index.html?fa=search`
 - Shape: custom council register
-- Separate route: `?fa=search_map`
+- Separate weekly route: `?fa=getReceivedWeeklyList`
+- Direct detail route: `?fa=getApplication&id=<numeric locator>`
 
-The older guessed Idox route is not a source. It returned 404 during the portal census.
+The older guessed IDOX route is not a source. It returned HTTP 404 during the
+portal census.
 
-## Search
+## Search contract
 
 The search form is named `form`, uses `POST`, and submits to
-`/planning/index.html`. It exposed these controls:
+`/planning/index.html`. Dates use `DD-MM-YYYY`. Its successful controls include:
 
+- hidden `fa` and `submitted`
 - `application_reference_number`, `application_type_id`, `proposal`, and
   `decision_type_id`
 - `Applicant[applicant_name]`, `Applicant[company_name]`,
@@ -22,43 +25,80 @@ The search form is named `form`, uses `POST`, and submits to
 - `ps_development_code_id`, `SiteAddress[magic]`, `SiteAddress[postcode]`,
   `SiteAddress[Street][street_description]`, and `site_address_description`
 - `site_address_x`, `site_address_y`, `ward_id`, and `community_id`
-- valid, received, proposed committee, and decision-issued date pairs
-- hidden `fa` and `submitted` values
+- `valid_date_from`, `valid_date_to`, `received_date_from`,
+  `received_date_to`, `committee_proposed_date_from`,
+  `committee_proposed_date_to`, `decision_issued_date_from`, and
+  `decision_issued_date_to`
 
-It stated that appeals are not visible and directed users to the Planning
-Inspectorate.
+The implementation serialises the successful controls in source order and
+overrides both valid-date bounds for an exact request. The qualification scope
+was the inclusive 30-day range 18 August through 16 September 2026.
 
-A valid-date-from search for 14 September 2026 initially returned a long result
-table in the same document. Each visible result exposed reference, application
-type, location, proposal, optional consultation-close date, and a `View`
-control. The displayed records included application references such as
-`26/3180/DSC`, `26/3335/PRIOR-1A`, and `26/3322/NMA`.
+The browser returned an explicit no-results response for that valid-date
+request. It also returned no results when `decision_type_id` was set to the
+visible `Not Determined` value. Both responses contradict direct official
+detail `26/3335/PRIOR-1A`, whose application status is `Pending Consideration`
+and whose valid date is 14 September 2026. Neither form is therefore a proven
+enumeration of the requested recent or active records.
 
-On 16 September, a same-day valid-date-from submission unexpectedly returned
-four old references rather than a trustworthy same-day set. The source did not
-show a result total or pagination control in that response. This observation
-prevents the implementation from treating the form as an exact arbitrary date
-window.
+The register states that appeals are not visible and points users to the
+Planning Inspectorate.
 
-The visible `View` control for `26/3322/NMA` accepted focus but did not produce readable detail content during this bounded walkthrough. Detail extraction is therefore a source failure or unresolved client interaction, not an empty record.
+## Weekly boundary
 
-## Collection consequences
+`GET /planning/index.html?fa=getReceivedWeeklyList` exposes a `POST` form on the
+same route. Its exact successful fields are `week=DD-MM-YYYY` and hidden `fa`.
+The page normalises a selected date to Monday.
 
-- Implement the custom form field names and retain every native classification value.
-- Run valid, received, and decision windows independently. Proposed committee dates are an additional change signal, not a replacement for application dates.
-- Convert supplied British National Grid coordinates to WGS84 while retaining the native X and Y values.
-- Keep appeals explicitly unavailable from this register and link to the separate authoritative source when appeal collection is added.
-- Treat the same-document result table as a bounded enumeration whose total and pagination rules still need inspection.
-- Do not claim application, document, or comment completeness until a detail route succeeds.
+The current default list displayed four rows. A request for the week beginning
+1 January 2024 displayed exactly 50 rows. That historical response published
+no total, next-page link, or all-results-loaded marker. There is no source fact
+that distinguishes a complete 50-row week from a truncated response, so this
+route cannot prove an exhaustive historical partition or all older active
+applications.
+
+## Detail and documents
+
+The browser opened numeric locator `406569` at
+`/planning/index.html?fa=getApplication&id=406569` and verified public
+reference `26/3335/PRIOR-1A`. The page exposed application type, proposal,
+applicant, agent, location, British National Grid coordinates, ward, parish,
+officer, decision level, application status, received date, valid date, expiry
+date, and consultation-end date.
+
+`table#application_documents` displayed five rows with document type,
+description, thumbnail metadata, date added, and one
+`?fa=downloadDocument&id=<document id>&public_record_id=406569` link per row.
+The disabled `#all_documents_loaded_application_documents` control was present
+and the show-more control was hidden. No thumbnail or attachment body was
+requested.
+
+The parser verifies the numeric locator and public reference before accepting
+the detail. It accepts document metadata only when the all-loaded marker and
+the exact table columns are present. Attachment URLs remain metadata.
+
+## Automated qualification result
+
+The automated HTTP transport could not reproduce the browser search form on
+16 September 2026. One direct HTTP check returned an AWS WAF challenge header;
+the qualification run retained a 2,019-byte HTML response that did not contain
+the recorded form. A generic local headless browser reached an `IDX005` error
+document. The successful interactive browser surface is not available to the
+collector as a stable transport.
+
+The qualification command made one official source request, retained its
+content-addressed body, requested no attachment bodies, created no SQLite
+store, and wrote a typed blocked receipt. Its immediate `--resume` rerun read
+only the receipt and evidence. The intended recent, historical-week, and direct
+detail queries are recorded as pending rather than falsely reported as run.
 
 ## Verification status
 
-`VERIFIED` for the form contract, `application_results_table`, and numeric
-locator in each `.view_application[data-id]` control. The HTTP adapter submits
-the recorded valid-date-from form, persists every visible reference and numeric
-locator in its checkpointed batch, then stops explicitly because the response
-does not prove a total or pagination boundary.
+`VERIFIED` for the browser form inventory, weekly form, direct detail route,
+reference match, and complete five-row document metadata table.
 
-`INCONCLUSIVE` for exact-window fidelity, result count, pagination, detail
-retrieval, documents, comments, and incremental refresh. The adapter is
-discovery-only and deliberately never labels the observed table complete.
+`BLOCKED` for live collection. Recent-window fidelity is contradicted,
+weekly-list terminality is unproved, older-open completeness is unproved, and
+the automated transport cannot currently recover the recorded search form.
+The authority is not `LIVE_READY`. Its two operational weekly cycles due on
+23 and 30 September 2026 remain pending.
