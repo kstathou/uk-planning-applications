@@ -20,7 +20,16 @@ Each result exposed a portal key, reference, proposal, address, validation date,
 
 Opening the visible `26/05013/FU` detail link returned the portal's own error page with `Unable to perform this task. A remote exception occurred.` No retry or alternate detail was used during this bounded walkthrough.
 
-This is a failed detail request, not an empty application. Discovery is verified for the recorded weekly-list path. Extraction, documents, comments, and complete pagination remain inconclusive until the detail service succeeds.
+This is a failed detail request, not an empty application. Discovery is verified
+for the recorded weekly-list path. Extraction, documents, and comments remain
+inconclusive until the detail service succeeds. Complete weekly pagination is
+verified by the live adapter run below.
+
+A live adapter smoke on 16 September 2026 exhausted both validated and decided
+weekly lists for the week beginning 7 September. It retained 293 unique
+references after deduplicating overlap between the date types. The adapter then
+stopped with `LeedsDetailUnverifiedError` before treating the unverified detail
+surface as extracted data.
 
 ## Collection consequences
 
@@ -50,4 +59,7 @@ links and a next-page link were visible, so enumeration must continue until the
 reported 156 rows are queued. Each summary link carried the portal key in
 `applicationDetails.do?keyVal=...&activeTab=summary`, while the result row
 published the human reference, proposal, address, validated date, and status.
-The detail and child-section failure remains open.
+The live smoke subsequently exhausted both date-type queries, retained 293
+unique references, and completed with zero attachment-body requests. It made no
+claim about detail or child-section completeness, and it did not persist a full
+application bootstrap.

@@ -33,7 +33,7 @@ requirement.
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
-| Leeds | Verified | Discovery route recorded; detail blocked | Weekly discovery adapter; detail explicitly unavailable | Open | Open |
+| Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail explicitly unavailable | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Live weekly discovery completed for 3 validated and 14 decided applications; one bounded detail fetched with no attachment body | Open | Open |
@@ -49,8 +49,9 @@ remain in coverage denominators and failure reporting until those checks
 succeed.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
-Cornwall and timed out at Durham after bounded retries. West Suffolk was healthy
-for the completed weekly discovery smoke. The West Suffolk result does not move
-its live-bootstrap cell because the smoke checkpoints discovery and fetches one
-detail record, but does not persist every discovered application through the
-operational collection store.
+Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds
+were healthy for completed weekly discovery smokes. These results do not move
+their live-bootstrap cells because the smokes checkpoint discovery but do not
+persist every discovered application through the operational collection store.
+West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
+unverified detail surface.

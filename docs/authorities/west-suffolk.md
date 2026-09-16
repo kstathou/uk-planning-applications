@@ -32,8 +32,8 @@ An empty comments tab does not imply that no representations exist. The document
 
 The original walkthrough covered one weekly validated list, one current record,
 and its document index. A follow-up live adapter run on 16 September 2026 also
-exhausted the two-page decided list and fetched one summary plus its safe child
-sections. It did not prove older open enumeration, related-case detail, retries,
+exhausted the two-page decided list and fetched one summary plus its document
+index. It did not prove older open enumeration, related-case detail, retries,
 incremental updates, or a complete persisted bootstrap of every discovered
 record.
 
