@@ -35,8 +35,11 @@ The ordered qualification inventory is exactly:
 6. `outstanding:appeals:true` — 11 rows on two pages of `10, 1`.
 
 Planning results link to `/Planning/Display/...`; appeal results link to the
-distinct `/Appeals/Display/...` contract. Both origins and exact path families
-are validated before every request and redirect.
+distinct `/Appeals/Display/...` contract. They persist under the separate
+`devon-planning-register` and `devon-appeal-register` source identities, so the
+same published reference cannot merge the two record kinds. Both origins,
+exact path families, query-to-route agreement, and returned detail identities
+are validated before persistence.
 
 Result pages do not publish a total or displayed row range. Completeness is
 therefore proved only from observable pager facts: one current-page marker, the
@@ -66,7 +69,9 @@ guessing at missing columns.
 The live store contains 56 planning records and 11 appeal records. It has 30
 published BNG coordinate pairs (24 planning and 6 appeal), 16 records with
 published constraints, and 21 with published consultations (16 planning and 5
-appeal).
+appeal). Common appeal metadata includes 10 non-placeholder PINS aliases and 6
+published planning-appeal relationships; placeholder party and decision values
+are omitted.
 
 Document metadata is read only from the returned `PlanningdocTable` and
 `document-list` HTML. The parser validates the decorated header, category
@@ -81,25 +86,28 @@ unavailable because the register exposes responses as document attachments.
 ## Live qualification receipt
 
 The durable receipt is
-`.yimby/qualification-devon-2026-09-16/devon-qualification-v3.json` with SHA-256
-`0db784ad49bebd39d6094f095898c5e0c7c966f66bb30b514440cf8a7451270c`.
+`.yimby/qualification-devon-2026-09-16/devon-qualification-v4.json` with SHA-256
+`92257631183178fa507504111bcf4b96b265c5b4e76dfe30405247b6ea370e8e`.
 It records:
 
 - all six completed query keys with the row and page totals above;
-- 67 unique references, applications, native versions, observations, evidence
-  registrations, and compressed evidence files;
+- 67 unique source-qualified references, applications, native versions,
+  observations, and observation-evidence registrations;
+- 19 discovery-evidence registrations covering all 12 search pages, and 84
+  reconciled compressed evidence objects and files;
 - 67 application versions, 28 complete document-section versions, 39
   explicitly unavailable document sections, and zero comment versions;
 - zero pending retries, failed current sections, unmapped records, and
   attachment body requests;
-- SQLite integrity, exact durable reference/application agreement, complete
-  per-observation evidence reconciliation, and a canonical all-file inventory;
+- SQLite integrity, exact durable source/reference/application agreement,
+  complete discovery and per-observation evidence reconciliation, and a
+  canonical all-file inventory;
 - 86 official requests and 8,234,248 transferred bytes on the first pass;
 - an immediate terminal rerun with 0 requests, 0 bytes, and 0 attachment
   bodies; and
 - byte-for-byte receipt preservation under a separate `--resume` command.
 
-All twelve named receipt checks pass. Weekly cycles due 23 and 30 September
+All thirteen named receipt checks pass. Weekly cycles due 23 and 30 September
 2026 remain truthfully `pending`. The adapter and bootstrap are live collection
 verified for this scope, but operational qualification and `LIVE_READY`
 promotion remain prohibited until those genuinely later cycles succeed.

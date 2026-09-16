@@ -808,9 +808,7 @@ def test_devon_collects_exact_appeal_route_and_native_fields() -> None:
     placeholder_decision = adapter.normalise(
         snapshot.model_copy(
             update={
-                "payload": snapshot.payload.model_copy(
-                    update={"appeal_decision": "-"}
-                )
+                "payload": snapshot.payload.model_copy(update={"appeal_decision": "-"})
             }
         )
     )
