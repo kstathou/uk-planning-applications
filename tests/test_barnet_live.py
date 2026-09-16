@@ -9,6 +9,7 @@ import asyncio
 import sqlite3
 from contextlib import closing
 from datetime import date
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qsl
 
@@ -29,11 +30,13 @@ from yimby.authorities.barnet.adapter import (
     BarnetReferenceMismatchError,
     BarnetRoutingError,
 )
+from yimby.authorities.barnet.fixtures import fixture_session
 from yimby.domain import (
     DiscoveryBatch,
     EmptySection,
     SourceId,
     SourceReference,
+    TransportMode,
     UnavailableSection,
 )
 from yimby.evidence import EvidenceStore
@@ -50,6 +53,8 @@ from yimby.transport import (
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
+
+    from yimby.transport import PortalSession
 
 WEEK = DiscoveryWindow(
     start=date(2026, 9, 14),
@@ -277,7 +282,7 @@ class _BarnetMock:
         open_message: bytes = b"Too many results found. Please enter some more parameters.",
         child_failure: bool = False,
         child_unavailable: bool = False,
-        child_rate_limited: bool = False,
+        child_rate_limited_tab: str | None = None,
         summary: bytes = SUMMARY,
         advanced_multi_page: bool = False,
     ) -> None:
@@ -286,7 +291,7 @@ class _BarnetMock:
         self.open_message = open_message
         self.child_failure = child_failure
         self.child_unavailable = child_unavailable
-        self.child_rate_limited = child_rate_limited
+        self.child_rate_limited_tab = child_rate_limited_tab
         self.summary = summary
         self.advanced_multi_page = advanced_multi_page
         self.active_advanced: tuple[str, str] | None = None
@@ -408,7 +413,7 @@ class _BarnetMock:
             assert request.url.params["keyVal"] == "KEY-1"
             if active_tab == "summary":
                 return httpx.Response(200, content=self.summary)
-            if self.child_rate_limited:
+            if self.child_rate_limited_tab == active_tab:
                 return httpx.Response(429)
             if self.child_unavailable:
                 return httpx.Response(404)
@@ -711,8 +716,15 @@ def test_live_collection_persists_locator_metadata_and_child_failures(
     store.close()
 
 
-def test_live_child_rate_limit_stops_before_later_sections() -> None:
-    mock = _BarnetMock(child_rate_limited=True)
+@pytest.mark.parametrize(
+    ("rate_limited_tab", "expected_detail_requests"),
+    [("documents", 2), ("neighbourComments", 3)],
+)
+def test_live_child_rate_limit_stops_before_later_sections(
+    rate_limited_tab: str,
+    expected_detail_requests: int,
+) -> None:
+    mock = _BarnetMock(child_rate_limited_tab=rate_limited_tab)
     session = HttpxPortalSession(
         client=httpx.AsyncClient(transport=httpx.MockTransport(mock)),
         limiter=HostRateLimiter(0),
@@ -733,7 +745,33 @@ def test_live_child_rate_limit_stops_before_later_sections() -> None:
     detail_requests = [
         request for request in mock.requests if request[1].endswith("applicationDetails.do")
     ]
-    assert len(detail_requests) == 2
+    assert len(detail_requests) == expected_detail_requests
+
+
+def test_fixture_child_rate_limit_is_not_downgraded() -> None:
+    inner = fixture_session(WEEK)
+
+    async def fetch(request: PortalRequest) -> object:
+        if request.intent == RequestIntent.COMMENTS:
+            message = "fixture HTTP 429"
+            raise RateLimitedError(message)
+        return await inner.fetch(request)
+
+    session = cast(
+        "PortalSession",
+        SimpleNamespace(mode=TransportMode.FIXTURE, fetch=fetch),
+    )
+    reference = SourceReference(
+        source_id=SourceId("barnet-register"),
+        reference="23/0001",
+    )
+
+    async def collect() -> None:
+        with pytest.raises(RateLimitedError, match="HTTP 429"):
+            await BARNET_PACKAGE.collect(session, reference)
+        await inner.aclose()
+
+    asyncio.run(collect())
 
 
 def test_live_fetch_requires_locator_and_form_transport_preserves_pairs() -> None:
@@ -1292,6 +1330,28 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             ("Showing 1-1 of 2",),
         )
     )
+    with pytest.raises(BarnetParseError, match="resumed search result identity"):
+        barnet_adapter._restore_query_progress(
+            legacy_active.model_copy(
+                update={
+                    "next_page": 3,
+                    "query_row_count": 2,
+                    "seen_references": ("A", "B"),
+                }
+            ),
+            active_page.query_key,
+            (resumable_first_page,),
+        )
+    with pytest.raises(BarnetParseError, match="resumed search result identity"):
+        barnet_adapter._restore_query_progress(
+            BarnetCheckpointV1(
+                cursor="live",
+                active_query=active_page.query_key,
+                next_page=2,
+            ),
+            active_page.query_key,
+            (),
+        )
     with pytest.raises(BarnetParseError, match="resumed search result identity"):
         barnet_adapter._restore_query_progress(
             legacy_active.model_copy(update={"seen_references": ("B",)}),
