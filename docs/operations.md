@@ -130,17 +130,22 @@ uv run python scripts/qualify_peak_district.py \
 The interval must contain exactly 30 inclusive days and `--include-open` is
 mandatory. The command submits bounded Received, Validated, and Decided queries
 plus any-time REGISTERED and APPEAL LODGED queries. It writes a versioned JSON
-receipt only after checkpoint and query inventory, reference and application
+private proof before its local published receipt, and only after checkpoint and
+query inventory, reference and application
 agreement, retry state, failed sections, database integrity, evidence paths and
-digests, unmapped records, attachment policy, and an immediate zero-network
-rerun all pass. Use `--resume` only with the same directory and exact scope
-after an interruption or fail-closed correction.
+digests, persisted live-ready HTTP metadata, unmapped records, attachment
+policy, cumulative authority-scoped durable run-cost agreement, and an
+immediate zero-network rerun all pass. A valid resume recovers the existing
+proof without opening a source session; missing or inconsistent terminal proof
+fails closed. Use `--resume` only with the same directory and exact scope after
+an interruption or fail-closed correction.
 
 The accepted 16 September 2026 receipt records 377 references and applications,
 95 decision dates, zero failed sections, zero pending or historical retry
 entries, and zero attachment-body requests. It validates all 1,560 retained
-evidence rows. Peak District remains below `LIVE_READY` until successful weekly
-cycles occur on or after 23 September and 30 September 2026.
+evidence rows. Peak District is `LIVE_READY` for the receipt-backed HTTP
+contract, but remains operationally unqualified until successful weekly cycles
+occur on or after 23 September and 30 September 2026.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:

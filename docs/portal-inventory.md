@@ -35,11 +35,12 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 ## Verification status
 
 Arun, Barnet, Blackburn with Darwen, Camden, Cornwall, Devon, Durham, Haringey,
-OPDC, Peak District, and West Suffolk have recorded detail paths. Peak District,
-OPDC, and West Suffolk have completed persisted live bootstraps. Cheshire East
-and Leeds have recorded discovery paths but
-inconclusive detail retrieval. Dorset has a verified map-client boundary without
-bounded application discovery. Blackburn's adapter remains browser-only until
-its attended verification state supports a complete persisted run. Birmingham
-remains blocked at its entry point. Every authority has a dated walkthrough,
-while unresolved paths remain explicit.
+OPDC, Peak District, and West Suffolk have recorded detail paths. OPDC, Peak
+District, and West
+Suffolk have completed receipt-backed persisted live bootstraps and are
+live-ready for their verified HTTP contracts. Cheshire East and Leeds have
+recorded discovery paths but inconclusive detail retrieval. Dorset has a
+verified map-client boundary without bounded application discovery. Blackburn's
+adapter remains browser-only until its attended verification state supports a
+complete persisted run. Birmingham remains blocked at its entry point. Every
+authority has a dated walkthrough, while unresolved paths remain explicit.

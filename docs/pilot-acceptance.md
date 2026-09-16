@@ -41,8 +41,9 @@ requirement.
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
 As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed
-verified live bootstraps. West Suffolk's versioned receipt proves 730 discovered references,
-730 persisted applications, terminal checkpoint coherence, no pending retries,
+verified live bootstraps. West Suffolk's versioned receipt proves 730
+discovered references, 730 persisted applications, terminal checkpoint
+coherence, no pending retries,
 no failed current sections, database integrity, retained evidence-path
 presence, no unmapped records, no attachment-body requests, and an immediate
 zero-request rerun. OPDC's sanitized
@@ -52,13 +53,15 @@ sections, local database and evidence integrity, 103 distinct retained content
 digests, 165 ordered application-to-capture associations, and an immediate
 zero-network rerun. Its SHA-256 commitment covers each application's source
 identity and ordered capture URL, media type, and content digest without
-publishing the identity inventory. Peak District's receipt records 377
-applications, 95 decision dates, zero failed sections, zero retry entries, zero
-attachment-body requests, complete database and all-row evidence integrity, and
-an immediate zero-network rerun. Its two later weekly cycles remain pending, so
-it is not operationally qualified or `LIVE_READY`. The other twelve authorities still
-require verified live bootstraps. All fifteen still require two successful
-later weekly cycles, so operational qualification remains zero of fifteen.
+publishing the identity inventory. Peak District's privacy-safe
+[committed receipt](evidence/peak-district-qualification-2026-09-16.json)
+records 377 applications, 95 decision dates, zero retry entries, 1,696
+cumulative durable acquisition requests, 1,299 ordered current capture
+associations, integrity commitments for all 1,560 retained evidence rows, a
+persisted live-ready HTTP manifest, and an immediate zero-network rerun. The
+other twelve authorities still require verified live bootstraps. All fifteen
+still require two successful later weekly cycles, so operational qualification
+remains zero of fifteen.
 
 The Barnet smoke is incomplete because the source returned HTTP 429 during
 pagination; its saved checkpoint permits a later bounded resume without
