@@ -7,10 +7,12 @@ import asyncio
 import json
 from datetime import date
 from hashlib import sha256
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
+from pydantic import HttpUrl
 
+from yimby.authorities.opdc import adapter as opdc_adapter
 from yimby.authorities.opdc.adapter import (
     API_BASE_URL,
     SOURCE,
@@ -25,17 +27,19 @@ from yimby.authorities.opdc.adapter import (
     OpdcResponseV1,
 )
 from yimby.domain import (
+    ApplicationLocation,
     DiscoveryBatch,
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
     SourceReference,
     TransportMode,
+    Wgs84Coordinate,
 )
 from yimby.transport import SourceUnavailableError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
 
     from yimby.transport import PortalRequest
 
@@ -187,6 +191,12 @@ def _detail_body(
     ).encode()
 
 
+def _updated_detail(**updates: object) -> bytes:
+    payload = json.loads(_detail_body())
+    payload.update(updates)
+    return json.dumps(payload).encode()
+
+
 def _documents_body(*, duplicate: bool = False, invalid_date: bool = False) -> bytes:
     documents = [
         {
@@ -276,12 +286,13 @@ def test_opdc_live_discovery_resumes_restarts_scope_and_reruns_without_io() -> N
 
     async def first_query() -> DiscoveryBatch[OpdcCheckpointV1]:
         registered = _query_urls()[0]
-        iterator: AsyncIterator[DiscoveryBatch[OpdcCheckpointV1]] = (
+        iterator = cast(
+            "AsyncGenerator[DiscoveryBatch[OpdcCheckpointV1]]",
             OpdcAdapter().discover(
                 _OpdcSession({registered: _search((1, "26/0001/FULOPDC"))}),
                 WINDOW,
                 None,
-            )
+            ),
         )
         first = await anext(iterator)
         await iterator.aclose()
@@ -417,9 +428,9 @@ def test_opdc_live_checkpoint_and_cross_query_identity_must_be_coherent() -> Non
     assert fixture_batches[0].complete is True
 
 
-def test_opdc_live_detail_retains_metadata_comments_and_three_evidence_captures() -> (
-    None
-):
+def test_opdc_live_detail_retains_metadata_comments_and_three_evidence_captures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """One routed record preserves every implemented public API section."""
     reference = SourceReference(
         source_id=SOURCE,
@@ -443,7 +454,7 @@ def test_opdc_live_detail_retains_metadata_comments_and_three_evidence_captures(
         OpdcDocumentV1(
             document_id="DOC-1",
             title="Committee report",
-            url=document_url,
+            url=HttpUrl(document_url),
             received_date=date(2024, 1, 30),
             media_description="Report",
             source_name="report.pdf",
@@ -476,6 +487,15 @@ def test_opdc_live_detail_retains_metadata_comments_and_three_evidence_captures(
         for request in session.requests
     )
 
+    monkeypatch.setattr(
+        opdc_adapter,
+        "bng_to_wgs84",
+        lambda easting, northing: ApplicationLocation(
+            bng_easting=easting,
+            bng_northing=northing,
+            wgs84=Wgs84Coordinate(longitude=-0.25, latitude=51.52),
+        ),
+    )
     normalised = adapter.normalise(snapshot)
     assert normalised.proposal == "Build homes and workspace"
     assert normalised.status == "decision-issued"
@@ -503,7 +523,19 @@ def test_opdc_live_detail_marks_verified_empty_child_arrays() -> None:
     )
     session = _OpdcSession(
         {
-            _detail_url("10008"): _detail_body(),
+            _detail_url("10008"): _updated_detail(
+                fullProposal=" ",
+                oneAppReference="",
+                applicationType=None,
+                decisionText=None,
+                receivedDate=None,
+                registrationDate=None,
+                validDate=None,
+                decisionDate=None,
+                ward=None,
+                easting=None,
+                northing=None,
+            ),
             _detail_url("10008", "/document"): b"[]",
             _detail_url("10008", "/responses"): b"[]",
         }
@@ -512,6 +544,7 @@ def test_opdc_live_detail_marks_verified_empty_child_arrays() -> None:
 
     assert snapshot.payload.documents == ()
     assert snapshot.payload.responses == ()
+    assert snapshot.payload.development_description == "Build homes"
     assert snapshot.completeness.documents.kind == "empty"
     assert snapshot.completeness.comments.kind == "empty"
     assert len(snapshot.evidence) == _DETAIL_EVIDENCE_COUNT
@@ -523,6 +556,7 @@ def test_opdc_live_detail_marks_verified_empty_child_arrays() -> None:
         (SourceUnavailableError("documents unavailable"), b"not-json"),
         (_documents_body(duplicate=True), _responses_body(duplicate=True)),
         (_documents_body(invalid_date=True), b"[]"),
+        (b"not-json", SourceUnavailableError("responses unavailable")),
     ],
 )
 def test_opdc_live_detail_keeps_child_failures_explicit(
@@ -568,6 +602,20 @@ def test_opdc_live_detail_requires_locator_shape_and_identity_agreement() -> Non
     with pytest.raises(ValueError, match="reference mismatch"):
         asyncio.run(adapter.fetch(mismatched, reference))
 
+    locator_mismatch = _OpdcSession({_detail_url("10008"): _detail_body(locator=10009)})
+    with pytest.raises(ValueError, match="locator mismatch"):
+        asyncio.run(adapter.fetch(locator_mismatch, reference))
+
     malformed = _OpdcSession({_detail_url("10008"): b"{}"})
     with pytest.raises(OpdcParseError, match="detail JSON"):
         asyncio.run(adapter.fetch(malformed, reference))
+
+    missing_proposal = _OpdcSession(
+        {
+            _detail_url("10008"): _updated_detail(fullProposal="", proposal=""),
+            _detail_url("10008", "/document"): b"[]",
+            _detail_url("10008", "/responses"): b"[]",
+        }
+    )
+    with pytest.raises(OpdcParseError, match="detail proposal"):
+        asyncio.run(adapter.fetch(missing_proposal, reference))

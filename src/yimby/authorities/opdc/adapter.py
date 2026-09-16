@@ -16,31 +16,45 @@ from pydantic import (
     Field,
     HttpUrl,
     StringConstraints,
+    TypeAdapter,
     ValidationError,
     model_validator,
 )
 
 from yimby.domain import (
+    ApplicationMetadata,
     AuthorityCapabilities,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
     CapabilityState,
+    CommentRecord,
     Completeness,
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
+    DocumentRecord,
+    EvidenceCapture,
+    FailedSection,
     FrozenModel,
     NativeSnapshot,
     NormalisedObservation,
     Provenance,
+    SectionState,
     SourceDefinition,
     SourceId,
     SourceReference,
     TransportMode,
     UnavailableSection,
+    collection_state,
 )
-from yimby.transport import PortalRequest, RequestHeader, RequestIntent
+from yimby.geo import bng_to_wgs84
+from yimby.transport import (
+    PortalRequest,
+    RequestHeader,
+    RequestIntent,
+    SourceUnavailableError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -148,13 +162,90 @@ class _SearchResponse(FrozenModel):
     results: tuple[_SearchRow, ...]
 
 
+class OpdcDocumentV1(FrozenModel):
+    """One OPDC document index row without attachment content."""
+
+    document_id: _NonBlank
+    title: _NonBlank
+    url: HttpUrl
+    received_date: date | None = None
+    media_description: str | None = None
+    source_name: str | None = None
+
+
+class OpdcResponseV1(FrozenModel):
+    """Public response text exposed directly by OPDC's portal API."""
+
+    response_id: _NonBlank
+    text: str
+    received_date: date | None = None
+    response_type: str | None = None
+
+
 class OpdcApplicationV1(FrozenModel):
     """OPDC-native delegated planning application."""
 
     agile_case_id: str
+    application_reference: str
     development_description: str
     workflow_status: str
     site_name: str
+    documents: tuple[OpdcDocumentV1, ...]
+    responses: tuple[OpdcResponseV1, ...]
+    alternative_references: tuple[str, ...] = ()
+    application_type: str | None = None
+    decision: str | None = None
+    received_date: date | None = None
+    registration_date: date | None = None
+    validated_date: date | None = None
+    decision_date: date | None = None
+    ward_name: str | None = None
+    easting: float | None = None
+    northing: float | None = None
+
+
+class _DetailResponse(FrozenModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore")
+
+    id: int = Field(gt=0)
+    reference: _NonBlank
+    full_proposal: str | None = Field(default=None, alias="fullProposal")
+    proposal: str | None = None
+    status_owner: _NonBlank = Field(alias="statusOwner")
+    location: _NonBlank
+    one_application_reference: str = Field(default="", alias="oneAppReference")
+    application_type: str | None = Field(default=None, alias="applicationType")
+    decision_text: str | None = Field(default=None, alias="decisionText")
+    received_date: str | None = Field(default=None, alias="receivedDate")
+    registration_date: str | None = Field(default=None, alias="registrationDate")
+    valid_date: str | None = Field(default=None, alias="validDate")
+    decision_date: str | None = Field(default=None, alias="decisionDate")
+    ward: str | None = None
+    easting: int | float | None = None
+    northing: int | float | None = None
+
+
+class _DocumentResponse(FrozenModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore")
+
+    document_id: _NonBlank = Field(alias="documentId")
+    description: str = ""
+    name: str = ""
+    media_description: str = Field(default="", alias="mediaDescription")
+    received_date: str | None = Field(default=None, alias="receivedDate")
+
+
+class _PublicResponse(FrozenModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="ignore")
+
+    reply_id: int = Field(gt=0, alias="replyId")
+    reply_text: str = Field(alias="replyLongText")
+    reply_date: str | None = Field(default=None, alias="replyDate")
+    reply_type: str | None = Field(default=None, alias="replyType")
+
+
+_DOCUMENT_RESPONSES = TypeAdapter(tuple[_DocumentResponse, ...])
+_PUBLIC_RESPONSES = TypeAdapter(tuple[_PublicResponse, ...])
 
 
 class OpdcParseError(ValueError):
@@ -162,6 +253,7 @@ class OpdcParseError(ValueError):
 
     def __init__(self, field: str) -> None:
         """Name the missing field."""
+        self.code = f"parse-{re.sub(r'[^a-z0-9]+', '-', field.casefold()).strip('-')}"
         super().__init__(f"missing OPDC field {field}")
 
 
@@ -171,6 +263,30 @@ class OpdcCheckpointError(ValueError):
     def __init__(self, field: str) -> None:
         """Name the incoherent checkpoint field without exposing response data."""
         super().__init__(f"invalid OPDC checkpoint {field}")
+
+
+class OpdcRoutingError(ValueError):
+    """A live OPDC reference lacks its Agile application identifier."""
+
+    def __init__(self, reference: str) -> None:
+        """Name the public reference that cannot be routed."""
+        super().__init__(f"OPDC reference has no locator: {reference}")
+
+
+class OpdcIdentityMismatchError(ValueError):
+    """The routed OPDC detail returned a different application identifier."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        """Describe the source identifier disagreement."""
+        super().__init__(f"OPDC locator mismatch: expected {expected}, got {actual}")
+
+
+class OpdcReferenceMismatchError(ValueError):
+    """The routed OPDC detail returned a different public reference."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        """Describe the public reference disagreement."""
+        super().__init__(f"OPDC reference mismatch: expected {expected}, got {actual}")
 
 
 class OpdcAdapter:
@@ -257,7 +373,17 @@ class OpdcAdapter:
         session: PortalSession,
         reference: SourceReference,
     ) -> NativeSnapshot[OpdcApplicationV1]:
-        """Read a fixture record without claiming live Agile agreement."""
+        """Read fixture detail or all implemented official API sections."""
+        if session.mode != TransportMode.FIXTURE:
+            return await self._fetch_live(session, reference)
+        return await self._fetch_fixture(session, reference)
+
+    async def _fetch_fixture(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> NativeSnapshot[OpdcApplicationV1]:
+        """Preserve the deterministic fixture contract."""
         encoded = quote(reference.reference, safe="")
         url = f"{BASE_URL}/application/{encoded}"
         detail = await session.fetch(
@@ -270,6 +396,7 @@ class OpdcAdapter:
                 r'data-opdc-case-id="([^"]+)"',
                 "case id",
             ),
+            application_reference=reference.reference,
             development_description=unescape(
                 _required(html, r'data-opdc-proposal="([^"]+)"', "proposal")
             ),
@@ -279,8 +406,10 @@ class OpdcAdapter:
                 "status",
             ),
             site_name=unescape(_required(html, r'data-opdc-site="([^"]+)"', "site")),
+            documents=(),
+            responses=(),
         )
-        unavailable = UnavailableSection(reason="live client bootstrap inconclusive")
+        unavailable = UnavailableSection(reason="fixture does not expose this section")
         return NativeSnapshot(
             reference=reference,
             observed_at=datetime.now(UTC),
@@ -293,25 +422,111 @@ class OpdcAdapter:
             evidence=(detail,),
         )
 
+    async def _fetch_live(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> NativeSnapshot[OpdcApplicationV1]:
+        """Read application, document metadata, and public response text."""
+        if reference.locator is None:
+            raise OpdcRoutingError(reference.reference)
+        locator = reference.locator
+        detail_capture = await session.fetch(
+            _api_request(f"/api/application/{quote(locator, safe='')}")
+        )
+        detail = _parse_detail(detail_capture.body)
+        if str(detail.id) != locator:
+            raise OpdcIdentityMismatchError(locator, str(detail.id))
+        if detail.reference != reference.reference:
+            raise OpdcReferenceMismatchError(reference.reference, detail.reference)
+        evidence = [detail_capture]
+        documents, document_state = await _fetch_documents(
+            session,
+            locator,
+            evidence,
+        )
+        responses, response_state = await _fetch_responses(
+            session,
+            locator,
+            evidence,
+        )
+        proposal = _proposal(detail)
+        alternative_reference = detail.one_application_reference.strip()
+        alternatives = (
+            (alternative_reference,)
+            if alternative_reference and alternative_reference != detail.reference
+            else ()
+        )
+        payload = OpdcApplicationV1(
+            agile_case_id=locator,
+            application_reference=detail.reference,
+            development_description=proposal,
+            workflow_status=detail.status_owner,
+            site_name=detail.location,
+            documents=documents,
+            responses=responses,
+            alternative_references=alternatives,
+            application_type=_clean_optional(detail.application_type),
+            decision=_clean_optional(detail.decision_text),
+            received_date=_parse_api_date(detail.received_date, "received date"),
+            registration_date=_parse_api_date(
+                detail.registration_date,
+                "registration date",
+            ),
+            validated_date=_parse_api_date(detail.valid_date, "valid date"),
+            decision_date=_parse_api_date(detail.decision_date, "decision date"),
+            ward_name=_clean_optional(detail.ward),
+            easting=None if detail.easting is None else float(detail.easting),
+            northing=None if detail.northing is None else float(detail.northing),
+        )
+        return NativeSnapshot(
+            reference=reference,
+            observed_at=datetime.now(UTC),
+            payload=payload,
+            completeness=Completeness(
+                application=CompleteSection(item_count=1),
+                documents=document_state,
+                comments=response_state,
+            ),
+            evidence=tuple(evidence),
+        )
+
     def normalise(
         self,
         snapshot: NativeSnapshot[OpdcApplicationV1],
     ) -> NormalisedObservation:
-        """Map OPDC fixture fields to the common record."""
+        """Map OPDC-native fields and complete public sections."""
+        payload = snapshot.payload
         evidence = snapshot.evidence[0].digest
         return NormalisedObservation(
             authority_id=self.manifest.id,
             reference=snapshot.reference,
-            proposal=snapshot.payload.development_description,
-            status=snapshot.payload.workflow_status.casefold().replace(" ", "-"),
-            documents=(),
-            comments=(),
+            proposal=payload.development_description,
+            status=payload.workflow_status.casefold().replace(" ", "-"),
+            documents=tuple(
+                DocumentRecord(title=document.title, url=document.url)
+                for document in payload.documents
+            ),
+            comments=tuple(
+                CommentRecord(comment_id=response.response_id, text=response.text)
+                for response in payload.responses
+            ),
             completeness=snapshot.completeness,
             provenance=(
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="opdc-v1",
+            normaliser_version="opdc-v2",
+            metadata=ApplicationMetadata(
+                aliases=payload.alternative_references,
+                application_type=payload.application_type,
+                decision=payload.decision,
+                address=payload.site_name,
+                received_date=payload.received_date,
+                validated_date=payload.validated_date,
+                decision_date=payload.decision_date,
+                location=bng_to_wgs84(payload.easting, payload.northing),
+            ),
         )
 
 
@@ -331,6 +546,7 @@ def _search_request(
     query: OpdcDiscoveryQuery,
     scope: OpdcDiscoveryScope,
 ) -> PortalRequest:
+    parameters: tuple[tuple[str, str], ...]
     if query == OpdcDiscoveryQuery.REGISTERED_WINDOW:
         parameters = (
             ("registrationDateFrom", scope.start.isoformat()),
@@ -345,11 +561,143 @@ def _search_request(
         )
     else:
         parameters = (("status", "registered"),)
+    return _api_request(
+        f"/api/application/search?{urlencode(parameters)}",
+        RequestIntent.SEARCH,
+    )
+
+
+def _api_request(
+    path: str,
+    intent: RequestIntent = RequestIntent.DETAIL,
+) -> PortalRequest:
     return PortalRequest(
-        url=HttpUrl(f"{API_BASE_URL}/api/application/search?{urlencode(parameters)}"),
-        intent=RequestIntent.SEARCH,
+        url=HttpUrl(f"{API_BASE_URL}{path}"),
+        intent=intent,
         headers=_API_HEADERS,
     )
+
+
+def _parse_detail(body: bytes) -> _DetailResponse:
+    try:
+        return _DetailResponse.model_validate_json(body)
+    except ValidationError:
+        return _raise_parse("detail JSON")
+
+
+def _proposal(detail: _DetailResponse) -> str:
+    proposal = _clean_optional(detail.full_proposal) or _clean_optional(detail.proposal)
+    if proposal is None:
+        return _raise_parse("detail proposal")
+    return proposal
+
+
+async def _fetch_documents(
+    session: PortalSession,
+    locator: str,
+    evidence: list[EvidenceCapture],
+) -> tuple[tuple[OpdcDocumentV1, ...], SectionState]:
+    try:
+        capture = await session.fetch(
+            _api_request(f"/api/application/{quote(locator, safe='')}/document")
+        )
+    except SourceUnavailableError:
+        return (), FailedSection(code="source-unavailable")
+    evidence.append(capture)
+    try:
+        documents = _parse_documents(capture.body)
+    except OpdcParseError as error:
+        return (), FailedSection(code=error.code)
+    return documents, collection_state(len(documents))
+
+
+def _parse_documents(body: bytes) -> tuple[OpdcDocumentV1, ...]:
+    try:
+        rows = _DOCUMENT_RESPONSES.validate_json(body, strict=True)
+    except ValidationError:
+        return _raise_parse("documents JSON")
+    identifiers = tuple(row.document_id for row in rows)
+    if len(identifiers) != len(set(identifiers)):
+        return _raise_parse("document identity")
+    return tuple(
+        OpdcDocumentV1(
+            document_id=row.document_id,
+            title=(
+                _clean_optional(row.description)
+                or _clean_optional(row.name)
+                or _clean_optional(row.media_description)
+                or "Document"
+            ),
+            url=HttpUrl(
+                f"{API_BASE_URL}/api/application/document/OPDC/"
+                f"{quote(row.document_id, safe='')}"
+            ),
+            received_date=_parse_api_date(
+                row.received_date,
+                "document received date",
+            ),
+            media_description=_clean_optional(row.media_description),
+            source_name=_clean_optional(row.name),
+        )
+        for row in rows
+    )
+
+
+async def _fetch_responses(
+    session: PortalSession,
+    locator: str,
+    evidence: list[EvidenceCapture],
+) -> tuple[tuple[OpdcResponseV1, ...], SectionState]:
+    try:
+        capture = await session.fetch(
+            _api_request(
+                f"/api/application/{quote(locator, safe='')}/responses",
+                RequestIntent.COMMENTS,
+            )
+        )
+    except SourceUnavailableError:
+        return (), FailedSection(code="source-unavailable")
+    evidence.append(capture)
+    try:
+        responses = _parse_responses(capture.body)
+    except OpdcParseError as error:
+        return (), FailedSection(code=error.code)
+    return responses, collection_state(len(responses))
+
+
+def _parse_responses(body: bytes) -> tuple[OpdcResponseV1, ...]:
+    try:
+        rows = _PUBLIC_RESPONSES.validate_json(body, strict=True)
+    except ValidationError:
+        return _raise_parse("responses JSON")
+    identifiers = tuple(row.reply_id for row in rows)
+    if len(identifiers) != len(set(identifiers)):
+        return _raise_parse("response identity")
+    return tuple(
+        OpdcResponseV1(
+            response_id=str(row.reply_id),
+            text=row.reply_text,
+            received_date=_parse_api_date(row.reply_date, "response date"),
+            response_type=_clean_optional(row.reply_type),
+        )
+        for row in rows
+    )
+
+
+def _parse_api_date(value: str | None, field: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return datetime.fromisoformat(value).date()
+    except ValueError:
+        return _raise_parse(field)
+
+
+def _clean_optional(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
 
 
 def _parse_search(body: bytes) -> tuple[OpdcIdentity, ...]:
