@@ -6,9 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qsl
 
@@ -21,6 +24,7 @@ from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from types import ModuleType
 
 WINDOW = DiscoveryWindow(
     start=date(2026, 8, 18),
@@ -264,6 +268,18 @@ def _pairs(mock: _DorsetMock, path: str) -> list[tuple[tuple[str, str], ...]]:
         for method, request_path, fields in mock.requests
         if method == "POST" and request_path == path
     ]
+
+
+def _qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_dorset.py"
+    name = "_test_qualify_dorset"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -> None:
@@ -528,3 +544,145 @@ def test_dorset_live_detail_rejects_incomplete_document_grid() -> None:
         await session.aclose()
 
     asyncio.run(collect_detail())
+
+
+def test_dorset_qualification_persists_exact_terminal_receipt(tmp_path: Path) -> None:
+    """The dated command proves durable identity, evidence, and zero-fetch replay."""
+    module = _qualification_module()
+    mocks: list[_DorsetMock] = []
+
+    def session_factory() -> HttpxPortalSession:
+        mock = _DorsetMock()
+        mocks.append(mock)
+        return _session(mock)
+
+    fixed_now = datetime(2026, 9, 16, 10, 30, tzinfo=UTC)
+    exit_code = module.main(
+        [
+            "--confirm-live",
+            "--include-open",
+            "--data-dir",
+            str(tmp_path),
+        ],
+        session_factory=session_factory,
+        now=lambda: fixed_now,
+    )
+
+    assert exit_code == 0
+    receipt_path = tmp_path / "dorset-qualification-v1.json"
+    receipt = module.DorsetQualificationReceiptV1.model_validate_json(
+        receipt_path.read_text()
+    )
+    assert receipt.created_at == fixed_now
+    assert receipt.scope.model_dump(mode="json") == {
+        "start": "2026-08-18",
+        "end": "2026-09-16",
+        "include_open": True,
+    }
+    assert receipt.query_inventory == ("received-valid", "outstanding")
+    assert receipt.terminal_checkpoint.live_complete
+    assert receipt.terminal_checkpoint.completed_queries == receipt.query_inventory
+    assert receipt.terminal_checkpoint.active_query is None
+    assert receipt.terminal_checkpoint.next_page == 1
+    assert receipt.terminal_checkpoint.total_pages is None
+    assert receipt.terminal_checkpoint.active_references == ()
+    assert len(receipt.terminal_checkpoint.seen_references) == 21
+    assert receipt.reference_agreement.count == 21
+    assert (
+        len(
+            {
+                receipt.reference_agreement.checkpoint_sha256,
+                receipt.reference_agreement.durable_queue_sha256,
+                receipt.reference_agreement.applications_sha256,
+            }
+        )
+        == 1
+    )
+    assert receipt.counts.model_dump() == {
+        "applications": 21,
+        "discovered_references": 21,
+        "native_versions": 21,
+        "application_versions": 21,
+        "document_versions": 21,
+        "comment_versions": 0,
+        "pending_retries": 0,
+        "failed_sections": 0,
+        "unmapped_records": 0,
+    }
+    assert receipt.costs.initial.fetch_calls == 29
+    assert receipt.costs.initial.successful_requests == 29
+    assert receipt.costs.initial.transferred_bytes > 0
+    assert receipt.costs.initial.attachment_body_requests == 0
+    assert receipt.costs.rerun.model_dump() == {
+        "fetch_calls": 0,
+        "successful_requests": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt.evidence.records == 21
+    assert receipt.evidence.unique_digests == 21
+    assert receipt.evidence.decompressed == 21
+    assert receipt.evidence.digest_matches == 21
+    assert receipt.evidence.failed_digests == ()
+    assert receipt.run_statuses == ("succeeded", "succeeded")
+    assert all(check.ok for check in receipt.checks)
+    assert [cycle.model_dump(mode="json") for cycle in receipt.weekly_cycles] == [
+        {"sequence": 1, "due_on": "2026-09-23", "status": "pending"},
+        {"sequence": 2, "due_on": "2026-09-30", "status": "pending"},
+    ]
+    assert receipt.readiness == "discovery-only"
+    assert receipt.http_max_attempts == 1
+    assert len(mocks) == 2
+    assert mocks[0].requests
+    assert mocks[1].requests == []
+    assert not list(tmp_path.glob(".*.tmp"))
+
+
+def test_dorset_qualification_fails_closed_on_corrupt_evidence(tmp_path: Path) -> None:
+    """A terminal checkpoint cannot hide a corrupt retained gzip member."""
+    module = _qualification_module()
+
+    def session_factory() -> HttpxPortalSession:
+        return _session(_DorsetMock())
+
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+    assert module.main(arguments, session_factory=session_factory) == 0
+    receipt_path = tmp_path / "dorset-qualification-v1.json"
+    receipt_path.unlink()
+    evidence_path = next((tmp_path / "evidence").rglob("*.gz"))
+    evidence_path.write_bytes(b"not-gzip")
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=session_factory,
+        )
+        == 1
+    )
+    assert not receipt_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "error"),
+    [
+        ((), "confirmation-required"),
+        (("--confirm-live",), "include-open-required"),
+    ],
+)
+def test_dorset_qualification_requires_explicit_live_scope(
+    arguments: tuple[str, ...],
+    error: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The live command cannot silently weaken confirmation or open discovery."""
+    module = _qualification_module()
+    exit_code = module.main([*arguments, "--data-dir", str(tmp_path)])
+
+    assert exit_code == 2
+    assert json.loads(capsys.readouterr().err) == {"error": error}
