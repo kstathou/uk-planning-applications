@@ -148,11 +148,21 @@ class _QualificationSession:
         self,
         weekly_results: bytes | None = None,
         search_form: bytes | None = None,
+        search_results: bytes | None = None,
+        weekly_form: bytes | None = None,
+        detail: bytes | None = None,
     ) -> None:
         self.requests: list[PortalRequest] = []
         self._bytes = 0
         self._weekly_results = weekly_results or _weekly_results()
         self._search_form = _search_form() if search_form is None else search_form
+        self._search_results = (
+            b"<main><p>No Results Found</p></main>"
+            if search_results is None
+            else search_results
+        )
+        self._weekly_form = _weekly_form() if weekly_form is None else weekly_form
+        self._detail = _detail() if detail is None else detail
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
@@ -160,15 +170,15 @@ class _QualificationSession:
         if url == cheshire._SEARCH_URL and request.method == RequestMethod.GET:
             body = self._search_form
         elif url == cheshire._SEARCH_POST_URL:
-            body = b"<main><p>No Results Found</p></main>"
+            body = self._search_results
         elif (
             url == cheshire._WEEKLY_RECEIVED_URL and request.method == RequestMethod.GET
         ):
-            body = _weekly_form()
+            body = self._weekly_form
         elif url == cheshire._WEEKLY_RECEIVED_URL:
             body = self._weekly_results
         elif url == cheshire._DETAIL_URL.format(locator="406569"):
-            body = _detail()
+            body = self._detail
         else:
             raise AssertionError(request)
         self._bytes += len(body)
@@ -538,8 +548,8 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
     assert result == 1
     assert len(sessions) == 1
     assert len(sessions[0].requests) == 5
-    receipt_path = data_dir / "cheshire-east-qualification-blocker-v1.json"
-    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
         receipt_path.read_text(encoding="utf-8")
     )
     assert receipt.outcome == "blocked"
@@ -547,10 +557,20 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
     assert receipt.scope.start == date(2026, 8, 18)
     assert receipt.scope.end == date(2026, 9, 16)
     assert receipt.query_inventory == (
+        "source-access|search-form",
         "recent|valid|2026-08-18|2026-09-16",
+        "source-access|weekly-form",
         "older-open|weekly-received|2024-01-01",
         "detail|406569",
     )
+    assert tuple(request.key for request in receipt.attempted_requests) == (
+        receipt.query_inventory
+    )
+    assert str(receipt.attempted_requests[0].url) == (
+        "https://pa.cheshireeast.gov.uk/planning/index.html?fa=search"
+    )
+    assert receipt.attempted_requests[0].method == RequestMethod.GET
+    assert receipt.attempted_requests[0].form == ()
     assert tuple(blocker.code for blocker in receipt.blockers) == (
         "recent-window-fidelity-contradicted",
         "weekly-list-terminality-unproven",
@@ -621,17 +641,25 @@ def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
     assert result == 1
     assert len(sessions) == 1
     assert len(sessions[0].requests) == 1
-    receipt_path = data_dir / "cheshire-east-qualification-blocker-v1.json"
-    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
         receipt_path.read_text(encoding="utf-8")
     )
     assert receipt.source_contract is None
     assert receipt.query_inventory == ("source-access|search-form",)
     assert receipt.pending_query_inventory == (
         "recent|valid|2026-08-18|2026-09-16",
+        "source-access|weekly-form",
         "older-open|weekly-received|2024-01-01",
         "detail|406569",
     )
+    assert len(receipt.attempted_requests) == 1
+    assert receipt.attempted_requests[0].key == "source-access|search-form"
+    assert str(receipt.attempted_requests[0].url) == (
+        "https://pa.cheshireeast.gov.uk/planning/index.html?fa=search"
+    )
+    assert receipt.attempted_requests[0].method == RequestMethod.GET
+    assert receipt.attempted_requests[0].form == ()
     assert tuple(blocker.code for blocker in receipt.blockers) == (
         "official-search-form-unavailable",
     )
@@ -688,8 +716,8 @@ def test_cheshire_total_or_next_link_cannot_claim_weekly_terminality(
     )
 
     assert result == 1
-    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
-        (data_dir / "cheshire-east-qualification-blocker-v1.json").read_text(
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
             encoding="utf-8"
         )
     )
@@ -763,8 +791,8 @@ def test_cheshire_changed_search_method_becomes_a_typed_blocker(
     )
 
     assert result == 1
-    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
-        (data_dir / "cheshire-east-qualification-blocker-v1.json").read_text(
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
             encoding="utf-8"
         )
     )
@@ -773,3 +801,103 @@ def test_cheshire_changed_search_method_becomes_a_typed_blocker(
         "official-search-form-unavailable",
     )
     assert receipt.costs.request_count == 1
+
+
+@pytest.mark.parametrize(
+    ("overrides", "attempted_keys"),
+    [
+        (
+            {"search_results": b"<main></main>"},
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+            ),
+        ),
+        (
+            {"weekly_form": b"<main></main>"},
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+                "source-access|weekly-form",
+            ),
+        ),
+        (
+            {"weekly_results": b"<main></main>"},
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+                "source-access|weekly-form",
+                "older-open|weekly-received|2024-01-01",
+            ),
+        ),
+        (
+            {"detail": b"<main></main>"},
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+                "source-access|weekly-form",
+                "older-open|weekly-received|2024-01-01",
+                "detail|406569",
+            ),
+        ),
+    ],
+)
+def test_cheshire_contract_drift_retains_a_resumable_blocker(
+    tmp_path: Path,
+    overrides: dict[str, bytes],
+    attempted_keys: tuple[str, ...],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    result = module.main(
+        arguments,
+        session_factory=lambda: _QualificationSession(**overrides),
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt.source_contract is None
+    assert receipt.query_inventory == attempted_keys
+    assert tuple(request.key for request in receipt.attempted_requests) == attempted_keys
+    assert tuple(blocker.code for blocker in receipt.blockers) == (
+        "official-source-contract-drift",
+    )
+    assert len(receipt.evidence) == len(attempted_keys)
+    assert receipt.costs.request_count == len(attempted_keys)
+    assert receipt.pending_query_inventory == tuple(
+        key
+        for key in (
+            "source-access|search-form",
+            "recent|valid|2026-08-18|2026-09-16",
+            "source-access|weekly-form",
+            "older-open|weekly-received|2024-01-01",
+            "detail|406569",
+        )
+        if key not in attempted_keys
+    )
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "offline resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert module.main(
+        [*arguments, "--resume"],
+        session_factory=forbidden_factory,
+        now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+    ) == 1
