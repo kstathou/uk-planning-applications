@@ -64,6 +64,7 @@ from yimby.registry import AuthorityRegistry, pilot_registry
 from yimby.store import SqliteStore
 from yimby.transport import (
     AttachmentBodyBlockedError,
+    FixtureResponse,
     FixtureSession,
     PortalRequest,
     RequestHeader,
@@ -466,6 +467,24 @@ def test_browser_session_rejects_request_headers_it_cannot_apply() -> None:
             await session.fetch(
                 PortalRequest(
                     url=HttpUrl("https://browser.test/page"),
+                    intent=RequestIntent.DETAIL,
+                    headers=(RequestHeader(name="x-client", value="OPDC"),),
+                )
+            )
+
+    asyncio.run(exercise())
+
+
+def test_fixture_session_rejects_request_headers_it_cannot_apply() -> None:
+    """Fixture replay cannot silently discard authority routing headers."""
+    url = "https://fixture.test/page"
+    session = FixtureSession({url: FixtureResponse(body=b"fixture")})
+
+    async def exercise() -> None:
+        with pytest.raises(ValueError, match="request headers"):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl(url),
                     intent=RequestIntent.DETAIL,
                     headers=(RequestHeader(name="x-client", value="OPDC"),),
                 )
