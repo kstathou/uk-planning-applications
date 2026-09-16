@@ -138,17 +138,64 @@ def _result_page(
     rows: tuple[tuple[str, str], ...],
     *,
     count: int,
+    label: str = "Reference",
 ) -> bytes:
     rendered = "".join(
         (
             '<li class="searchresult">'
             f'<a href="applicationDetails.do?keyVal={locator}&amp;activeTab=summary">'
             "Details</a>"
-            f"<p><span>Reference:</span><span>{reference}</span></p></li>"
+            f"<p><span>{label}:</span><span>{reference}</span></p></li>"
         )
         for reference, locator in rows
     )
     return (f'<div data-result-count="{count}"></div><ul>{rendered}</ul>').encode()
+
+
+def _uncounted_result_page(
+    rows: tuple[tuple[str, str], ...],
+    *,
+    label: str = "Ref. No",
+    capacity: str | None = "10",
+    current_page: str | None = "1",
+    numbered_page: int | None = None,
+) -> bytes:
+    rendered = "".join(
+        (
+            '<li class="searchresult">'
+            f'<a href="applicationDetails.do?keyVal={locator}&amp;activeTab=summary">'
+            "Details</a>"
+            f"<p>{label}: {reference}</p></li>"
+        )
+        for reference, locator in rows
+    )
+    page_control = (
+        ""
+        if current_page is None
+        else (
+            f'<input type="hidden" name="searchCriteria.page" value="{current_page}">'
+        )
+    )
+    capacity_control = (
+        ""
+        if capacity is None
+        else (
+            '<select name="searchCriteria.resultsPerPage">'
+            f'<option value="{capacity}" selected>{capacity}</option></select>'
+        )
+    )
+    pagination = (
+        ""
+        if numbered_page is None
+        else (
+            '<a href="pagedSearchResults.do?action=page&amp;searchCriteria.page='
+            f'{numbered_page}">{numbered_page}</a>'
+        )
+    )
+    return (
+        f'<form id="searchResults">{page_control}{capacity_control}</form>'
+        f"<ul>{rendered}</ul>{pagination}"
+    ).encode()
 
 
 def _summary(reference: str, authority_id: AuthorityId) -> bytes:
@@ -204,6 +251,8 @@ class _IdoxMock:
         summary_mismatch: bool = False,
         leeds_unexpected_detail: bool = False,
         search_type: str = "Application",
+        uncounted_terminal: bool = False,
+        uncounted_label: str = "Ref. No",
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -216,6 +265,8 @@ class _IdoxMock:
         self.summary_mismatch = summary_mismatch
         self.leeds_unexpected_detail = leeds_unexpected_detail
         self.search_type = search_type
+        self.uncounted_terminal = uncounted_terminal
+        self.uncounted_label = uncounted_label
         self.current_date_type = ""
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
@@ -243,6 +294,20 @@ class _IdoxMock:
             assert fields[5][0] == "searchType"
             assert fields[-2:] == (("tag", "one"), ("tag", "two"))
             self.current_date_type = dict(fields)["dateType"]
+            if self.uncounted_terminal and self.current_date_type == "DC_Validated":
+                return httpx.Response(
+                    200,
+                    content=_uncounted_result_page(
+                        tuple(
+                            zip(
+                                self.case.references[:3],
+                                self.case.locators[:3],
+                                strict=True,
+                            )
+                        ),
+                        label=self.uncounted_label,
+                    ),
+                )
             if self.current_date_type == "DC_Decided":
                 return httpx.Response(
                     200,
@@ -402,6 +467,35 @@ def test_weekly_request_preserves_authoritative_hidden_form_fields(
         ("searchType", search_type),
         ("tag", "one"),
         ("tag", "two"),
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize("label", ["Reference", "Ref. No"])
+def test_authority_accepts_live_shaped_uncounted_terminal_page(
+    case: _Case,
+    label: str,
+) -> None:
+    """A non-empty under-capacity first page without pagination is complete."""
+    session = _session(_IdoxMock(case, uncounted_terminal=True, uncounted_label=label))
+    package = pilot_registry().get(case.authority_id)
+
+    async def discover_first_page() -> DurableDiscoveryBatch:
+        batches = cast(
+            "AsyncGenerator[DurableDiscoveryBatch]",
+            package.discover(session, WEEK, None),
+        )
+        batch = await anext(batches)
+        await batches.aclose()
+        await session.aclose()
+        return batch
+
+    batch = asyncio.run(discover_first_page())
+    assert [reference.reference for reference in batch.references] == list(
+        case.references[:3]
+    )
+    assert [reference.locator for reference in batch.references] == list(
+        case.locators[:3]
     )
 
 
@@ -685,6 +779,64 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
         await stalled_session.aclose()
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize("label", ["Reference", "Ref. No", "Ref No"])
+def test_authority_search_result_reference_labels(case: _Case, label: str) -> None:
+    """Recorded IDOX reference labels map to one source reference field."""
+    parsed = getattr(case.module, "_parse_search_page")(
+        _result_page(
+            ((case.references[0], case.locators[0]),),
+            count=1,
+            label=label,
+        )
+    )
+    assert parsed.references[0].reference == case.references[0]
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize(
+    ("rows", "capacity", "current_page", "numbered_page"),
+    [
+        ((), "10", "1", None),
+        ((("A", "KEY"),), "1", "1", None),
+        ((("A", "KEY"),), None, "1", None),
+        ((("A", "KEY"),), "many", "1", None),
+        ((("A", "KEY"),), "0", "1", None),
+        ((("A", "KEY"),), "10", "1", 2),
+        ((("A", "KEY"),), "10", "2", None),
+        ((("A", "KEY"),), "10", None, None),
+    ],
+    ids=[
+        "empty",
+        "full-capacity",
+        "missing-capacity",
+        "invalid-capacity",
+        "zero-capacity",
+        "numbered-pagination",
+        "later-page",
+        "missing-page",
+    ],
+)
+def test_authority_rejects_ambiguous_uncounted_result_pages(
+    case: _Case,
+    rows: tuple[tuple[str, str], ...],
+    capacity: str | None,
+    current_page: str | None,
+    numbered_page: int | None,
+) -> None:
+    """Missing totals never imply completeness for ambiguous page shapes."""
+    parse_error = _member(case, "ParseError")
+    with pytest.raises(parse_error, match="reported result count"):
+        getattr(case.module, "_parse_search_page")(
+            _uncounted_result_page(
+                rows,
+                capacity=capacity,
+                current_page=current_page,
+                numbered_page=numbered_page,
+            )
+        )
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
