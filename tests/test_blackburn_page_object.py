@@ -195,7 +195,7 @@ def test_blackburn_page_object_opens_detail_without_document_actions() -> None:
     page.locator.assert_called_once_with(
         '#application_details[data-application-id="178041"]'
     )
-    page.application.wait_for.assert_awaited_once_with()
+    page.application.wait_for.assert_awaited_once_with(timeout=20_000)
     page.get_by_role.assert_not_called()
     assert pause.await_count == 1
     assert capture.body == b"<div id='application_details'></div>"
@@ -302,6 +302,29 @@ def test_blackburn_page_object_rejects_ambiguous_detail_routes() -> None:
             session.application(
                 BlackburnLocatorV1(
                     record_id="not-numeric",
+                    public_reference="10/26/0747",
+                )
+            )
+        )
+
+    timed_out = _detail_page()
+    timed_out.application.wait_for = AsyncMock(
+        side_effect=PlaywrightTimeoutError("sanitised timeout")
+    )
+    body = MagicMock()
+    body.inner_text = AsyncMock(return_value="ordinary error page")
+    timed_out.locator.side_effect = lambda selector: (
+        body if selector == "body" else timed_out.application
+    )
+    session = BlackburnPlaywrightSession(
+        _InteractiveBoundary(cast("Page", timed_out)),
+        pause=AsyncMock(),
+    )
+    with pytest.raises(blackburn_page.BlackburnPageObjectRouteError):
+        asyncio.run(
+            session.application(
+                BlackburnLocatorV1(
+                    record_id="178041",
                     public_reference="10/26/0747",
                 )
             )
