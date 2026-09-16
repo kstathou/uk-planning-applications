@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from yimby.authorities.opdc import OPDC_PACKAGE
 from yimby.authorities.opdc.adapter import (
@@ -58,6 +58,7 @@ _SCOPE_MISMATCH = "scope-mismatch"
 _LIVE_PAGE = "live"
 _ATTACHMENT_PATH = "/api/application/document/opdc/"
 _APPLICATION_EVIDENCE_COUNT = 3
+_MINIMUM_QUALIFICATION_RUNS = 2
 _COMMITMENT_CANONICALIZATION = "sha256-canonical-json-v1"
 _CHECK_NAMES = (
     "terminal-checkpoint",
@@ -175,6 +176,8 @@ class _ApplicationCaptureCommitmentInput(FrozenModel):
 
 class _OpdcQualificationReceiptV1(FrozenModel):
     """Fields shared by private and sanitized OPDC qualification receipts."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1] = 1
     authority_id: Literal["opdc"] = "opdc"
@@ -474,6 +477,28 @@ def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
     )
 
 
+def _durable_bootstrap_cost(store: SqliteStore) -> QualificationCost | None:
+    runs = store.run_costs(_AUTHORITY_ID)
+    if (
+        len(runs) < _MINIMUM_QUALIFICATION_RUNS
+        or runs[-1].status != RunStatus.SUCCEEDED
+        or runs[-1].request_count != 0
+        or runs[-1].transferred_bytes != 0
+        or runs[-2].status != RunStatus.SUCCEEDED
+        or any(run.status == RunStatus.RUNNING for run in runs[:-1])
+    ):
+        return None
+    request_count = sum(run.request_count for run in runs[:-1])
+    transferred_bytes = sum(run.transferred_bytes for run in runs[:-1])
+    if request_count == 0 or transferred_bytes == 0:
+        return None
+    return QualificationCost(
+        request_count=request_count,
+        transferred_bytes=transferred_bytes,
+        attachment_body_requests=0,
+    )
+
+
 def _base_checks(
     store: SqliteStore,
     snapshot: QualificationSnapshot,
@@ -579,8 +604,11 @@ async def _qualify(
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     run_statuses = store.run_statuses()[prior_status_count:]
+    bootstrap_cost = _durable_bootstrap_cost(store)
+    if bootstrap_cost is None:
+        raise QualificationFailedError(("bootstrap-provenance",))
     final_checks = (
-        *_base_checks(store, final_snapshot, config.scope, initial),
+        *_base_checks(store, final_snapshot, config.scope, bootstrap_cost),
         QualificationCheck(
             name="idempotent-rerun",
             ok=first_snapshot == final_snapshot,
@@ -622,7 +650,7 @@ async def _qualify(
         identities=identities,
         counts=_counts(final_snapshot),
         costs=QualificationCosts(
-            initial=initial,
+            initial=bootstrap_cost,
             rerun=ZeroNetworkCost.model_validate(rerun.model_dump()),
         ),
         run_statuses=run_statuses,
@@ -660,13 +688,13 @@ def _receipt_matches_store(
         config.scope,
         receipt.costs.initial,
     )
+    durable_bootstrap_cost = _durable_bootstrap_cost(store)
     return (
         receipt.scope == config.scope
         and receipt.query_inventory == expected_queries
         and receipt.identities == expected_identities
         and receipt.counts == _counts(snapshot)
-        and receipt.costs.initial.request_count > 0
-        and receipt.costs.initial.transferred_bytes > 0
+        and receipt.costs.initial == durable_bootstrap_cost
         and receipt.run_statuses == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED)
         and store.run_statuses()[-2:] == receipt.run_statuses
         and tuple(check.name for check in receipt.checks) == _CHECK_NAMES
@@ -708,21 +736,6 @@ def _read_receipt(
     return receipt
 
 
-def _has_acquisition_state(store: SqliteStore) -> bool:
-    state = store.discovery_state(_AUTHORITY_ID)
-    snapshot = store.qualification_snapshot(_AUTHORITY_ID)
-    return bool(
-        store.run_statuses()
-        or state.checkpoint is not None
-        or state.queued
-        or snapshot.applications
-        or snapshot.native_versions
-        or snapshot.application_versions
-        or snapshot.document_versions
-        or snapshot.comment_versions
-    )
-
-
 async def _qualify_or_recover(
     store: SqliteStore,
     config: _Config,
@@ -744,7 +757,9 @@ async def _qualify_or_recover(
         if candidate != proof_path:
             _write_receipt(proof_path, receipt)
         return receipt
-    if _has_acquisition_state(store):
+    if _terminal_checkpoint(store, config.scope) is not None or any(
+        run.status == RunStatus.RUNNING for run in store.run_costs(_AUTHORITY_ID)
+    ):
         raise QualificationFailedError(("bootstrap-provenance",))
     receipt = await _qualify(store, config, session_factory, now)
     _write_receipt(proof_path, receipt)

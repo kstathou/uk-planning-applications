@@ -39,6 +39,7 @@ from yimby.domain import (
     QualificationSnapshot,
     RetainedNativeRecord,
     RetryItem,
+    RunCostSnapshot,
     RunMetrics,
     RunOutcome,
     RunStatus,
@@ -954,6 +955,26 @@ class SqliteStore:
             RunStatus(row["status"])
             for row in self._connection.execute(
                 "SELECT status FROM run_details ORDER BY rowid"
+            )
+        )
+
+    def run_costs(self, authority_id: AuthorityId) -> tuple[RunCostSnapshot, ...]:
+        """Return one authority's durable run costs in creation order."""
+        return tuple(
+            RunCostSnapshot(
+                status=RunStatus(row["status"]),
+                request_count=row["request_count"],
+                transferred_bytes=row["transferred_bytes"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT detail.status, detail.request_count, detail.transferred_bytes
+                FROM run_details AS detail
+                JOIN runs AS run ON run.id = detail.run_id
+                WHERE run.authority_id = ?
+                ORDER BY detail.rowid
+                """,
+                (authority_id,),
             )
         )
 
