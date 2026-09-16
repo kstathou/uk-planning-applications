@@ -6,8 +6,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import json
+import sys
 from datetime import date
 from hashlib import sha256
+from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +35,7 @@ from yimby.domain import (
     DiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
+    RunStatus,
     SourceReference,
     TransportMode,
 )
@@ -48,7 +54,6 @@ from yimby.transport import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
     from playwright.async_api import Page
 
@@ -388,6 +393,30 @@ class _BrowserSession:
         return None
 
 
+class _QualificationBrowserSession(_BrowserSession):
+    def __init__(
+        self,
+        pages: dict[int, haringey.HaringeySearchPageV1],
+    ) -> None:
+        super().__init__(pages)
+        self.closed = False
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _haringey_qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_haringey.py"
+    name = "_test_qualify_haringey"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _haringey_package() -> AuthorityPackage[
     haringey.HaringeyApplicationV1, haringey.HaringeyCheckpointV1
 ]:
@@ -396,6 +425,133 @@ def _haringey_package() -> AuthorityPackage[
         haringey.HaringeyApplicationV1,
         haringey.HaringeyCheckpointV1,
     )
+
+
+def test_haringey_qualification_requires_explicit_safe_options(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reject implicit live access, incomplete scope, and unsafe target reuse."""
+    module = _haringey_qualification_module()
+    created = 0
+
+    async def session_factory() -> _QualificationBrowserSession:
+        nonlocal created
+        created += 1
+        return _QualificationBrowserSession({})
+
+    base = [
+        "--data-dir",
+        str(tmp_path / "missing-confirmation"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(base, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "confirmation-required"
+
+    without_open = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "missing-open"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+    ]
+    assert module.main(without_open, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "include-open-required"
+
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "existing").write_text("preserve", encoding="utf-8")
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(occupied),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 2
+    assert json.loads(capsys.readouterr().err)["error"] == "resume-required"
+    assert (occupied / "existing").read_text(encoding="utf-8") == "preserve"
+    assert created == 0
+
+
+@pytest.mark.parametrize(
+    ("start", "expected_checks", "source_error", "pages"),
+    [
+        (
+            "2026-08-18",
+            ["bounded-30-day-discovery", "complete-older-open-inventory"],
+            "HaringeyWindowUnavailableError",
+            {},
+        ),
+        (
+            "2026-09-10",
+            ["complete-older-open-inventory"],
+            "HaringeyOlderOpenUnavailableError",
+            {1: _search_page(1, (_search_hit(2582),), pages=1, total=1)},
+        ),
+    ],
+)
+def test_haringey_qualification_refuses_incomplete_live_discovery(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    start: str,
+    expected_checks: list[str],
+    source_error: str,
+    pages: dict[int, haringey.HaringeySearchPageV1],
+) -> None:
+    """Persist the failed run but never emit a receipt for an incomplete source."""
+    module = _haringey_qualification_module()
+    data_dir = tmp_path / source_error
+    sessions: list[_QualificationBrowserSession] = []
+
+    async def session_factory() -> _QualificationBrowserSession:
+        session = _QualificationBrowserSession(pages)
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            start,
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+        package=_haringey_package(),
+    )
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    error = json.loads(captured.err)
+    assert error == {
+        "error": "qualification-failed",
+        "failed_checks": expected_checks,
+        "source_error": source_error,
+    }
+    assert len(sessions) == 1
+    assert sessions[0].closed is True
+    assert not (data_dir / "haringey-qualification-v1.json").exists()
+    assert not (data_dir / ".haringey-qualification-v1.json.tmp").exists()
+    store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    assert store.run_statuses() == (RunStatus.FAILED,)
+    store.close()
 
 
 def test_haringey_public_collector_keeps_files_metadata_only(tmp_path: Path) -> None:
