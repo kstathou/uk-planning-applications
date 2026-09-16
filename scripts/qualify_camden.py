@@ -58,28 +58,38 @@ async def qualify(data_dir: Path, window: DiscoveryWindow) -> dict[str, object]:
                 ):
                     message = "Camden API collection proof failed"
                     raise ValueError(message)
+                application_count = len(report.applications)
+                if not (
+                    application_count == checkpoint.expected == checkpoint.enumerated
+                    and report.attachment_body_requests == 0
+                ):
+                    message = "Camden API collection counts or attachment policy failed"
+                    raise ValueError(message)
                 passes.append(
                     {
-                        "applications_collected": len(report.applications),
+                        "applications_collected": application_count,
                         "source_applications": checkpoint.expected,
                         "enumerated": checkpoint.enumerated,
                         "source_last_uploaded": checkpoint.watermark,
                         "requests": len(session.requested_urls),
                         "response_bytes": session.transferred_bytes,
-                        "attachment_body_requests": session.attachment_body_requests,
+                        "attachment_body_requests": report.attachment_body_requests,
                         "evidence": integrity.model_dump(mode="json"),
                     }
                 )
                 states.append(store.authority_semantic_state(authority))
             finally:
                 await session.aclose()
+        if states[0] != states[1]:
+            message = "Camden API immediate refresh changed semantic state"
+            raise ValueError(message)
         return {
             "schema_version": 1,
             "source": DATASET_URL,
             "created_at": datetime.now(UTC).isoformat(),
             "scope": window.model_dump(mode="json"),
             "passes": passes,
-            "immediate_refresh_unchanged": states[0] == states[1],
+            "immediate_refresh_unchanged": True,
             "database_integrity": store.database_integrity(),
             "coverage": (
                 "Published application metadata only; "

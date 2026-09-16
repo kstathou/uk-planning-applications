@@ -192,6 +192,8 @@ class CamdenOpenDataAdapter:
                         "$select": (
                             "count(distinct pk) AS total,"
                             "count(distinct application_number) AS references,"
+                            "count(distinct (pk || '|' || application_number)) "
+                            "AS pairs,"
                             "max(last_uploaded) AS watermark"
                         ),
                         "$where": where,
@@ -203,7 +205,11 @@ class CamdenOpenDataAdapter:
         rows = _ROWS.validate_json(capture.body)
         if len(rows) != 1 or "total" not in rows[0]:
             _fail("missing source count")
-        if rows[0].get("references") != rows[0]["total"]:
+        if not (
+            rows[0].get("references")
+            == rows[0].get("pairs")
+            == rows[0]["total"]
+        ):
             _fail("application references and primary keys are not one-to-one")
         return (
             int(str(rows[0]["total"])),
