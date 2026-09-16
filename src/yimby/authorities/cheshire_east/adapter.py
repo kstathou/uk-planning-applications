@@ -255,6 +255,8 @@ def parse_search_form(body: bytes) -> Tag:
     _reject_external_form_controls(soup, form)
     if str(form.get("method", "get")).casefold() != "post":
         raise CheshireEastFormMethodUnavailableError
+    if _effective_form_enctype(form) != "application/x-www-form-urlencoded":
+        _raise_parse("search form encoding")
     if form.get("name") != "form":
         _raise_parse("search form name")
     if urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _SEARCH_POST_URL:
@@ -311,6 +313,10 @@ def _is_effectively_disabled(control: Tag) -> bool:
 
 def _reject_external_form_controls(soup: BeautifulSoup, form: Tag) -> None:
     form_id = str(form.get("id", ""))
+    for control in form.select("button, input, select, textarea"):
+        explicit_owner = str(control.get("form", ""))
+        if explicit_owner and explicit_owner != form_id:
+            _raise_parse("reassigned form control")
     if not form_id:
         return
     for control in soup.select(f'[form="{form_id}"]'):
@@ -319,6 +325,12 @@ def _reject_external_form_controls(soup: BeautifulSoup, form: Tag) -> None:
             *control.parents,
         ):
             _raise_parse("external associated form control")
+
+
+def _effective_form_enctype(form: Tag) -> str:
+    return (
+        str(form.get("enctype", "application/x-www-form-urlencoded")).strip().casefold()
+    )
 
 
 def valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
@@ -412,6 +424,7 @@ def parse_weekly_form(body: bytes) -> Tag:
     _reject_external_form_controls(soup, form)
     if (
         str(form.get("method", "get")).casefold() != "post"
+        or _effective_form_enctype(form) != "application/x-www-form-urlencoded"
         or urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _WEEKLY_RECEIVED_URL
     ):
         _raise_parse("weekly received form")
@@ -494,6 +507,8 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         _raise_parse("search result boundary")
     marker = zero_markers[0]
     marker_parent = cast("Tag", marker.parent)
+    if _pagination_links(container) or _has_unverified_total_signal(container):
+        _raise_parse("zero result boundary")
     if (
         marker_parent.parent is not container
         or set(map(str, marker_parent.get_attribute_list("class"))) != {"push-30-t"}
@@ -502,6 +517,7 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         or container.get_text(" ", strip=True) != marker.get_text(" ", strip=True)
         or _direct_tags(container) != (marker_parent,)
         or _direct_tags(marker_parent) != (marker,)
+        or _direct_tags(marker)
         or not _all_rendered([marker])
         or container.select("script, style, template, title, noscript")
     ):

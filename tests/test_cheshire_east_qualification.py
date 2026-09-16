@@ -750,9 +750,7 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
     invalid_forms = (
         b"<html></html>",
         _weekly_form().replace(b'method="post"', b'method="get"'),
-        _weekly_form().replace(
-            b'method="post"', b'method="post" enctype="text/plain"'
-        ),
+        _weekly_form().replace(b'method="post"', b'method="post" enctype="text/plain"'),
         _weekly_form().replace(
             b'<input type="text" id="week" name="week"',
             b'<input form="other" type="text" id="week" name="week"',
