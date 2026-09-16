@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import sqlite3
 from contextlib import closing
@@ -62,7 +63,7 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
 )
-from yimby.evidence import EvidenceStore
+from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.exporting import (
     PUBLIC_ALLOWLIST,
     ExportFormat,
@@ -576,6 +577,22 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     reopened.close()
 
 
+def test_retained_evidence_rejects_valid_gzip_with_wrong_digest(
+    tmp_path: Path,
+) -> None:
+    """A readable replacement body is still corrupt when its digest differs."""
+    store = _store(tmp_path)
+    _collect_barnet(store)
+    evidence_path = next((tmp_path / "evidence").rglob("*.gz"))
+    relative_path = str(evidence_path.relative_to(tmp_path / "evidence"))
+    evidence_path.write_bytes(gzip.compress(b"altered but readable", mtime=0))
+
+    assert store.invalid_evidence_paths() == (relative_path,)
+    with pytest.raises(EvidenceIntegrityError, match=relative_path):
+        store.retained_native_records()
+    store.close()
+
+
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
     """Public output is allowlisted and every format is deterministic/readable."""
     store = _store(tmp_path / "data")
@@ -747,7 +764,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -783,7 +800,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()

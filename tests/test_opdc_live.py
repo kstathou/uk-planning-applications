@@ -301,14 +301,26 @@ def test_opdc_live_discovery_exhausts_exact_full_array_queries() -> None:
         OpdcCompletedQuery(
             query=OpdcDiscoveryQuery.REGISTERED_WINDOW,
             result_total=2,
+            identities=(
+                OpdcIdentity(reference="26/0001/FULOPDC", locator="1"),
+                OpdcIdentity(reference="26/0002/FULOPDC", locator="2"),
+            ),
         ),
         OpdcCompletedQuery(
             query=OpdcDiscoveryQuery.DETERMINED_WINDOW,
             result_total=2,
+            identities=(
+                OpdcIdentity(reference="26/0002/FULOPDC", locator="2"),
+                OpdcIdentity(reference="26/0003/FULOPDC", locator="3"),
+            ),
         ),
         OpdcCompletedQuery(
             query=OpdcDiscoveryQuery.REGISTERED_OPEN,
             result_total=2,
+            identities=(
+                OpdcIdentity(reference="26/0001/FULOPDC", locator="1"),
+                OpdcIdentity(reference="15/0004/FULOPDC", locator="4"),
+            ),
         ),
     )
     assert final.seen_references == (
@@ -436,8 +448,15 @@ def test_opdc_live_checkpoint_and_cross_query_identity_must_be_coherent() -> Non
                 OpdcCompletedQuery(
                     query=OpdcDiscoveryQuery.DETERMINED_WINDOW,
                     result_total=0,
+                    identities=(),
                 ),
             ),
+        )
+    with pytest.raises(ValueError, match="result total"):
+        OpdcCompletedQuery(
+            query=OpdcDiscoveryQuery.REGISTERED_WINDOW,
+            result_total=1,
+            identities=(),
         )
     with pytest.raises(ValueError, match="identity"):
         OpdcCheckpointV1(
@@ -799,6 +818,16 @@ def test_opdc_qualification_persists_typed_proof_and_zero_network_rerun(
     }
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
     assert all(check["ok"] for check in receipt["checks"])
+    store = _store(data_dir)
+    for record in store.retained_native_records():
+        locator = record.reference.locator
+        assert locator is not None
+        assert tuple(str(capture.url) for capture in record.evidence) == (
+            _detail_url(locator),
+            _detail_url(locator, "/document"),
+            _detail_url(locator, "/responses"),
+        )
+    store.close()
     receipt_path = data_dir / "opdc-qualification-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
 
