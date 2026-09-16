@@ -174,7 +174,7 @@ class _QualificationSession:
         self._weekly_results = weekly_results or _weekly_results()
         self._search_form = _search_form() if search_form is None else search_form
         self._search_results = (
-            b"<main><p>No Results Found</p></main>"
+            b'<div class="centered application-list"><p>No Results Found</p></div>'
             if search_results is None
             else search_results
         )
@@ -323,7 +323,26 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
     assert result.explicit_zero is False
     assert result.results[0].public_reference == "26/1/FUL"
 
-    for body in (b"<main></main>", b"<p>No Results Found</p><p>No Results Found</p>"):
+    zero = cheshire.parse_search_boundary(
+        b'<div class="centered application-list"><p>No Results Found</p></div>'
+    )
+    assert zero.explicit_zero is True
+
+    for body in (
+        b"<main></main>",
+        b"<p>No Results Found</p>",
+        b'<div class="centered application-list"><script>No Results Found</script></div>',
+        b'<div class="centered application-list"><style>No Results Found</style></div>',
+        b'<div class="centered application-list"><template>No Results Found</template></div>',
+        b'<div class="centered application-list"><title>No Results Found</title></div>',
+        b'<div class="centered application-list"><noscript>No Results Found</noscript></div>',
+        b'<div class="centered application-list"><p hidden>No Results Found</p></div>',
+        b'<div class="centered application-list"><p aria-hidden="true">No Results Found</p></div>',
+        b'<div class="centered application-list"><p style="display:none">No Results Found</p></div>',
+        b'<div class="centered application-list"><p>No Results Found</p>'
+        + _search_results()
+        + b"</div>",
+    ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_boundary(body)
 
@@ -346,6 +365,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<textarea name="proposal">House</textarea>'
             b'<input name="proposal" value="Other">',
         ),
+        _search_form() + _search_form(),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_form(body)
@@ -536,6 +556,67 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
             expected_reference="26/3335/PRIOR-1A",
             expected_locator="406569",
         )
+
+
+def test_cheshire_document_boundary_rejects_ambiguous_or_unscoped_controls() -> None:
+    duplicate_section = BeautifulSoup(_detail(), "html.parser")
+    section = duplicate_section.select_one("#documents")
+    assert isinstance(section, Tag)
+    duplicate_section.append(BeautifulSoup(str(section), "html.parser"))
+
+    duplicate_table = BeautifulSoup(_detail(), "html.parser")
+    table = duplicate_table.select_one("table#application_documents")
+    table_section = duplicate_table.select_one("#documents")
+    assert isinstance(table, Tag)
+    assert isinstance(table_section, Tag)
+    table_section.append(BeautifulSoup(str(table), "html.parser"))
+
+    duplicate_loaded = BeautifulSoup(_detail(), "html.parser")
+    loaded = duplicate_loaded.select_one(
+        "#all_documents_loaded_application_documents"
+    )
+    loaded_section = duplicate_loaded.select_one("#documents")
+    assert isinstance(loaded, Tag)
+    assert isinstance(loaded_section, Tag)
+    loaded_section.append(BeautifulSoup(str(loaded), "html.parser"))
+
+    duplicate_show_more = BeautifulSoup(_detail(), "html.parser")
+    show_more = duplicate_show_more.select_one(
+        "#show_more_documents_application_documents"
+    )
+    show_more_section = duplicate_show_more.select_one("#documents")
+    assert isinstance(show_more, Tag)
+    assert isinstance(show_more_section, Tag)
+    show_more_section.append(BeautifulSoup(str(show_more), "html.parser"))
+
+    unscoped_loaded = BeautifulSoup(_detail(), "html.parser")
+    outside_loaded = unscoped_loaded.select_one(
+        "#all_documents_loaded_application_documents"
+    )
+    assert isinstance(outside_loaded, Tag)
+    unscoped_loaded.append(outside_loaded.extract())
+
+    unscoped_show_more = BeautifulSoup(_detail(), "html.parser")
+    outside_show_more = unscoped_show_more.select_one(
+        "#show_more_documents_application_documents"
+    )
+    assert isinstance(outside_show_more, Tag)
+    unscoped_show_more.append(outside_show_more.extract())
+
+    for soup in (
+        duplicate_section,
+        duplicate_table,
+        duplicate_loaded,
+        duplicate_show_more,
+        unscoped_loaded,
+        unscoped_show_more,
+    ):
+        with pytest.raises(cheshire.CheshireEastParseError):
+            cheshire.parse_detail_contract(
+                str(soup).encode(),
+                expected_reference="26/3335/PRIOR-1A",
+                expected_locator="406569",
+            )
 
 
 def test_cheshire_live_detail_remains_unreachable_from_partial_discovery() -> None:
