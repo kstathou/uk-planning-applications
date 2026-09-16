@@ -6,8 +6,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
+import json
 from datetime import date, datetime
 from hashlib import sha256
+from pathlib import Path
+from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlsplit
 
@@ -35,7 +39,6 @@ from yimby.transport import PortalRequest, RequestMethod, SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
-    from pathlib import Path
 
 
 class _Session:
@@ -91,6 +94,15 @@ def _store(root: Path) -> SqliteStore:
 
 def _registry(package: Any) -> AuthorityRegistry:
     return AuthorityRegistry((package,))
+
+
+def _devon_qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_devon.py"
+    spec = importlib.util.spec_from_file_location("qualify_devon", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _arun_form() -> bytes:
@@ -1311,6 +1323,151 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
     assert devon._query_bool({}, "isPlan") is None
     with pytest.raises(devon.DevonParseError, match="document isPlan"):
         devon._query_bool({"isPlan": ["maybe"]}, "isPlan")
+
+
+def test_devon_qualification_requires_exact_safe_scope(tmp_path: Path) -> None:
+    module = _devon_qualification_module()
+    base = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "qualification"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    variants = (
+        (base[1:], "confirmation-required"),
+        (base[:-1], "include-open-required"),
+        ((*base[:4], "bad", *base[5:]), "invalid-date"),
+        ((*base[:4], "2026-08-17", *base[5:]), "exact-window-required"),
+    )
+    for arguments, code in variants:
+        with pytest.raises(module.QualificationConfigError, match=code):
+            module._config(arguments)
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "existing").write_text("present")
+    with pytest.raises(module.QualificationConfigError, match="resume-required"):
+        module._config(
+            [
+                *base[:2],
+                str(occupied),
+                *base[3:],
+            ]
+        )
+
+
+def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _devon_qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    sessions: list[_Session] = []
+
+    def session_factory() -> _Session:
+        session = _Session(_DevonMock())
+        sessions.append(session)
+        return session
+
+    assert (
+        module.main(
+            arguments,
+            session_factory=session_factory,
+            now=lambda: module.datetime(2026, 9, 16, 12, tzinfo=module.UTC),
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    receipt_path = data_dir / "devon-qualification-v1.json"
+    receipt = json.loads(receipt_path.read_text())
+    assert output == receipt
+    assert receipt["schema_version"] == 1
+    assert receipt["authority_id"] == "devon"
+    assert receipt["scope"] == {
+        "start": "2026-08-18",
+        "end": "2026-09-16",
+        "include_open": True,
+    }
+    expected_queries = [
+        "received:2026-08-18:2026-09-16",
+        "determined:2026-08-18:2026-09-16",
+        "outstanding:planning:true",
+    ]
+    assert receipt["expected_queries"] == expected_queries
+    assert receipt["completed_queries"] == expected_queries
+    assert receipt["counts"] == {
+        "applications": 58,
+        "discovered_references": 58,
+        "native_versions": 58,
+        "application_versions": 58,
+        "document_versions": 58,
+        "comment_versions": 0,
+        "pending_retries": 0,
+        "failed_sections": 0,
+        "unmapped_records": 0,
+    }
+    assert receipt["costs"]["initial"]["request_count"] > 0
+    assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
+    assert receipt["costs"]["rerun"] == {
+        "request_count": 0,
+        "transferred_bytes": 0,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["run_statuses"] == ["succeeded", "succeeded"]
+    assert receipt["weekly_cycles"] == [
+        {"sequence": 1, "due_on": "2026-09-23", "status": "pending"},
+        {"sequence": 2, "due_on": "2026-09-30", "status": "pending"},
+    ]
+    assert receipt["operational_status"] == "pending-weekly-cycles"
+    assert receipt["registry_promotion"] == "not-performed"
+    assert {check["name"] for check in receipt["checks"]} == {
+        "terminal-checkpoint-coherence",
+        "exact-query-inventory",
+        "durable-reference-application-agreement",
+        "pending-retries",
+        "failed-current-sections",
+        "attachment-policy",
+        "database-integrity",
+        "evidence-integrity",
+        "unmapped-records",
+        "idempotent-rerun",
+        "terminal-rerun-network-io",
+        "run-statuses",
+    }
+    assert all(check["ok"] for check in receipt["checks"])
+    assert len(sessions) == 2
+    assert sessions[0].requested_urls
+    assert sessions[1].requested_urls == ()
+    assert not (data_dir / ".devon-qualification-v1.json.tmp").exists()
+
+    resumed_sessions: list[_Session] = []
+
+    def resumed_factory() -> _Session:
+        session = _Session(_DevonMock())
+        resumed_sessions.append(session)
+        return session
+
+    assert module.main(
+        [*arguments, "--resume"],
+        session_factory=resumed_factory,
+        now=lambda: module.datetime(2026, 9, 16, 13, tzinfo=module.UTC),
+    ) == 0
+    capsys.readouterr()
+    assert len(resumed_sessions) == 2
+    assert all(session.requested_urls == () for session in resumed_sessions)
 
 
 def test_camden_search_and_parser_boundaries() -> None:
