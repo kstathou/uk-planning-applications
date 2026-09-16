@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, B009, C901, E501, EM102, PLR0911, PLR0912, PLR0913, PLR2004, TRY003
+# ruff: noqa: ANN401, B009, C901, E501, EM102, PLR0911, PLR0912, PLR0913, PLR0915, PLR2004, TRY003
 
 """Authority-owned live IDOX boundaries for Cornwall, Durham, West Suffolk, and Leeds."""
 
@@ -118,6 +118,18 @@ CASES = (
     ),
 )
 
+_WEST_SUFFOLK_CASE = CASES[2]
+_WEST_SUFFOLK_OPEN_REFERENCES = (
+    ("DC/26/2001/FUL", "WEST-OPEN-A"),
+    ("DC/26/2002/FUL", "WEST-OPEN-B"),
+    ("DC/26/2003/FUL", "WEST-OPEN-C"),
+    ("DC/26/2004/FUL", "WEST-OPEN-D"),
+    ("DC/26/2005/FUL", "WEST-OPEN-E"),
+    ("DC/26/2006/FUL", "WEST-OPEN-F"),
+    ("DC/26/2007/FUL", "WEST-OPEN-G"),
+    ("DC/26/2008/FUL", "WEST-OPEN-H"),
+)
+
 _PREFIXES = {
     AuthorityId("cornwall"): "Cornwall",
     AuthorityId("durham"): "Durham",
@@ -144,6 +156,40 @@ def _weekly_form(search_type: str = "Application") -> bytes:
       </select>
       <input type="hidden" name="dateType" value="DC_Validated">
       <input type="hidden" name="searchType" value="{search_type}">
+      <input type="hidden" name="tag" value="one">
+      <input type="hidden" name="tag" value="two">
+      <input type="submit" name="submit" value="Search">
+    </form>
+    """.encode()
+
+
+def _advanced_form(*, malformed: bool = False) -> bytes:
+    status_fields = (
+        ""
+        if malformed
+        else """
+      <select name="searchCriteria.caseStatus"><option value="" selected>All</option></select>
+      <select name="searchCriteria.appealStatus"><option value="" selected>All</option></select>
+        """
+    )
+    return f"""
+    <form id="advancedSearchForm" method="post"
+          action="/online-applications/advancedSearchResults.do?action=firstPage">
+      <input type="hidden" name="_csrf" value="">
+      <input name="searchCriteria.reference" value="">
+      {status_fields}
+      <input type="hidden" name="caseAddressType" value="">
+      <input name="date(applicationReceivedStart)" value="">
+      <input name="date(applicationReceivedEnd)" value="">
+      <input name="date(applicationValidatedStart)" value="">
+      <input name="date(applicationValidatedEnd)" value="">
+      <input name="date(applicationCommitteeStart)" value="">
+      <input name="date(applicationCommitteeEnd)" value="">
+      <input name="date(applicationDecisionStart)" value="">
+      <input name="date(applicationDecisionEnd)" value="">
+      <input name="date(appealDecisionStart)" value="">
+      <input name="date(appealDecisionEnd)" value="">
+      <input type="hidden" name="searchType" value="">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="submit" value="Search">
@@ -301,6 +347,118 @@ def _summary(reference: str, authority_id: AuthorityId) -> bytes:
     ).encode()
 
 
+def _advanced_detail_redirect(*, ambiguous: bool = False) -> bytes:
+    reference, locator = _WEST_SUFFOLK_OPEN_REFERENCES[3]
+    other_locator = "WEST-OPEN-OTHER" if ambiguous else locator
+    return (
+        '<table id="simpleDetailsTable">'
+        f"<tr><th>Reference</th><td>{reference}</td></tr></table>"
+        f'<a href="applicationDetails.do?keyVal={locator}&amp;activeTab=summary">'
+        "Summary</a>"
+        f'<a href="applicationDetails.do?keyVal={other_locator}&amp;activeTab=documents">'
+        "Documents</a>"
+    ).encode()
+
+
+def _west_suffolk_open_page(
+    query: tuple[str, str],
+    page: int,
+    fault: str | None,
+) -> bytes:
+    field, value = query
+    weekly = _WEST_SUFFOLK_CASE
+    open_rows = _WEST_SUFFOLK_OPEN_REFERENCES
+    if field == "searchCriteria.caseStatus":
+        if value == "Pending Consideration":
+            if page == 1:
+                rows = ((weekly.references[1], weekly.locators[1]), open_rows[0])
+                if fault == "count-mismatch":
+                    return _result_page(rows, count=1)
+                return _result_page_with_showing_markers(
+                    rows,
+                    ("Showing 1-2 of 3", "Showing 1-2 of 3"),
+                    current_page="",
+                )
+            rows = () if fault == "stalled-pagination" else (open_rows[1],)
+            if not rows:
+                return _result_page(rows, count=3)
+            return _result_page_with_showing_markers(
+                rows,
+                ("Showing 3-3 of 3", "Showing 3-3 of 3"),
+                current_page="2",
+                numbered_page=1,
+            )
+        if value == "Pending Decision":
+            return _result_page(
+                ((weekly.references[3], weekly.locators[3]), open_rows[2]),
+                count=2,
+            )
+        if value == "Received Awaiting Registration":
+            return b"<p>No results found.</p>"
+        if value == "Pending Appeal Decision":
+            return _advanced_detail_redirect(ambiguous=fault == "ambiguous-detail")
+    if field == "searchCriteria.appealStatus":
+        if value == "Appeal lodged":
+            return _uncounted_result_page(
+                (
+                    (weekly.references[0], weekly.locators[0]),
+                    *open_rows[:6],
+                ),
+                current_page="",
+            )
+        if value in {
+            "Appeal Remitted to Secretary of State",
+            "High Court Appeal Lodged",
+        }:
+            return b"<p>No results found.</p>"
+        if value == "Pending Appeal Decision":
+            if page == 1:
+                return _result_page_with_showing_markers(
+                    (open_rows[3], open_rows[6]),
+                    ("Showing 1-2 of 3", "Showing 1-2 of 3"),
+                    current_page="",
+                )
+            return _result_page_with_showing_markers(
+                (open_rows[7],),
+                ("Showing 3-3 of 3", "Showing 3-3 of 3"),
+                current_page="2",
+                numbered_page=1,
+            )
+    raise AssertionError(f"unexpected West Suffolk open query {query!r} page {page}")
+
+
+def _expected_advanced_fields(
+    target_field: str,
+    value: str,
+) -> tuple[tuple[str, str], ...]:
+    return (
+        ("_csrf", ""),
+        ("searchCriteria.reference", ""),
+        (
+            "searchCriteria.caseStatus",
+            value if target_field == "searchCriteria.caseStatus" else "",
+        ),
+        (
+            "searchCriteria.appealStatus",
+            value if target_field == "searchCriteria.appealStatus" else "",
+        ),
+        ("caseAddressType", ""),
+        ("date(applicationReceivedStart)", ""),
+        ("date(applicationReceivedEnd)", ""),
+        ("date(applicationValidatedStart)", ""),
+        ("date(applicationValidatedEnd)", ""),
+        ("date(applicationCommitteeStart)", ""),
+        ("date(applicationCommitteeEnd)", ""),
+        ("date(applicationDecisionStart)", ""),
+        ("date(applicationDecisionEnd)", ""),
+        ("date(appealDecisionStart)", ""),
+        ("date(appealDecisionEnd)", ""),
+        ("searchType", ""),
+        ("tag", "one"),
+        ("tag", "two"),
+    )
+
+
 DOCUMENTS = b"""
 <h2 data-section="documents" data-count="2">Documents (2)</h2>
 <table summary="Documents"><thead><tr>
@@ -335,6 +493,8 @@ class _IdoxMock:
         validated_showing_markers: tuple[str, ...] | None = None,
         validated_legacy_count: str | None = None,
         expected_week: str = "14/09/2026",
+        validated_current_page: str = "1",
+        west_suffolk_open_fault: str | None = None,
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -353,7 +513,10 @@ class _IdoxMock:
         self.validated_showing_markers = validated_showing_markers
         self.validated_legacy_count = validated_legacy_count
         self.expected_week = expected_week
+        self.validated_current_page = validated_current_page
+        self.west_suffolk_open_fault = west_suffolk_open_fault
         self.current_date_type = ""
+        self.current_open_query: tuple[str, str] | None = None
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
 
@@ -367,6 +530,14 @@ class _IdoxMock:
                 200,
                 headers={"set-cookie": "JSESSIONID=sanitised; Path=/"},
                 content=_weekly_form(self.search_type),
+            )
+        if path.endswith("/search.do") and action == "advanced":
+            assert self.case.authority_id == AuthorityId("west-suffolk")
+            return httpx.Response(
+                200,
+                content=_advanced_form(
+                    malformed=self.west_suffolk_open_fault == "malformed-form"
+                ),
             )
         if path.endswith("/weeklyListResults.do"):
             assert request.headers.get("cookie") == "JSESSIONID=sanitised"
@@ -420,6 +591,7 @@ class _IdoxMock:
                     content=_result_page_with_showing_markers(
                         validated_rows,
                         self.validated_showing_markers,
+                        current_page=self.validated_current_page,
                     ),
                 )
             if self.validated_legacy_count is not None:
@@ -446,7 +618,38 @@ class _IdoxMock:
                     count_text=("Showing 1-2 of 3" if self.showing_counts else None),
                 ),
             )
+        if path.endswith("/advancedSearchResults.do"):
+            assert self.case.authority_id == AuthorityId("west-suffolk")
+            values = dict(fields)
+            active = tuple(
+                (field, values[field])
+                for field in (
+                    "searchCriteria.caseStatus",
+                    "searchCriteria.appealStatus",
+                )
+                if values[field]
+            )
+            assert len(active) == 1
+            self.current_date_type = ""
+            self.current_open_query = active[0]
+            return httpx.Response(
+                200,
+                content=_west_suffolk_open_page(
+                    self.current_open_query,
+                    1,
+                    self.west_suffolk_open_fault,
+                ),
+            )
         if path.endswith("/pagedSearchResults.do"):
+            if self.current_open_query is not None:
+                return httpx.Response(
+                    200,
+                    content=_west_suffolk_open_page(
+                        self.current_open_query,
+                        2,
+                        self.west_suffolk_open_fault,
+                    ),
+                )
             assert self.current_date_type == "DC_Validated"
             rows = (
                 ()
@@ -792,6 +995,9 @@ def test_authority_weekly_discovery_rejects_mismatch_and_open_scope(
 
     asyncio.run(mismatch())
 
+    if case.authority_id == AuthorityId("west-suffolk"):
+        return
+
     async def open_scope() -> None:
         session = _session(_IdoxMock(case))
         with pytest.raises(RuntimeError, match="older-open"):
@@ -804,6 +1010,239 @@ def test_authority_weekly_discovery_rejects_mismatch_and_open_scope(
         await session.aclose()
 
     asyncio.run(open_scope())
+
+
+def test_west_suffolk_open_discovery_exhausts_all_active_partitions() -> None:
+    """Open discovery preserves the form and completes every proven partition."""
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    mock = _IdoxMock(_WEST_SUFFOLK_CASE)
+    session = _PortalRequestSpy(mock)
+    window = WEEK.model_copy(update={"include_open": True})
+
+    async def discover_all() -> list[DurableDiscoveryBatch]:
+        batches = [batch async for batch in package.discover(session, window, None)]
+        await session.aclose()
+        return batches
+
+    batches = asyncio.run(discover_all())
+    assert [
+        reference.reference for batch in batches for reference in batch.references
+    ] == [
+        "DC/26/1388/TCA",
+        "DC/26/1389/FUL",
+        "DC/26/1390/FUL",
+        "DC/26/1391/FUL",
+        "DC/26/2001/FUL",
+        "DC/26/2002/FUL",
+        "DC/26/2003/FUL",
+        "DC/26/2004/FUL",
+        "DC/26/2005/FUL",
+        "DC/26/2006/FUL",
+        "DC/26/2007/FUL",
+        "DC/26/2008/FUL",
+    ]
+    assert batches[-1].complete
+    advanced_posts = [
+        request.form
+        for request in session.requests
+        if request.method.value == "POST"
+        and request.url.path.endswith("/advancedSearchResults.do")
+    ]
+    expected_queries = [
+        ("searchCriteria.caseStatus", "Pending Consideration"),
+        ("searchCriteria.caseStatus", "Pending Decision"),
+        ("searchCriteria.caseStatus", "Received Awaiting Registration"),
+        ("searchCriteria.caseStatus", "Pending Appeal Decision"),
+        ("searchCriteria.appealStatus", "Appeal lodged"),
+        (
+            "searchCriteria.appealStatus",
+            "Appeal Remitted to Secretary of State",
+        ),
+        ("searchCriteria.appealStatus", "High Court Appeal Lodged"),
+        ("searchCriteria.appealStatus", "Pending Appeal Decision"),
+    ]
+    assert [
+        tuple((field.name, field.value) for field in form) for form in advanced_posts
+    ] == [_expected_advanced_fields(field, value) for field, value in expected_queries]
+    assert mock.attachment_paths == []
+    assert session.attachment_body_requests == 0
+
+
+def test_west_suffolk_open_discovery_resumes_without_duplicate_references() -> None:
+    """A resumed advanced page restores its search and emits only unseen records."""
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    window = WEEK.model_copy(update={"include_open": True})
+    first_mock = _IdoxMock(_WEST_SUFFOLK_CASE)
+    first_session = _session(first_mock)
+
+    async def stop_after_first_open_page() -> tuple[list[str], StoredCheckpoint]:
+        references = []
+        discovery = cast(
+            "AsyncGenerator[DurableDiscoveryBatch]",
+            package.discover(first_session, window, None),
+        )
+        try:
+            async for batch in discovery:
+                references.extend(reference.reference for reference in batch.references)
+                checkpoint = json.loads(batch.next_checkpoint.payload_json)
+                if checkpoint["active_query"] == (
+                    "advanced|searchCriteria.caseStatus|Pending Consideration"
+                ):
+                    return references, batch.next_checkpoint
+        finally:
+            await discovery.aclose()
+            await first_session.aclose()
+        message = "advanced discovery did not reach page two"
+        raise AssertionError(message)
+
+    first_references, checkpoint = asyncio.run(stop_after_first_open_page())
+    assert first_references == [
+        "DC/26/1388/TCA",
+        "DC/26/1389/FUL",
+        "DC/26/1390/FUL",
+        "DC/26/1391/FUL",
+        "DC/26/2001/FUL",
+    ]
+
+    resumed_mock = _IdoxMock(_WEST_SUFFOLK_CASE)
+    resumed_session = _session(resumed_mock)
+
+    async def resume() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(resumed_session, window, checkpoint)
+        ]
+        await resumed_session.aclose()
+        return batches
+
+    resumed = asyncio.run(resume())
+    assert [
+        reference.reference for batch in resumed for reference in batch.references
+    ] == [
+        "DC/26/2002/FUL",
+        "DC/26/2003/FUL",
+        "DC/26/2004/FUL",
+        "DC/26/2005/FUL",
+        "DC/26/2006/FUL",
+        "DC/26/2007/FUL",
+        "DC/26/2008/FUL",
+    ]
+    assert resumed[-1].complete
+    advanced_requests = [
+        (method, path)
+        for method, path, fields in resumed_mock.requests
+        if path.endswith(("/advancedSearchResults.do", "/pagedSearchResults.do"))
+        and (fields or resumed_mock.current_open_query is not None)
+    ]
+    assert advanced_requests[:2] == [
+        ("POST", "/online-applications/advancedSearchResults.do"),
+        ("GET", "/online-applications/pagedSearchResults.do"),
+    ]
+
+    terminal_session = _session(_IdoxMock(_WEST_SUFFOLK_CASE))
+
+    async def repeat_terminal() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(
+                terminal_session,
+                window,
+                resumed[-1].next_checkpoint,
+            )
+        ]
+        await terminal_session.aclose()
+        return batches
+
+    terminal = asyncio.run(repeat_terminal())
+    assert terminal == [
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=resumed[-1].next_checkpoint,
+            complete=True,
+        )
+    ]
+    assert terminal_session.requested_urls == ()
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("malformed-form", "advanced form"),
+        ("ambiguous-detail", "advanced detail"),
+        ("count-mismatch", "expected 1 actual 2"),
+        ("stalled-pagination", "expected 3 actual 2"),
+    ],
+)
+def test_west_suffolk_open_discovery_fails_closed(
+    fault: str,
+    message: str,
+) -> None:
+    """Malformed advanced boundaries never become complete discovery."""
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    session = _session(_IdoxMock(_WEST_SUFFOLK_CASE, west_suffolk_open_fault=fault))
+    window = WEEK.model_copy(update={"include_open": True})
+
+    async def discover_all() -> None:
+        with pytest.raises(ValueError, match=message):
+            async for _batch in package.discover(session, window, None):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
+
+
+def test_west_suffolk_open_discovery_rejects_unknown_checkpoint_query() -> None:
+    """Only the current weekly and advanced query inventory can resume."""
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    window = WEEK.model_copy(update={"include_open": True})
+    checkpoint = west_suffolk_adapter.WestSuffolkCheckpointV1(
+        result_page="live",
+        live_scope=west_suffolk_adapter.WestSuffolkDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=True,
+        ),
+        active_query="advanced|searchCriteria.caseStatus|Unknown",
+    )
+    session = _session(_IdoxMock(_WEST_SUFFOLK_CASE))
+
+    async def discover_all() -> None:
+        with pytest.raises(ValueError, match="checkpoint query"):
+            async for _batch in package.discover(
+                session,
+                window,
+                StoredCheckpoint(
+                    schema_version=1,
+                    payload_json=checkpoint.model_dump_json(),
+                ),
+            ):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
+
+
+def test_west_suffolk_weekly_count_rejects_empty_page_marker() -> None:
+    """The advanced empty first-page marker cannot weaken weekly parsing."""
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    session = _session(
+        _IdoxMock(
+            _WEST_SUFFOLK_CASE,
+            validated_showing_markers=("Showing 1-2 of 3",),
+            validated_current_page="",
+        )
+    )
+
+    async def discover_all() -> None:
+        with pytest.raises(
+            west_suffolk_adapter.WestSuffolkParseError,
+            match="reported result count",
+        ):
+            async for _batch in package.discover(session, WEEK, None):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
 
 
 async def _collect_live_case(
