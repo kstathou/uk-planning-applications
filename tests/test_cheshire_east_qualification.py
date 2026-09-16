@@ -164,6 +164,7 @@ class _QualificationSession:
         search_results: bytes | None = None,
         weekly_form: bytes | None = None,
         detail: bytes | None = None,
+        media_type: str = "text/html",
     ) -> None:
         self.requests: list[PortalRequest] = []
         self._bytes = 0
@@ -176,6 +177,7 @@ class _QualificationSession:
         )
         self._weekly_form = _weekly_form() if weekly_form is None else weekly_form
         self._detail = _detail() if detail is None else detail
+        self._media_type = media_type
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
@@ -197,7 +199,7 @@ class _QualificationSession:
         self._bytes += len(body)
         return EvidenceCapture(
             url=request.url,
-            media_type="text/html",
+            media_type=self._media_type,
             body=body,
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
@@ -740,6 +742,56 @@ def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
         now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
     )
     assert resumed == 1
+
+
+def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
+    tmp_path: Path,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    assert (
+        module.main(
+            arguments,
+            session_factory=lambda: _QualificationSession(
+                media_type="application/xhtml+xml"
+            ),
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
+        == 1
+    )
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert tuple(blocker.code for blocker in receipt.blockers) == (
+        "official-search-form-unavailable",
+    )
+    assert receipt.evidence[0].media_type == "application/xhtml+xml"
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "offline resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize(
