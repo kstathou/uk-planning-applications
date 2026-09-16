@@ -338,6 +338,11 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'name="valid_date_from" value=""',
             b'name="valid_date_from" value="" disabled',
         ),
+        _search_form().replace(
+            b"<textarea name=\"proposal\">House</textarea>",
+            b"<textarea name=\"proposal\">House</textarea>"
+            b"<input name=\"proposal\" value=\"Other\">",
+        ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
             cheshire.parse_search_form(body)
@@ -400,6 +405,11 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_form().replace(b'method="post"', b'method="get"'),
         _weekly_form().replace(b'name="week"', b'name="other"'),
         _weekly_form().replace(b'name="fa" value=""', b'name="fa" value="x"'),
+        _weekly_form().replace(
+            b'<input type="hidden" name="fa" value="">',
+            b'<input type="hidden" name="extra" value="x">'
+            b'<input type="hidden" name="fa" value="">',
+        ),
     )
     for body in invalid_forms:
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -892,8 +902,13 @@ def test_cheshire_qualification_does_not_hide_programming_defects(
             b'name="valid_date_from" value=""',
             b'name="valid_date_from" value="" disabled',
         ),
+        _search_form().replace(
+            b"<textarea name=\"proposal\">House</textarea>",
+            b"<textarea name=\"proposal\">House</textarea>"
+            b"<input name=\"proposal\" value=\"Other\">",
+        ),
     ],
-    ids=("method", "discriminator", "disabled-date"),
+    ids=("method", "discriminator", "disabled-date", "duplicate-successful-name"),
 )
 def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
     tmp_path: Path,
@@ -929,6 +944,29 @@ def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
     )
     assert receipt.costs.request_count == 1
 
+    def forbidden_factory() -> _QualificationSession:
+        message = "offline resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert (
+        module.main(
+            [
+                "--confirm-live",
+                "--data-dir",
+                str(data_dir),
+                "--start",
+                "2026-08-18",
+                "--end",
+                "2026-09-16",
+                "--include-open",
+                "--resume",
+            ],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
+
 
 @pytest.mark.parametrize(
     ("overrides", "attempted_keys"),
@@ -942,6 +980,20 @@ def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
         ),
         (
             {"weekly_form": b"<main></main>"},
+            (
+                "source-access|search-form",
+                "recent|valid|2026-08-18|2026-09-16",
+                "source-access|weekly-form",
+            ),
+        ),
+        (
+            {
+                "weekly_form": _weekly_form().replace(
+                    b'<input type="hidden" name="fa" value="">',
+                    b'<input type="hidden" name="extra" value="x">'
+                    b'<input type="hidden" name="fa" value="">',
+                )
+            },
             (
                 "source-access|search-form",
                 "recent|valid|2026-08-18|2026-09-16",
