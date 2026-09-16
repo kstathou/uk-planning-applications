@@ -36,6 +36,7 @@ from yimby.domain import (
     EvidenceDigest,
     FrozenModel,
     NormalisedObservation,
+    QualificationLineage,
     QualificationSnapshot,
     RetainedNativeRecord,
     RetryItem,
@@ -1014,6 +1015,63 @@ class SqliteStore:
             pending_retries=counts["pending_retries"],
             failed_sections=failed_sections,
             unmapped_records=counts["unmapped_records"],
+        )
+
+    def qualification_lineage(
+        self,
+        authority_id: AuthorityId,
+        qualification: str,
+    ) -> QualificationLineage | None:
+        """Return the immutable schedule lineage for one qualification."""
+        row = self._connection.execute(
+            """
+            SELECT phase, scope_json, created_at
+            FROM qualification_lineage
+            WHERE authority_id = ? AND qualification = ?
+            """,
+            (authority_id, qualification),
+        ).fetchone()
+        if row is None:
+            return None
+        return QualificationLineage(
+            authority_id=authority_id,
+            qualification=qualification,
+            phase=row["phase"],
+            scope_json=row["scope_json"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def record_qualification_lineage(
+        self,
+        lineage: QualificationLineage,
+    ) -> QualificationLineage:
+        """Insert an immutable lineage or return the already durable value."""
+        with self._connection:
+            row = next(
+                self._connection.execute(
+                    """
+                    INSERT INTO qualification_lineage(
+                        authority_id, qualification, phase, scope_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(authority_id, qualification) DO UPDATE SET
+                        qualification = qualification_lineage.qualification
+                    RETURNING phase, scope_json, created_at
+                    """,
+                    (
+                        lineage.authority_id,
+                        lineage.qualification,
+                        lineage.phase,
+                        lineage.scope_json,
+                        lineage.created_at.isoformat(),
+                    ),
+                )
+            )
+        return QualificationLineage(
+            authority_id=lineage.authority_id,
+            qualification=lineage.qualification,
+            phase=row["phase"],
+            scope_json=row["scope_json"],
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
 
     def metrics_totals(self) -> RunMetrics:

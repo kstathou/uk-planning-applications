@@ -380,6 +380,16 @@ class QualificationSnapshot(FrozenModel):
     unmapped_records: int = Field(ge=0)
 
 
+class QualificationLineage(FrozenModel):
+    """Durable marker for one successfully established qualification schedule."""
+
+    authority_id: AuthorityId
+    qualification: str
+    phase: Literal["qualified"] = "qualified"
+    scope_json: str
+    created_at: datetime
+
+
 class CollectionReport(FrozenModel):
     """Observable result of one authority collection."""
 

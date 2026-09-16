@@ -386,14 +386,20 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         "unmapped-records": True,
     }
     receipt_path = data_dir / "barnet-qualification-v1.json"
-    anchor_path = data_dir / ".barnet-qualification-anchor-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
-    assert json.loads(anchor_path.read_text(encoding="utf-8")) == {
-        "schema_version": 1,
-        "authority_id": "barnet",
-        "created_at": "2026-09-16T12:00:00Z",
-        "scope": receipt["scope"],
-    }
+    lineage_store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    lineage = lineage_store.qualification_lineage(
+        AuthorityId("barnet"),
+        "barnet-live-v1",
+    )
+    lineage_store.close()
+    assert lineage is not None
+    assert lineage.phase == "qualified"
+    assert lineage.created_at == now
+    assert json.loads(lineage.scope_json) == receipt["scope"]
     assert not (data_dir / ".barnet-qualification-v1.json.tmp").exists()
 
     victim = tmp_path / "victim"
@@ -408,7 +414,9 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert predictable_temporary.is_symlink()
     predictable_temporary.unlink()
 
-    anchor_path.unlink()
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM qualification_lineage")
+        connection.commit()
     sessions.clear()
     mocks.clear()
     assert (
@@ -426,7 +434,18 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert resumed["costs"]["rerun"]["request_count"] == 0
     assert resumed["created_at"] == "2026-09-16T12:00:00Z"
     assert resumed["weekly_refreshes"] == receipt["weekly_refreshes"]
-    assert anchor_path.exists()
+    lineage_store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    assert (
+        lineage_store.qualification_lineage(
+            AuthorityId("barnet"),
+            "barnet-live-v1",
+        )
+        is not None
+    )
+    lineage_store.close()
 
     store = SqliteStore(
         data_dir / "yimby.sqlite3",
@@ -480,7 +499,6 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert failure["error"] == "source-unavailable"
     assert "HTTP 429" in failure["detail"]
     assert not receipt_path.exists()
-    anchor_path.unlink()
 
     refresh_mock.rate_limited_summary = False
     refresh_sessions.clear()
@@ -555,43 +573,34 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         assert receipt_path.exists()
 
     receipt_path.unlink()
-    invalid_anchors = (
-        None,
-        "{invalid",
-        json.dumps(
-            {
-                "schema_version": 1,
-                "authority_id": "barnet",
-                "created_at": "2026-10-16T12:00:00Z",
-                "scope": receipt["scope"],
-            }
-        ),
-        json.dumps(
-            {
-                "schema_version": 1,
-                "authority_id": "barnet",
-                "created_at": "2026-09-16T12:00:00Z",
-                "scope": {
+    valid_scope_json = json.dumps(receipt["scope"], separators=(",", ":"))
+    invalid_lineages = (
+        ("{invalid", "2026-09-16T12:00:00+00:00"),
+        (valid_scope_json, "2026-10-16T12:00:00+00:00"),
+        (
+            json.dumps(
+                {
                     "start": "2026-08-17",
                     "end": END,
                     "include_open": True,
                 },
-            }
+                separators=(",", ":"),
+            ),
+            "2026-09-16T12:00:00+00:00",
         ),
-        json.dumps(
-            {
-                "schema_version": 1,
-                "authority_id": "barnet",
-                "created_at": "2026-09-16T12:00:00",
-                "scope": receipt["scope"],
-            }
-        ),
+        (valid_scope_json, "2026-09-16T12:00:00"),
     )
-    for invalid_anchor in invalid_anchors:
-        if invalid_anchor is None:
-            anchor_path.unlink(missing_ok=True)
-        else:
-            anchor_path.write_text(invalid_anchor, encoding="utf-8")
+    for scope_json, created_at in invalid_lineages:
+        with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+            connection.execute(
+                """
+                UPDATE qualification_lineage
+                SET scope_json = ?, created_at = ?
+                WHERE authority_id = 'barnet'
+                """,
+                (scope_json, created_at),
+            )
+            connection.commit()
         sessions.clear()
         mocks.clear()
         assert (
@@ -605,21 +614,19 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         captured = capsys.readouterr()
         assert captured.out == ""
         assert json.loads(captured.err) == {"error": "receipt-anchor-required"}
-        assert len(sessions) == 1
-        assert sessions[0].requested_urls == ()
+        assert sessions == []
         assert not receipt_path.exists()
 
-    anchor_path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "authority_id": "barnet",
-                "created_at": "2026-09-16T12:00:00Z",
-                "scope": receipt["scope"],
-            }
-        ),
-        encoding="utf-8",
-    )
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(
+            """
+            UPDATE qualification_lineage
+            SET scope_json = ?, created_at = ?
+            WHERE authority_id = 'barnet'
+            """,
+            (valid_scope_json, "2026-09-16T12:00:00+00:00"),
+        )
+        connection.commit()
     conflicting_receipt = {
         **receipt,
         "created_at": "2026-09-15T12:00:00Z",
@@ -678,7 +685,17 @@ def test_barnet_qualification_recovers_after_receipt_write_failure(
         "exception": "OSError",
     }
     assert not (data_dir / "barnet-qualification-v1.json").exists()
-    (data_dir / ".barnet-qualification-anchor-v1.json").unlink()
+    lineage_store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    lineage = lineage_store.qualification_lineage(
+        AuthorityId("barnet"),
+        "barnet-live-v1",
+    )
+    lineage_store.close()
+    assert lineage is not None
+    assert lineage.created_at == now
 
     monkeypatch.setattr(module, "_write_receipt", original_write_receipt)
     sessions.clear()
@@ -696,6 +713,50 @@ def test_barnet_qualification_recovers_after_receipt_write_failure(
         {"ordinal": 1, "due_on": "2026-09-23", "status": "pending"},
         {"ordinal": 2, "due_on": "2026-09-30", "status": "pending"},
     ]
+    assert len(sessions) == 2
+    assert all(session.requested_urls == () for session in sessions)
+
+
+def test_terminal_collection_without_lineage_can_finish_bootstrap(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "terminal-without-lineage"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_BarnetQualificationMock())
+        sessions.append(session)
+        return session
+
+    initial_time = datetime(2026, 9, 16, 12, tzinfo=UTC)
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=session_factory,
+            now=lambda: initial_time,
+        )
+        == 0
+    )
+    capsys.readouterr()
+    (data_dir / "barnet-qualification-v1.json").unlink()
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM qualification_lineage")
+        connection.commit()
+
+    sessions.clear()
+    resumed_time = initial_time + timedelta(days=1)
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=session_factory,
+            now=lambda: resumed_time,
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["created_at"] == "2026-09-17T12:00:00Z"
     assert len(sessions) == 2
     assert all(session.requested_urls == () for session in sessions)
 

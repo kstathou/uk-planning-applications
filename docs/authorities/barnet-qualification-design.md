@@ -47,11 +47,14 @@ Each query becomes complete only when its parsed rows reconcile with the portal'
 
 `BarnetQualificationReceiptV1` records the exact scope and query inventory, durable counts, first-pass and rerun costs, named checks, and two pending future refresh cycles. The command writes the receipt only after SQLite integrity, every append-only evidence row rehashes successfully, exact durable reference agreement, section completeness, retry state, attachment policy, and an immediate zero-network rerun all pass.
 
-The original successful qualification timestamp is also retained in a small
-independent anchor file. Before a requalification removes its stale receipt,
-it validates and persists that anchor. A rate limit, interruption, or failed
-check can therefore invalidate the receipt without losing the two weekly due
-dates, and a later successful resume regenerates the receipt from the anchor.
+The original successful qualification timestamp is also retained as an
+immutable `qualified` lineage row in SQLite. Before a requalification removes
+its stale receipt, it validates that lineage or imports a valid legacy receipt
+into it. A rate limit, interruption, failed check, or receipt-write failure can
+therefore invalidate the receipt without losing the two weekly due dates, and
+a later successful resume regenerates the receipt from the lineage. A terminal
+checkpoint without a lineage remains distinguishable as an unfinished first
+bootstrap.
 
 ## Synthesis decision
 
