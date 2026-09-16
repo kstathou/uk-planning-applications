@@ -63,6 +63,7 @@ _FIRST_PAGED_RESULT = 2
 _RESULTS_PER_PAGE = 10
 _MARKER_COUNT = 2
 _DOCUMENT_CELL_COUNT = 2
+_FORM_STATE_FIELDS = ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")
 
 
 class DorsetDiscoveryScope(FrozenModel):
@@ -544,10 +545,9 @@ def _parse_disclaimer_form(body: bytes) -> Tag:
     ):
         _raise_parse("disclaimer form")
     fields = _successful_controls(form)
-    state_names = ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")
-    _require_fields(fields, *state_names)
-    _require_hidden_inputs(form, *state_names)
-    if any(field.name in state_names and not field.value for field in fields):
+    _require_fields(fields, *_FORM_STATE_FIELDS)
+    _require_hidden_inputs(form, *_FORM_STATE_FIELDS)
+    if any(field.name in _FORM_STATE_FIELDS and not field.value for field in fields):
         _raise_parse("disclaimer form state")
     _submit_value(form, _ACCEPT_BUTTON, "Accept")
     return form
@@ -600,16 +600,14 @@ def _parse_advanced_form(body: bytes) -> Tag:
     fields = _successful_controls(form)
     _require_fields(
         fields,
-        "__EVENTTARGET",
-        "__EVENTARGUMENT",
-        "__VIEWSTATE",
+        *_FORM_STATE_FIELDS,
         _RECEIVED_FROM,
         f"{_RECEIVED_FROM}$dateInput",
         _RECEIVED_TO,
         f"{_RECEIVED_TO}$dateInput",
     )
-    _require_hidden_inputs(form, "__EVENTTARGET", "__EVENTARGUMENT", "__VIEWSTATE")
-    if not any(field.name == "__VIEWSTATE" and field.value for field in fields):
+    _require_hidden_inputs(form, *_FORM_STATE_FIELDS)
+    if any(field.name in _FORM_STATE_FIELDS and not field.value for field in fields):
         _raise_parse("advanced form viewstate")
     for query in _LIVE_QUERIES:
         _submit_value(form, query.submit_name, "Search")
