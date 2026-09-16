@@ -33,7 +33,8 @@ if TYPE_CHECKING:
     from types import ModuleType
     from typing import Any
 
-    from yimby.transport import PortalRequest
+    from yimby.evidence import EvidenceStore
+    from yimby.transport import PortalRequest, PortalSession
 
 _LAYER_URL = (
     "https://maps.birmingham.gov.uk/server/rest/services/mybrummap/"
@@ -41,6 +42,7 @@ _LAYER_URL = (
 )
 _RECEIPT_NAME = "birmingham-qualification-v1.json"
 _CONFIG_ERROR = 2
+_LIVE_AND_REPLAY_PASSES = 2
 _RECENT_WHERE = (
     "Received >= DATE '2026-08-18 00:00:00' AND Received < DATE '2026-09-17 00:00:00'"
 )
@@ -528,6 +530,7 @@ def _assert_query_inventory(
 
 def test_birmingham_qualification_persists_typed_blocked_receipt(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Persist the proven ArcGIS subset without claiming complete collection."""
     module = _qualification_module()
@@ -535,6 +538,20 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
     data_dir.mkdir()
     bodies = _arcgis_bodies()
     sessions: list[_ArcgisSession] = []
+    source_fact_calls = 0
+
+    original_source_facts = module.__dict__["_source_facts"]
+
+    async def counted_source_facts(
+        session: PortalSession,
+        evidence_store: EvidenceStore,
+        inventory: list[object],
+    ) -> object:
+        nonlocal source_fact_calls
+        source_fact_calls += 1
+        return await original_source_facts(session, evidence_store, inventory)
+
+    monkeypatch.setattr(module, "_source_facts", counted_source_facts)
 
     def session_factory() -> _ArcgisSession:
         session = _ArcgisSession(bodies)
@@ -548,6 +565,7 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
     )
 
     assert result == 1
+    assert source_fact_calls == _LIVE_AND_REPLAY_PASSES
     assert len(sessions) == 1
     assert sessions[0].closed is True
     receipt_path = data_dir / _RECEIPT_NAME
@@ -606,11 +624,11 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
         "reason": "no-appeal-lodged-or-current-status-field",
     }
     assert receipt["sections"] == {
-        "documents": {"status": "not-exposed", "item_count": 0},
-        "comments": {"status": "not-exposed", "item_count": 0},
-        "conditions": {"status": "not-exposed", "item_count": 0},
-        "consultations": {"status": "not-exposed", "item_count": 0},
-        "relationships": {"status": "not-exposed", "item_count": 0},
+        "documents": {"status": "not-exposed"},
+        "comments": {"status": "not-exposed"},
+        "conditions": {"status": "not-exposed"},
+        "consultations": {"status": "not-exposed"},
+        "relationships": {"status": "not-exposed"},
     }
     assert receipt["transport"] == {
         "request_count": len(bodies),
@@ -674,7 +692,10 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
         module.replay_persisted_state(data_dir)
 
 
-@pytest.mark.parametrize("failure", ["recent-total", "layer-schema"])
+@pytest.mark.parametrize(
+    "failure",
+    ["recent-total", "layer-schema", "out-of-window", "stale-latest"],
+)
 def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
     tmp_path: Path,
     failure: str,
@@ -684,10 +705,26 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(
     bodies = list(_arcgis_bodies())
     if failure == "recent-total":
         bodies[5] = _json_bytes({"count": 71})
-    else:
+    elif failure == "layer-schema":
         metadata = json.loads(bodies[0])
         metadata["type"] = "Map Layer"
         bodies[0] = _json_bytes(metadata)
+    elif failure == "out-of-window":
+        page = json.loads(bodies[6])
+        page["features"][0]["attributes"]["Received"] = int(
+            datetime(2026, 8, 17, tzinfo=UTC).timestamp() * 1000
+        )
+        bodies[6] = _json_bytes(page)
+    else:
+        stale = int(datetime(2026, 8, 18, tzinfo=UTC).timestamp() * 1000)
+        profile = json.loads(bodies[1])
+        profile["features"][0]["attributes"]["latest_received"] = stale
+        bodies[1] = _json_bytes(profile)
+        for page_index in (6, 7, 8):
+            page = json.loads(bodies[page_index])
+            for feature in page["features"]:
+                feature["attributes"]["Received"] = stale
+            bodies[page_index] = _json_bytes(page)
     data_dir = tmp_path / failure
     session = _ArcgisSession(bodies)
 
