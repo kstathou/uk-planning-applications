@@ -365,6 +365,21 @@ class DiscoveryState(FrozenModel):
     checkpoint: StoredCheckpoint | None
 
 
+class QualificationSnapshot(FrozenModel):
+    """Authority-scoped durable counts used by live qualification."""
+
+    authority_id: AuthorityId
+    applications: int = Field(ge=0)
+    discovered_references: int = Field(ge=0)
+    native_versions: int = Field(ge=0)
+    application_versions: int = Field(ge=0)
+    document_versions: int = Field(ge=0)
+    comment_versions: int = Field(ge=0)
+    pending_retries: int = Field(ge=0)
+    failed_sections: int = Field(ge=0)
+    unmapped_records: int = Field(ge=0)
+
+
 class CollectionReport(FrozenModel):
     """Observable result of one authority collection."""
 

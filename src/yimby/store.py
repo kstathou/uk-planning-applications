@@ -36,6 +36,7 @@ from yimby.domain import (
     EvidenceDigest,
     FrozenModel,
     NormalisedObservation,
+    QualificationSnapshot,
     RetainedNativeRecord,
     RetryItem,
     RunMetrics,
@@ -906,6 +907,95 @@ class SqliteStore:
             for row in self._connection.execute(
                 "SELECT status FROM run_details ORDER BY rowid"
             )
+        )
+
+    def qualification_snapshot(
+        self,
+        authority_id: AuthorityId,
+    ) -> QualificationSnapshot:
+        """Return one authority's durable qualification counts."""
+        counts = next(
+            self._connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM applications
+                        WHERE authority_id = :authority_id) AS applications,
+                    (SELECT COUNT(*) FROM discovery_queue
+                        WHERE authority_id = :authority_id) AS discovered_references,
+                    (SELECT COUNT(*) FROM native_versions AS native
+                        JOIN applications AS application
+                            ON application.id = native.application_id
+                        WHERE application.authority_id = :authority_id
+                    ) AS native_versions,
+                    (SELECT COUNT(*) FROM semantic_versions AS semantic
+                        JOIN applications AS application
+                            ON application.id = semantic.application_id
+                        WHERE application.authority_id = :authority_id
+                            AND semantic.section = 'application'
+                    ) AS application_versions,
+                    (SELECT COUNT(*) FROM semantic_versions AS semantic
+                        JOIN applications AS application
+                            ON application.id = semantic.application_id
+                        WHERE application.authority_id = :authority_id
+                            AND semantic.section = 'documents'
+                    ) AS document_versions,
+                    (SELECT COUNT(*) FROM semantic_versions AS semantic
+                        JOIN applications AS application
+                            ON application.id = semantic.application_id
+                        WHERE application.authority_id = :authority_id
+                            AND semantic.section = 'comments'
+                    ) AS comment_versions,
+                    (SELECT COUNT(*) FROM retry_queue
+                        WHERE authority_id = :authority_id AND status = 'pending'
+                    ) AS pending_retries,
+                    (SELECT COUNT(*) FROM applications AS application
+                        LEFT JOIN section_current AS current
+                            ON current.application_id = application.id
+                            AND current.section = 'application'
+                        WHERE application.authority_id = :authority_id
+                            AND current.application_id IS NULL
+                    ) AS unmapped_records
+                """,
+                {"authority_id": authority_id},
+            )
+        )
+        completeness_rows = self._connection.execute(
+            """
+            SELECT observation.completeness_json
+            FROM observations AS observation
+            JOIN applications AS application
+                ON application.id = observation.application_id
+            WHERE application.authority_id = ?
+                AND observation.id = (
+                    SELECT MAX(latest.id) FROM observations AS latest
+                    WHERE latest.application_id = observation.application_id
+                )
+            ORDER BY observation.application_id
+            """,
+            (authority_id,),
+        )
+        failed_sections = 0
+        for row in completeness_rows:
+            completeness = _COMPLETENESS.validate_json(row["completeness_json"])
+            failed_sections += sum(
+                state.kind == "failed"
+                for state in (
+                    completeness.application,
+                    completeness.documents,
+                    completeness.comments,
+                )
+            )
+        return QualificationSnapshot(
+            authority_id=authority_id,
+            applications=counts["applications"],
+            discovered_references=counts["discovered_references"],
+            native_versions=counts["native_versions"],
+            application_versions=counts["application_versions"],
+            document_versions=counts["document_versions"],
+            comment_versions=counts["comment_versions"],
+            pending_retries=counts["pending_retries"],
+            failed_sections=failed_sections,
+            unmapped_records=counts["unmapped_records"],
         )
 
     def metrics_totals(self) -> RunMetrics:
