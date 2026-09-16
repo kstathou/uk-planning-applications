@@ -31,14 +31,22 @@ from yimby.authorities.opdc.adapter import (
 )
 from yimby.domain import (
     ApplicationLocation,
+    AuthorityId,
     DiscoveryBatch,
     DiscoveryWindow,
+    DurableDiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
+    RunMetrics,
+    RunOutcome,
+    RunStatus,
     SourceReference,
+    StoredCheckpoint,
     TransportMode,
     Wgs84Coordinate,
 )
+from yimby.evidence import EvidenceStore
+from yimby.store import SqliteStore
 from yimby.transport import SourceUnavailableError
 
 if TYPE_CHECKING:
@@ -266,6 +274,10 @@ def _qualification_module() -> ModuleType:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _store(root: Path) -> SqliteStore:
+    return SqliteStore(root / "yimby.sqlite3", EvidenceStore(root / "evidence"))
 
 
 def test_opdc_live_discovery_exhausts_exact_full_array_queries() -> None:
@@ -872,3 +884,80 @@ def test_opdc_qualification_refuses_a_changed_scope_before_network(
     assert module.main(changed, session_factory=session_factory) == _CONFIG_ERROR
     assert json.loads(capsys.readouterr().err)["error"] == "scope-mismatch"
     assert sessions == []
+
+
+def test_opdc_qualification_rejects_checkpoint_reference_disagreement(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A terminal query inventory cannot certify a different durable queue."""
+    module = _qualification_module()
+    data_dir = tmp_path / "identity"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+
+    store = _store(data_dir)
+    stored = store.discovery_state(AuthorityId("opdc")).checkpoint
+    assert stored is not None
+    checkpoint = OpdcCheckpointV1.model_validate_json(stored.payload_json)
+    corrupt = checkpoint.model_copy(
+        update={"seen_references": checkpoint.seen_references[:-1]}
+    )
+    run_id = store.begin_run(AuthorityId("opdc"))
+    store.commit_discovery(
+        run_id,
+        AuthorityId("opdc"),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json=corrupt.model_dump_json(),
+            ),
+            complete=True,
+        ),
+    )
+    store.finish_run(
+        run_id,
+        AuthorityId("opdc"),
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=0,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.LIVE,
+        ),
+    )
+    store.close()
+    (data_dir / "opdc-qualification-v1.json").unlink()
+    sessions.clear()
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert {
+        "terminal-checkpoint",
+        "reference-application-agreement",
+        "application-evidence",
+    }.issubset(error["failed_checks"])
+    assert len(sessions) == 1
+    assert sessions[0].requested_urls == ()
+    assert sessions[0].closed is True
+    assert not (data_dir / "opdc-qualification-v1.json").exists()
