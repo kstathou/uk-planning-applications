@@ -346,6 +346,8 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
     ]
     assert _pairs(mock, ADVANCED_PATH) == [
         (
+            ("__EVENTTARGET", ""),
+            ("__EVENTARGUMENT", ""),
             ("__VIEWSTATE", "advanced-state"),
             ("__VIEWSTATEGENERATOR", "F6350304"),
             ("__EVENTVALIDATION", "validation-state"),
@@ -378,6 +380,8 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             ("ctl00$ContentPlaceHolder1$btnSearch3", "Search"),
         ),
         (
+            ("__EVENTTARGET", ""),
+            ("__EVENTARGUMENT", ""),
             ("__VIEWSTATE", "advanced-state"),
             ("__VIEWSTATEGENERATOR", "F6350304"),
             ("__EVENTVALIDATION", "validation-state"),
@@ -407,6 +411,8 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
     ]
     assert _pairs(mock, RESULTS_PATH) == [
         (
+            ("__EVENTTARGET", ""),
+            ("__EVENTARGUMENT", ""),
             ("__VIEWSTATE", "received-valid-page-1"),
             ("__VIEWSTATEGENERATOR", "216AC575"),
             ("__EVENTVALIDATION", "validation-state"),
@@ -415,6 +421,8 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             (NEXT_BUTTON, " "),
         ),
         (
+            ("__EVENTTARGET", ""),
+            ("__EVENTARGUMENT", ""),
             ("__VIEWSTATE", "outstanding-page-1"),
             ("__VIEWSTATEGENERATOR", "216AC575"),
             ("__EVENTVALIDATION", "validation-state"),
