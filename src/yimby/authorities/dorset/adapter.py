@@ -4,17 +4,19 @@
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, date, datetime
 from html import unescape
-from typing import TYPE_CHECKING, Literal, NoReturn
+from typing import TYPE_CHECKING, Annotated, Literal, NoReturn
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pydantic import HttpUrl
+from pydantic import ConfigDict, Field, HttpUrl, RootModel
 
 from yimby.domain import (
+    ApplicationMetadata,
     AuthorityCapabilities,
     AuthorityId,
     AuthorityKind,
@@ -24,6 +26,7 @@ from yimby.domain import (
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
+    DocumentRecord,
     FrozenModel,
     NativeSnapshot,
     NormalisedObservation,
@@ -33,7 +36,9 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
     UnavailableSection,
+    collection_state,
 )
+from yimby.geo import bng_to_wgs84
 from yimby.transport import FormField, PortalRequest, RequestIntent, RequestMethod
 
 if TYPE_CHECKING:
@@ -53,9 +58,11 @@ _RECEIVED_FROM = "ctl00$ContentPlaceHolder1$txtDateReceivedFrom"
 _RECEIVED_TO = "ctl00$ContentPlaceHolder1$txtDateReceivedTo"
 _OUTSTANDING = "ctl00$ContentPlaceHolder1$chkOutstanding"
 _NEXT_BUTTON = "ctl00$ContentPlaceHolder1$lvResults$RadDataPager1$ctl02$NextButton"
+_BOTTOM_NEXT_BUTTON = "ctl00$ContentPlaceHolder1$lvResults$pager$ctl02$NextButton"
 _FIRST_PAGED_RESULT = 2
 _RESULTS_PER_PAGE = 10
 _MARKER_COUNT = 2
+_DOCUMENT_CELL_COUNT = 2
 
 
 class DorsetDiscoveryScope(FrozenModel):
@@ -105,14 +112,58 @@ class _ResultPage(FrozenModel):
     next_allowed: bool
 
 
-class DorsetApplicationV1(FrozenModel):
-    """Dorset-native Esri planning feature."""
+class DorsetExplorerApplicationV1(FrozenModel):
+    """Versioned native payload for the legacy Explorer fixture."""
 
+    kind: Literal["explorer-v1"] = "explorer-v1"
     esri_object_id: int
     application_reference: str
     proposal_description: str
     decision_status: str
     ward_name: str
+
+
+class DorsetDocumentV1(FrozenModel):
+    """One published document row without attachment content."""
+
+    published_date: date
+    title: str
+    size: str
+    url: HttpUrl
+
+
+class DorsetLiveApplicationV1(FrozenModel):
+    """Versioned native payload for a Dorset Council detail page."""
+
+    kind: Literal["live-v1"] = "live-v1"
+    application_reference: str
+    recno: str
+    status: str
+    application_type: str
+    proposal: str
+    validated_date: date
+    decision: str | None
+    authority: str | None
+    address: str
+    easting: float
+    northing: float
+    ward: str
+    parish: str
+    documents: tuple[DorsetDocumentV1, ...]
+    source_url: HttpUrl
+
+
+class DorsetApplicationV1(
+    RootModel[
+        Annotated[
+            DorsetExplorerApplicationV1 | DorsetLiveApplicationV1,
+            Field(discriminator="kind"),
+        ]
+    ]
+):
+    """A retained Dorset payload that preserves its source-specific version."""
+
+    model_config = ConfigDict(frozen=True)
 
 
 class DorsetParseError(ValueError):
@@ -206,19 +257,9 @@ class DorsetAdapter:
             yield DiscoveryBatch(references=(), next_checkpoint=progress, complete=True)
             return
 
-        form_capture = await session.fetch(
-            PortalRequest(url=HttpUrl(_ADVANCED_URL), intent=RequestIntent.SEARCH)
-        )
-        disclaimer_form = _parse_disclaimer_form(form_capture.body)
-        await session.fetch(_accept_disclaimer_request(disclaimer_form))
-        advanced_capture = await session.fetch(
-            PortalRequest(url=HttpUrl(_ADVANCED_URL), intent=RequestIntent.SEARCH)
-        )
-        advanced_form = _parse_advanced_form(advanced_capture.body)
-        query_keys = (
-            tuple(query.key for query in _LIVE_QUERIES if window.include_open)
-            or ("received-valid",)
-        )
+        query_keys = tuple(
+            query.key for query in _LIVE_QUERIES if window.include_open
+        ) or ("received-valid",)
         if (
             progress.active_query is not None
             and progress.active_query not in query_keys
@@ -229,6 +270,7 @@ class DorsetAdapter:
         for query in _LIVE_QUERIES:
             if query.key not in query_keys or query.key in progress.completed_queries:
                 continue
+            advanced_form = await _load_advanced_form(session)
             result = await session.fetch(_advanced_request(advanced_form, query, scope))
             page = _parse_result_page(result.body)
             if progress.active_query == query.key:
@@ -267,7 +309,9 @@ class DorsetAdapter:
         session: PortalSession,
         reference: SourceReference,
     ) -> NativeSnapshot[DorsetApplicationV1]:
-        """Read the existing rendered Explorer fixture detail."""
+        """Read an Explorer fixture or a consent-gated live detail page."""
+        if session.mode != TransportMode.FIXTURE:
+            return await self._fetch_live(session, reference)
         encoded = quote(reference.reference, safe="")
         url = f"{BASE_URL}/application/{encoded}"
         detail = await session.fetch(
@@ -275,19 +319,21 @@ class DorsetAdapter:
         )
         html = detail.body.decode()
         payload = DorsetApplicationV1(
-            esri_object_id=int(
-                _required(html, r'data-dorset-object-id="([^"]+)"', "object id")
-            ),
-            application_reference=reference.reference,
-            proposal_description=unescape(
-                _required(html, r'data-dorset-proposal="([^"]+)"', "proposal")
-            ),
-            decision_status=_required(
-                html,
-                r'data-dorset-status="([^"]+)"',
-                "status",
-            ),
-            ward_name=_required(html, r'data-dorset-ward="([^"]+)"', "ward"),
+            DorsetExplorerApplicationV1(
+                esri_object_id=int(
+                    _required(html, r'data-dorset-object-id="([^"]+)"', "object id")
+                ),
+                application_reference=reference.reference,
+                proposal_description=unescape(
+                    _required(html, r'data-dorset-proposal="([^"]+)"', "proposal")
+                ),
+                decision_status=_required(
+                    html,
+                    r'data-dorset-status="([^"]+)"',
+                    "status",
+                ),
+                ward_name=_required(html, r'data-dorset-ward="([^"]+)"', "ward"),
+            )
         )
         unavailable = UnavailableSection(reason="JavaScript map section not verified")
         return NativeSnapshot(
@@ -302,17 +348,82 @@ class DorsetAdapter:
             evidence=(detail,),
         )
 
+    async def _fetch_live(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> NativeSnapshot[DorsetApplicationV1]:
+        locator = reference.locator
+        if locator is None or re.fullmatch(r"\d+", locator) is None:
+            _raise_parse("detail recno")
+        detail_url = f"{LIVE_BASE_URL}/plandisp.aspx?recno={quote(locator, safe='')}"
+        request = PortalRequest(url=HttpUrl(detail_url), intent=RequestIntent.DETAIL)
+        detail = await session.fetch(request)
+        if _is_disclaimer(detail.body):
+            disclaimer_form = _parse_disclaimer_form(detail.body)
+            await session.fetch(_accept_disclaimer_request(disclaimer_form))
+            detail = await session.fetch(request)
+        capture = detail.model_copy(update={"url": HttpUrl(detail_url)})
+        payload = _parse_live_detail(capture.body, reference, capture.url)
+        comments = UnavailableSection(
+            reason="public comment text is not exposed by the Dorset register"
+        )
+        return NativeSnapshot(
+            reference=reference,
+            observed_at=datetime.now(UTC),
+            payload=DorsetApplicationV1(payload),
+            completeness=Completeness(
+                application=CompleteSection(item_count=1),
+                documents=collection_state(len(payload.documents)),
+                comments=comments,
+            ),
+            evidence=(capture,),
+        )
+
     def normalise(
         self,
         snapshot: NativeSnapshot[DorsetApplicationV1],
     ) -> NormalisedObservation:
         """Map Dorset feature attributes to the common record."""
+        payload = snapshot.payload.root
         evidence = snapshot.evidence[0].digest
+        if isinstance(payload, DorsetLiveApplicationV1):
+            return NormalisedObservation(
+                authority_id=self.manifest.id,
+                reference=snapshot.reference,
+                proposal=payload.proposal,
+                status=payload.status.casefold().replace(" ", "-"),
+                documents=tuple(
+                    DocumentRecord(
+                        title=(
+                            f"{document.published_date.strftime('%d/%m/%Y')} - "
+                            f"{document.title} ({document.size})"
+                        ),
+                        url=document.url,
+                    )
+                    for document in payload.documents
+                ),
+                comments=(),
+                completeness=snapshot.completeness,
+                provenance=(
+                    Provenance(field="proposal", evidence=evidence),
+                    Provenance(field="status", evidence=evidence),
+                ),
+                normaliser_version="dorset-v2",
+                metadata=ApplicationMetadata(
+                    application_type=payload.application_type,
+                    decision=payload.decision,
+                    address=payload.address,
+                    validated_date=payload.validated_date,
+                    location=bng_to_wgs84(payload.easting, payload.northing),
+                    source_url=payload.source_url,
+                ),
+            )
         return NormalisedObservation(
             authority_id=self.manifest.id,
             reference=snapshot.reference,
-            proposal=snapshot.payload.proposal_description,
-            status=snapshot.payload.decision_status.casefold().replace(" ", "-"),
+            proposal=payload.proposal_description,
+            status=payload.decision_status.casefold().replace(" ", "-"),
             documents=(),
             comments=(),
             completeness=snapshot.completeness,
@@ -379,9 +490,8 @@ def _validate_progress(
     query_keys: tuple[str, ...],
 ) -> None:
     completed = progress.completed_queries
-    if (
-        completed != query_keys[: len(completed)]
-        or len(set(completed)) != len(completed)
+    if completed != query_keys[: len(completed)] or len(set(completed)) != len(
+        completed
     ):
         _raise_checkpoint("completed queries")
     seen: dict[str, SourceReference] = {}
@@ -398,9 +508,10 @@ def _validate_progress(
         ):
             _raise_checkpoint("inactive state")
         return
-    if len(completed) == len(query_keys) or progress.active_query != query_keys[
-        len(completed)
-    ]:
+    if (
+        len(completed) == len(query_keys)
+        or progress.active_query != query_keys[len(completed)]
+    ):
         _raise_checkpoint("active query order")
 
 
@@ -411,9 +522,7 @@ async def _replay_active_query(
 ) -> _ResultPage:
     if progress.next_page < _FIRST_PAGED_RESULT or progress.total_pages is None:
         _raise_checkpoint("active page")
-    if len(progress.active_references) != (
-        progress.next_page - 1
-    ) * _RESULTS_PER_PAGE:
+    if len(progress.active_references) != (progress.next_page - 1) * _RESULTS_PER_PAGE:
         _raise_checkpoint("active references")
     current = page
     for expected_page in range(1, progress.next_page):
@@ -444,6 +553,28 @@ def _parse_disclaimer_form(body: bytes) -> Tag:
     return form
 
 
+async def _load_advanced_form(session: PortalSession) -> Tag:
+    capture = await session.fetch(
+        PortalRequest(url=HttpUrl(_ADVANCED_URL), intent=RequestIntent.SEARCH)
+    )
+    if _is_disclaimer(capture.body):
+        disclaimer_form = _parse_disclaimer_form(capture.body)
+        await session.fetch(_accept_disclaimer_request(disclaimer_form))
+        capture = await session.fetch(
+            PortalRequest(url=HttpUrl(_ADVANCED_URL), intent=RequestIntent.SEARCH)
+        )
+    return _parse_advanced_form(capture.body)
+
+
+def _is_disclaimer(body: bytes) -> bool:
+    soup = BeautifulSoup(body, "html.parser")
+    return any(
+        _form_action(form) == _DISCLAIMER_URL
+        for form in soup.select("form")
+        if isinstance(form, Tag)
+    )
+
+
 def _parse_advanced_form(body: bytes) -> Tag:
     form = _single_form(body, "advanced form")
     if (
@@ -470,7 +601,7 @@ def _parse_advanced_form(body: bytes) -> Tag:
     return form
 
 
-def _parse_result_page(body: bytes) -> _ResultPage:
+def _parse_result_page(body: bytes) -> _ResultPage:  # noqa: C901
     form = _single_form(body, "result form")
     if (
         str(form.get("method", "")).casefold() != "post"
@@ -480,8 +611,12 @@ def _parse_result_page(body: bytes) -> _ResultPage:
     fields = _successful_controls(form)
     _require_fields(fields, "__EVENTTARGET", "__EVENTARGUMENT", "__VIEWSTATE")
     _require_hidden_inputs(form, "__EVENTTARGET", "__EVENTARGUMENT", "__VIEWSTATE")
+    if not any(field.name == "__VIEWSTATE" and field.value for field in fields):
+        _raise_parse("result form viewstate")
     page, total_pages = _page_markers(form)
     references = []
+    result_references = set()
+    result_locators = set()
     for link in form.select('a[id$="_hypDisplayRecord"][href]'):
         if not isinstance(link, Tag):
             _raise_parse("result link")
@@ -491,6 +626,10 @@ def _parse_result_page(body: bytes) -> _ResultPage:
         reference = link.get_text(" ", strip=True)
         if not reference:
             _raise_parse("result reference")
+        if reference in result_references or values[0] in result_locators:
+            _raise_parse("duplicate result")
+        result_references.add(reference)
+        result_locators.add(values[0])
         references.append(
             SourceReference(
                 source_id=LIVE_SOURCE,
@@ -503,10 +642,20 @@ def _parse_result_page(body: bytes) -> _ResultPage:
     if page == total_pages and not 1 <= len(references) <= _RESULTS_PER_PAGE:
         _raise_parse("terminal result rows")
     next_controls = form.select(f'input[type="submit"][name="{_NEXT_BUTTON}"]')
+    bottom_next_controls = form.select(
+        f'input[type="submit"][name="{_BOTTOM_NEXT_BUTTON}"]'
+    )
     next_allowed = page < total_pages
     if next_allowed and (
         len(next_controls) != 1 or str(next_controls[0].get("value", "")) != " "
     ):
+        _raise_parse("next page")
+    if bottom_next_controls and (
+        len(bottom_next_controls) != 1
+        or str(bottom_next_controls[0].get("value", "")) != " "
+    ):
+        _raise_parse("next page")
+    if not next_allowed and next_controls:
         _raise_parse("next page")
     return _ResultPage(
         references=tuple(references),
@@ -515,6 +664,187 @@ def _parse_result_page(body: bytes) -> _ResultPage:
         form=fields,
         next_allowed=next_allowed,
     )
+
+
+def _parse_live_detail(
+    body: bytes,
+    reference: SourceReference,
+    source_url: HttpUrl,
+) -> DorsetLiveApplicationV1:
+    soup = BeautifulSoup(body, "html.parser")
+    details = _labelled_detail_values(
+        soup,
+        "ctl00_ContentPlaceHolder1_pvDetails",
+        (
+            "Application No",
+            "Status",
+            "Type",
+            "Proposal",
+            "Valid Date",
+            "Decision",
+            "Authority",
+        ),
+    )
+    location = _labelled_detail_values(
+        soup,
+        "ctl00_ContentPlaceHolder1_pvLocation",
+        ("Address", "Easting", "Northing", "Ward", "Parish"),
+    )
+    locator = reference.locator
+    if locator is None or details["Application No"] != reference.reference:
+        _raise_parse("detail reference")
+    authority = details["Authority"] or None
+    if authority not in {None, "Dorset Council"}:
+        _raise_parse("detail authority")
+    return DorsetLiveApplicationV1(
+        application_reference=details["Application No"],
+        recno=locator,
+        status=_nonempty_value(details, "Status"),
+        application_type=_nonempty_value(details, "Type"),
+        proposal=_nonempty_value(details, "Proposal"),
+        validated_date=_parse_dorset_date(_nonempty_value(details, "Valid Date")),
+        decision=details["Decision"] or None,
+        authority=authority,
+        address=_nonempty_value(location, "Address"),
+        easting=_parse_coordinate(_nonempty_value(location, "Easting"), "Easting"),
+        northing=_parse_coordinate(_nonempty_value(location, "Northing"), "Northing"),
+        ward=_nonempty_value(location, "Ward"),
+        parish=_nonempty_value(location, "Parish"),
+        documents=_parse_documents_grid(soup, source_url),
+        source_url=source_url,
+    )
+
+
+def _labelled_detail_values(
+    soup: BeautifulSoup,
+    identifier: str,
+    required_labels: tuple[str, ...],
+) -> dict[str, str]:
+    section = soup.select_one(f"#{identifier}")
+    if not isinstance(section, Tag):
+        _raise_parse(identifier)
+    values = {}
+    for label in section.select("span.applabel"):
+        label_text = label.get_text(" ", strip=True)
+        data = label.find_next_sibling("p", class_="appdata")
+        if not isinstance(data, Tag) or label_text in values:
+            _raise_parse("detail label")
+        values[label_text] = data.get_text(" ", strip=True)
+    if not set(required_labels).issubset(values):
+        _raise_parse("detail label")
+    return values
+
+
+def _nonempty_value(values: dict[str, str], label: str) -> str:
+    value = values[label]
+    if not value:
+        _raise_parse(f"detail {label}")
+    return value
+
+
+def _parse_dorset_date(value: str) -> date:
+    try:
+        return datetime.strptime(value, "%d/%m/%Y").replace(tzinfo=UTC).date()
+    except ValueError:
+        _raise_parse("detail date")
+
+
+def _parse_coordinate(value: str, label: str) -> float:
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", value) is None:
+        _raise_parse(f"detail {label}")
+    return float(value)
+
+
+def _parse_documents_grid(
+    soup: BeautifulSoup,
+    source_url: HttpUrl,
+) -> tuple[DorsetDocumentV1, ...]:
+    table = soup.select_one("#ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00")
+    if not isinstance(table, Tag):
+        _raise_parse("document grid")
+    documents = []
+    indices = []
+    document_index_url = HttpUrl(f"{source_url}#")
+    prefix = "ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__"
+    for row in table.select("tbody tr"):
+        row_id = str(row.get("id", ""))
+        match = re.fullmatch(rf"{re.escape(prefix)}(\d+)", row_id)
+        links = row.select("a[href]")
+        cells = row.find_all("td", recursive=False)
+        if match is None or len(links) != 1 or len(cells) != _DOCUMENT_CELL_COUNT:
+            _raise_parse("document grid")
+        link = links[0]
+        index = int(match.group(1))
+        onclick = str(link.get("onclick", ""))
+        if (
+            str(link.get("href", "")) != "#"
+            or re.fullmatch(r"\s*return\s+RowClicked\((\d+)\);\s*", onclick) is None
+        ):
+            _raise_parse("document grid")
+        onclick_match = re.fullmatch(
+            r"\s*return\s+RowClicked\((\d+)\);\s*",
+            onclick,
+        )
+        if onclick_match is None or int(onclick_match.group(1)) != index:
+            _raise_parse("document grid")
+        rendered = link.get_text(" ", strip=True)
+        published, separator, title = rendered.partition(" - ")
+        size_match = re.search(r"\(([^()]+)\)\s*$", row.get_text(" ", strip=True))
+        if not separator or not title or size_match is None:
+            _raise_parse("document grid")
+        documents.append(
+            DorsetDocumentV1(
+                published_date=_parse_dorset_date(published),
+                title=" ".join(title.split()),
+                size=size_match.group(1),
+                url=document_index_url,
+            )
+        )
+        indices.append(index)
+    if indices != list(range(len(indices))):
+        _raise_parse("document grid")
+    _assert_document_grid_proof(soup, len(documents))
+    return tuple(documents)
+
+
+def _assert_document_grid_proof(soup: BeautifulSoup, count: int) -> None:
+    proofs: list[tuple[bool, int, int]] = []
+    for script in soup.select("script"):
+        text = script.get_text()
+        encoded = re.search(
+            r'"_gridTableViewsData"\s*:\s*"((?:\\.|[^"\\])*)"',
+            text,
+        )
+        direct = re.search(
+            r'"_gridTableViewsData"\s*:\s*(\[\s*\{.*?\}\s*\])',
+            text,
+        )
+        try:
+            if encoded is not None:
+                payload = json.loads(json.loads(f'"{encoded.group(1)}"'))
+            elif direct is not None:
+                payload = json.loads(direct.group(1))
+            else:
+                continue
+        except (json.JSONDecodeError, TypeError):
+            _raise_parse("document grid")
+        if not isinstance(payload, list) or len(payload) != 1:
+            _raise_parse("document grid")
+        proof = payload[0]
+        if not isinstance(proof, dict):
+            _raise_parse("document grid")
+        allow_paging = proof.get("AllowPaging")
+        page_count = proof.get("PageCount")
+        virtual_count = proof.get("VirtualItemCount")
+        if (
+            not isinstance(allow_paging, bool)
+            or not isinstance(page_count, int)
+            or not isinstance(virtual_count, int)
+        ):
+            _raise_parse("document grid")
+        proofs.append((allow_paging, page_count, virtual_count))
+    if proofs != [(False, 1, count)]:
+        _raise_parse("document grid")
 
 
 def _single_form(body: bytes, field: str) -> Tag:

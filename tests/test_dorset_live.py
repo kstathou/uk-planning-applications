@@ -134,13 +134,14 @@ def _result_page(query: str, page: int, fault: str | None = None) -> bytes:
     """.encode()
 
 
-def _detail_page(reference: str, recno: int, *, document_count: int = 2) -> bytes:
+def _detail_page(reference: str, *, document_count: int = 2) -> bytes:
     rows = "".join(
         f"""
         <tr id="ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__{index}">
+          <td></td>
           <td><a id="document-{index}" href="#"
-            onclick="return RowClicked({index});">{published} - {title}</a></td>
-          <td>({size})</td>
+            onclick="return RowClicked({index}); ">{published} - {title}</a>
+            ({size})</td>
         </tr>
         """
         for index, published, title, size in (
@@ -156,8 +157,7 @@ def _detail_page(reference: str, recno: int, *, document_count: int = 2) -> byte
       <span class="applabel">Proposal</span><p class="appdata">Build two homes &amp; plant four trees</p>
       <span class="applabel">Valid Date</span><p class="appdata">15/09/2026</p>
       <span class="applabel">Decision</span><p class="appdata"></p>
-      <span class="applabel">Authority</span><p class="appdata">Dorset Council</p>
-      <span class="applabel">Record Number</span><p class="appdata">{recno}</p>
+      <span class="applabel">Authority</span><p class="appdata"></p>
     </div>
     <div id="ctl00_ContentPlaceHolder1_pvLocation">
       <span class="applabel">Address</span><p class="appdata">1 High Street, Dorset</p>
@@ -171,8 +171,7 @@ def _detail_page(reference: str, recno: int, *, document_count: int = 2) -> byte
       <tbody>{rows}</tbody>
     </table>
     <script>
-      var grid = {{"_gridTableViewsData":[{{"AllowPaging":false,
-        "PageCount":1,"VirtualItemCount":{document_count}}}]}};
+      var grid = {{"_gridTableViewsData":"[{{\\\"PageCount\\\":1,\\\"AllowPaging\\\":false,\\\"VirtualItemCount\\\":{document_count}}}]"}};
       function RowClicked(index) {{ return index; }}
     </script>
     """.encode()
@@ -215,9 +214,12 @@ class _DorsetMock:
                 row.reference for row in (*RECEIVED, *OUTSTANDING) if row.recno == recno
             )
             count = 1 if self.fault == "document-count" else 2
-            body = _detail_page(reference, recno, document_count=count)
+            body = _detail_page(reference, document_count=count)
             if self.fault == "document-count":
-                body = body.replace(b'"VirtualItemCount":1', b'"VirtualItemCount":2')
+                body = body.replace(
+                    b'\\"VirtualItemCount\\":1',
+                    b'\\"VirtualItemCount\\":2',
+                )
             return httpx.Response(
                 200,
                 content=body,
@@ -421,8 +423,11 @@ def test_dorset_live_detail_accepts_disclaimer_and_retains_document_metadata() -
         "21/08/2026 - Location Plan (1mb)",
     ]
     assert {str(document.url) for document in collected.normalised.documents} == {
-        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"
+        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}#"
     }
+    assert not {
+        str(document.url) for document in collected.normalised.documents
+    }.intersection(session.requested_urls)
     assert collected.normalised.completeness.application.kind == "complete"
     assert collected.normalised.completeness.documents.kind == "complete"
     assert collected.normalised.completeness.documents.item_count == 2
