@@ -153,48 +153,17 @@ class _CheshireResponder:
         self.calls: list[PortalRequest] = []
 
 
-def test_cheshire_valid_date_from_boundary_is_resumable_and_incomplete() -> None:
-    """Visible numeric locators persist before the unproved completeness boundary."""
+def test_cheshire_live_discovery_stops_before_source_io() -> None:
+    """An unproved source inventory cannot create partial durable work."""
     responder = _CheshireResponder()
     session = _HttpSession(responder)
     adapter = cheshire.CheshireEastAdapter()
 
     async def exercise() -> None:
         discovery = adapter.discover(session, RECENT, None)
-        batch = await anext(discovery)
-        assert batch.complete is False
-        assert tuple(item.reference for item in batch.references) == (
-            "26/3322/NMA",
-            "26/3335/PRIOR-1A",
-        )
-        assert tuple(item.locator for item in batch.references) == ("987654", "987655")
-        assert batch.next_checkpoint.table_observed
         with pytest.raises(cheshire.CheshireEastResultCompletenessUnavailableError):
             await anext(discovery)
-
-        requests_before = len(session.requests)
-        resumed = adapter.discover(session, RECENT, batch.next_checkpoint)
-        with pytest.raises(cheshire.CheshireEastResultCompletenessUnavailableError):
-            await anext(resumed)
-        assert len(session.requests) == requests_before
-
-        duplicate_checkpoint = batch.next_checkpoint.model_copy(
-            update={"table_observed": False}
-        )
-        duplicate_session = _HttpSession(_CheshireResponder())
-        duplicate = await anext(
-            adapter.discover(duplicate_session, RECENT, duplicate_checkpoint)
-        )
-        assert duplicate.references == ()
-
-        with pytest.raises(cheshire.CheshireEastRoutingError):
-            await adapter.fetch(
-                session,
-                SourceReference(source_id=cheshire.SOURCE, reference="26/3322/NMA"),
-            )
-        with pytest.raises(cheshire.CheshireEastDetailUnavailableError):
-            await adapter.fetch(session, batch.references[0])
-        assert len(session.requests) == requests_before
+        assert session.requests == []
 
     asyncio.run(exercise())
 
