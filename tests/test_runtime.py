@@ -65,8 +65,10 @@ from yimby.store import SqliteStore
 from yimby.transport import (
     AttachmentBodyBlockedError,
     FixtureSession,
+    FormField,
     PortalRequest,
     RequestIntent,
+    RequestMethod,
     SourceUnavailableError,
 )
 
@@ -444,6 +446,48 @@ def test_http_session_rejects_cross_host_redirect_before_destination_request() -
 
     asyncio.run(exercise())
     assert requested_hosts == ["source.test"]
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_method", "expected_body"),
+    [
+        (302, "GET", b""),
+        (307, "POST", b"field=value"),
+    ],
+)
+def test_http_session_follows_only_same_host_redirects(
+    status: int,
+    expected_method: str,
+    expected_body: bytes,
+) -> None:
+    final_requests: list[tuple[str, bytes]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(status, headers={"location": "/final"})
+        final_requests.append((request.method, request.content))
+        return httpx.Response(200, content=b"done")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        capture = await session.fetch(
+            PortalRequest(
+                url=HttpUrl("https://source.test/start"),
+                intent=RequestIntent.SEARCH,
+                method=RequestMethod.POST,
+                form=(FormField(name="field", value="value"),),
+            )
+        )
+        assert str(capture.url) == "https://source.test/final"
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert final_requests == [(expected_method, expected_body)]
+    assert session.requested_urls == ("https://source.test/final",)
 
 
 def test_http_session_retry_after_and_transport_failures() -> None:

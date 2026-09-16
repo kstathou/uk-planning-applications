@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: D100, E501, PLR2004
+# ruff: noqa: D100, E501, PLR0915, PLR2004, SLF001
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ import httpx
 import pytest
 from bs4 import BeautifulSoup
 from bs4.element import Tag
-from pydantic import HttpUrl
+from pydantic import HttpUrl, ValidationError
 
 import yimby.authorities.cheshire_east.adapter as cheshire
 from yimby.domain import (
@@ -27,6 +27,7 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
 )
+from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.transport import (
     AttachmentBodyBlockedError,
@@ -346,7 +347,13 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
 
 
 def test_cheshire_form_boundary_rejects_external_associated_controls() -> None:
-    body = _search_form() + b'<input form="form" name="external_token" value="x">'
+    body = (
+        _search_form().replace(
+            b'<input type="hidden" name="fa"',
+            b'<input form="form" type="hidden" name="fa"',
+        )
+        + b'<input form="form" name="external_token" value="x">'
+    )
 
     with pytest.raises(cheshire.CheshireEastParseError):
         cheshire.parse_search_form(body)
@@ -444,6 +451,13 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
     )
     assert zero.explicit_zero is True
 
+    with pytest.raises(cheshire.CheshireEastParseError):
+        cheshire._parse_result_table(
+            b'<table id="application_results_table"><tr><th>Reference</th>'
+            b"<th>Application Type</th><th>Location</th><th>Proposal</th>"
+            b"<th>View</th></tr></table>"
+        )
+
     paged = cheshire.parse_search_boundary(
         _search_results().replace(
             b"</table>",
@@ -453,6 +467,13 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
     )
     assert paged.reported_total == 2
     assert paged.pagination_links == ("?page=2",)
+    counted_container = cheshire.parse_search_boundary(
+        _search_results().replace(
+            b'<div class="centered application-list">',
+            b'<div class="centered application-list" data-result-count="1">',
+        )
+    )
+    assert counted_container.reported_total == 1
 
     for body in (
         b"<main></main>",
@@ -532,6 +553,22 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_results().replace(
             b"</table>",
             b'</table><nav class="pagination" hidden><a href="?page=2">Next</a></nav>',
+        ),
+        _search_results().replace(
+            b"</table>", b'</table><span data-result-count="0"></span>'
+        ),
+        _search_results().replace(
+            b"</table>", b'</table><span data-result-count="many"></span>'
+        ),
+        _search_results().replace(
+            b"<tr><td>26/3335/PRIOR-1A</td>",
+            b"<tr><td>26/3335/PRIOR-1A</td><td>extra</td>",
+        ),
+        _search_results().replace(
+            b"</table>",
+            b"<tr><td>26/3335/PRIOR-1A</td><td>Full</td>"
+            b"<td>Elsewhere</td><td>Other</td><td><button "
+            b'class="view_application" data-id="9">View</button></td></tr></table>',
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -1479,10 +1516,10 @@ def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
         ),
         (
             {
-                    "weekly_results": _weekly_results().replace(
-                        b"<table>",
-                        b'<table hidden data-result-count="49">',
-                    )
+                "weekly_results": _weekly_results().replace(
+                    b"<table>",
+                    b'<table hidden data-result-count="49">',
+                )
             },
             (
                 "source-access|search-form",
@@ -1884,3 +1921,475 @@ def test_cheshire_resume_without_receipt_refuses_source_io(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert '"error": "receipt-required"' in captured.err
+
+
+def test_cheshire_qualification_model_guards_cover_invalid_states(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(arguments, session_factory=_QualificationSession) == 1
+    capsys.readouterr()
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt.source_contract is not None
+
+    with pytest.raises(ValidationError):
+        module.QualificationScopeV1(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 15),
+            include_open=True,
+        )
+    with pytest.raises(ValidationError):
+        module.QualificationJournalStageV1(
+            request=receipt.attempted_requests[0],
+            state="prepared",
+            evidence=receipt.evidence[0],
+        )
+    wrong_request = receipt.attempted_requests[0].model_copy(update={"key": "wrong"})
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationJournalV1(
+            scope=receipt.scope,
+            stages=(
+                module.QualificationJournalStageV1(
+                    request=wrong_request,
+                    state="completed",
+                    evidence=receipt.evidence[0],
+                ),
+            ),
+        )
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationJournalV1(
+            scope=receipt.scope,
+            stages=(
+                module.QualificationJournalStageV1(
+                    request=receipt.attempted_requests[0],
+                    state="prepared",
+                ),
+                module.QualificationJournalStageV1(
+                    request=receipt.attempted_requests[1],
+                    state="completed",
+                    evidence=receipt.evidence[1],
+                ),
+            ),
+        )
+
+    recent_payload = receipt.source_contract.recent.model_dump()
+    with pytest.raises(ValidationError):
+        module.RecentContractV1.model_validate({**recent_payload, "reported_total": 1})
+    positive_recent = module.RecentContractV1(
+        explicit_zero=False,
+        visible_references=("26/1",),
+        results=(
+            cheshire.CheshireEastSearchResultV1(
+                public_reference="26/1",
+                application_type="Full",
+                location="One Road",
+                proposal="Build",
+                detail_locator="1",
+            ),
+        ),
+        reported_total=1,
+        pagination_links=(),
+        terminal_marker=False,
+    )
+    with pytest.raises(ValidationError):
+        module.RecentContractV1.model_validate(
+            {**positive_recent.model_dump(), "reported_total": 0}
+        )
+    with pytest.raises(ValidationError):
+        module.DetailContractV1.model_validate(
+            {**receipt.source_contract.detail.model_dump(), "document_count": 0}
+        )
+
+    receipt_payload = receipt.model_dump(mode="json")
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationBlockerReceiptV2.model_validate(
+            {
+                **receipt_payload,
+                "checks": [*receipt_payload["checks"], receipt_payload["checks"][0]],
+            }
+        )
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationBlockerReceiptV2.model_validate(
+            {
+                **receipt_payload,
+                "source_contract": None,
+                "blockers": receipt_payload["blockers"][:2],
+            }
+        )
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationBlockerReceiptV2.model_validate(
+            {**receipt_payload, "checks": receipt_payload["checks"][:-1]}
+        )
+
+    proven_weekly = receipt.source_contract.weekly.model_copy(
+        update={"reported_total": receipt.source_contract.weekly.row_count}
+    )
+    proven_contract = receipt.source_contract.model_copy(
+        update={"weekly": proven_weekly}
+    )
+    codes, _, _, weekly_unproved = module._source_blocker_facts(
+        receipt.scope,
+        proven_contract,
+    )
+    assert weekly_unproved is False
+    assert "weekly-list-terminality-unproven" not in codes
+    probe = module._ProbeResult(
+        source_contract=proven_contract,
+        blocker=None,
+        attempted_requests=receipt.attempted_requests,
+        captures=(),
+        costs=receipt.costs,
+    )
+    proven_receipt = module._receipt(
+        receipt.scope,
+        probe,
+        receipt.evidence,
+        receipt.created_at,
+    )
+    assert "weekly-list-terminality-unproven" not in {
+        blocker.code for blocker in proven_receipt.blockers
+    }
+    with pytest.raises(ValueError, match="typed blocker"):
+        module._receipt(
+            receipt.scope,
+            probe.model_copy(update={"source_contract": None}),
+            receipt.evidence,
+            receipt.created_at,
+        )
+
+
+def test_cheshire_qualification_runtime_guards_cover_invalid_state(
+    tmp_path: Path,
+) -> None:
+    module = _qualification_module()
+    scope = module.QualificationScopeV1(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=True,
+    )
+    search = module._recorded_query(
+        "source-access|search-form", cheshire.search_form_request()
+    )
+    recent = module._recorded_query(
+        "recent|valid|2026-08-18|2026-09-16",
+        cheshire.valid_date_request(
+            cheshire.parse_search_form(_search_form()),
+            DiscoveryWindow(
+                start=scope.start,
+                end=scope.end,
+                include_open=True,
+            ),
+        ),
+    )
+    weekly_form = module._recorded_query(
+        "source-access|weekly-form", cheshire.weekly_received_form_request()
+    )
+    weekly = module._recorded_query(
+        "older-open|weekly-received|2024-01-01",
+        cheshire.weekly_received_request(
+            cheshire.parse_weekly_form(_weekly_form()), date(2024, 1, 1)
+        ),
+    )
+
+    with pytest.raises(ValueError, match="request-shape-mismatch"):
+        module._validate_attempted_request_shapes(
+            scope,
+            (search, recent.model_copy(update={"form": ()})),
+        )
+    with pytest.raises(ValueError, match="request-shape-mismatch"):
+        module._validate_attempted_request_shapes(
+            scope,
+            (search, recent, weekly_form, weekly.model_copy(update={"form": ()})),
+        )
+    with pytest.raises(ValueError, match="request-form-duplicate"):
+        module._unique_recorded_fields(
+            (
+                module.RecordedFieldV1(name="x", value="1"),
+                module.RecordedFieldV1(name="x", value="2"),
+            )
+        )
+
+    journal_path = tmp_path / "journal"
+    journal_path.mkdir()
+    mismatched_stage = module.QualificationJournalStageV1.model_construct(
+        request=recent,
+        state="prepared",
+        evidence=None,
+    )
+    journal = module.CheshireEastQualificationJournalV1.model_construct(
+        scope=scope,
+        stages=(mismatched_stage,),
+    )
+    probe_journal = module._ProbeJournal(journal_path, journal)
+    with pytest.raises(ValueError, match="journal-request-mismatch"):
+        asyncio.run(
+            probe_journal.capture(
+                _QualificationSession(),
+                "source-access|search-form",
+                cheshire.search_form_request(),
+            )
+        )
+
+    missing_evidence_stage = module.QualificationJournalStageV1.model_construct(
+        request=search,
+        state="completed",
+        evidence=None,
+    )
+    missing_evidence_journal = (
+        module.CheshireEastQualificationJournalV1.model_construct(
+            scope=scope,
+            stages=(missing_evidence_stage,),
+        )
+    )
+    probe_journal = module._ProbeJournal(journal_path, missing_evidence_journal)
+    with pytest.raises(ValueError, match="journal-stage-evidence-missing"):
+        asyncio.run(
+            probe_journal.capture(
+                _QualificationSession(),
+                "source-access|search-form",
+                cheshire.search_form_request(),
+            )
+        )
+
+    incomplete = module._ProbeJournal(
+        journal_path,
+        module.CheshireEastQualificationJournalV1.model_construct(
+            scope=scope,
+            stages=(
+                module.QualificationJournalStageV1(
+                    request=search,
+                    state="prepared",
+                ),
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="journal-stage-incomplete"):
+        _ = incomplete.retained_evidence
+
+    wrong_scope = module.QualificationScopeV1(
+        start=date(2026, 8, 17),
+        end=date(2026, 9, 15),
+        include_open=True,
+    )
+    module._write_model(
+        journal_path / "cheshire-east-qualification-journal-v1.json",
+        module.CheshireEastQualificationJournalV1(scope=wrong_scope),
+    )
+    config = module._Config(data_dir=journal_path, scope=scope, resume=True)
+    with pytest.raises(module._QualificationConfigError, match="invalid-window"):
+        module._open_probe_journal(config)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected"),
+    [
+        (("--include-open",), "confirmation-required"),
+        (("--confirm-live",), "include-open-required"),
+        (("--confirm-live", "--include-open", "--start", "bad"), "invalid-date"),
+        (
+            ("--confirm-live", "--include-open", "--start", "2026-09-17"),
+            "invalid-window",
+        ),
+        (
+            ("--confirm-live", "--include-open", "--end", "2026-09-15"),
+            "exact-30-day-window-required",
+        ),
+    ],
+)
+def test_cheshire_qualification_rejects_invalid_configuration(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    arguments: tuple[str, ...],
+    expected: str,
+) -> None:
+    module = _qualification_module()
+    values = {
+        "--data-dir": str(tmp_path / "qualification"),
+        "--start": "2026-08-18",
+        "--end": "2026-09-16",
+    }
+    supplied = set(arguments)
+    argv = list(arguments)
+    for flag, value in values.items():
+        if flag not in supplied:
+            argv.extend((flag, value))
+    assert module.main(argv, session_factory=_QualificationSession) == 2
+    captured = capsys.readouterr()
+    assert expected in captured.err
+
+
+def test_cheshire_qualification_rejects_unsafe_data_directories(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    common = [
+        "--confirm-live",
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    file_path = tmp_path / "file"
+    file_path.write_text("x", encoding="utf-8")
+    assert module.main([*common, "--data-dir", str(file_path)]) == 2
+    assert "data-dir-not-directory" in capsys.readouterr().err
+
+    nonempty = tmp_path / "nonempty"
+    nonempty.mkdir()
+    (nonempty / "existing").write_text("x", encoding="utf-8")
+    assert module.main([*common, "--data-dir", str(nonempty)]) == 2
+    assert "resume-required" in capsys.readouterr().err
+
+
+def test_cheshire_replay_and_retention_defensive_guards(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(arguments, session_factory=_QualificationSession) == 1
+    capsys.readouterr()
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    bodies = tuple(
+        gzip.decompress((data_dir / "evidence" / item.relative_path).read_bytes())
+        for item in receipt.evidence
+    )
+
+    evidence = list(receipt.evidence)
+    evidence[0] = evidence[0].model_copy(update={"media_type": "application/xhtml+xml"})
+    non_html = receipt.model_copy(update={"evidence": tuple(evidence)})
+    replay = module._RetainedEvidenceReplay(non_html, bodies)
+    with pytest.raises(module._QualificationEvidenceError):
+        replay.parse_stage(0, lambda body: body, (ValueError,), "wrong-blocker")
+
+    def rejected_parser(body: bytes) -> bytes:
+        raise cheshire.CheshireEastParseError(body.decode(errors="ignore"))
+
+    replay = module._RetainedEvidenceReplay(receipt, bodies)
+    with pytest.raises(module._QualificationEvidenceError):
+        replay.parse_stage(
+            0,
+            rejected_parser,
+            (cheshire.CheshireEastParseError,),
+            "wrong-blocker",
+        )
+
+    requests = list(receipt.attempted_requests)
+    requests[1] = requests[1].model_copy(update={"form": ()})
+    with pytest.raises(module._QualificationEvidenceError):
+        module._verify_request_evidence_contract(
+            receipt.model_copy(update={"attempted_requests": tuple(requests)}),
+            bodies,
+        )
+    requests = list(receipt.attempted_requests)
+    requests[3] = requests[3].model_copy(update={"form": ()})
+    with pytest.raises(module._QualificationEvidenceError):
+        module._verify_request_evidence_contract(
+            receipt.model_copy(update={"attempted_requests": tuple(requests)}),
+            bodies,
+        )
+
+    recent = cheshire.parse_search_boundary(bodies[1])
+    weekly = cheshire.parse_weekly_boundary(bodies[3])
+    detail = cheshire.parse_detail_contract(
+        bodies[4],
+        expected_reference="26/3335/PRIOR-1A",
+        expected_locator="406569",
+    )
+
+    def invalid_contract(*_args: object) -> object:
+        return module.SourceContractV1.model_validate({})
+
+    monkeypatch.setattr(module, "_source_contract_from_boundaries", invalid_contract)
+    with pytest.raises(module._QualificationEvidenceError):
+        module._verify_replayed_source_contract(replay, recent, weekly, detail)
+
+    drift_receipt = receipt.model_copy(
+        update={
+            "source_contract": None,
+            "blockers": (
+                module.QualificationBlockerV1(
+                    code="official-source-contract-drift",
+                    explanation=(
+                        "an official response no longer matched the recorded source "
+                        "contract; every completed response was retained"
+                    ),
+                ),
+            ),
+        }
+    )
+    drift_replay = module._RetainedEvidenceReplay(drift_receipt, bodies)
+    module._verify_replayed_source_contract(drift_replay, recent, weekly, detail)
+
+    bad_path = tmp_path / "bad.gz"
+    bad_path.write_bytes(gzip.compress(b"other", mtime=0))
+
+    class BadStore(EvidenceStore):
+        def put(self, _capture: EvidenceCapture) -> Path:
+            return bad_path
+
+    capture = EvidenceCapture(
+        url=HttpUrl("https://example.test/source"),
+        media_type="text/html",
+        body=b"expected",
+        digest=EvidenceDigest(sha256(b"expected").hexdigest()),
+    )
+    with pytest.raises(module._QualificationEvidenceError):
+        module._retain_evidence(BadStore(tmp_path), (capture,))
+
+    outside = data_dir / "outside.gz"
+    outside.write_bytes(gzip.compress(b"outside", mtime=0))
+    traversal = receipt.evidence[0].model_copy(
+        update={"relative_path": "../outside.gz"}
+    )
+    with pytest.raises(module._QualificationEvidenceError):
+        module._read_retained_evidence(data_dir, traversal)
+    corrupt = receipt.evidence[0].model_copy(update={"digest": "0" * 64})
+    with pytest.raises(module._QualificationEvidenceError):
+        module._read_retained_evidence(data_dir, corrupt)
+
+    with pytest.raises(module._QualificationConfigError, match="receipt-required"):
+        module._verify_receipt(tmp_path / "missing", receipt.scope)
+    wrong_scope = module.QualificationScopeV1(
+        start=date(2026, 8, 17),
+        end=date(2026, 9, 15),
+        include_open=True,
+    )
+    with pytest.raises(module._QualificationConfigError, match="invalid-window"):
+        module._verify_receipt(data_dir, wrong_scope)
+
+    session = module._default_session()
+    asyncio.run(session.aclose())

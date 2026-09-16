@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, E501, EM101, PLR0911, PLR2004, SLF001, TRY003
+# ruff: noqa: ANN401, E501, EM101, PLR0911, PLR2004, SLF001, TRY003
 
 """Real HTTP contract boundaries for Arun, Devon, Camden, and Peak District."""
 

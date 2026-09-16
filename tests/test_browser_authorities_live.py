@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D100, D103, E501, PLR2004, SLF001
+# ruff: noqa: ANN401, D100, E501, PLR2004, SLF001
 
 from __future__ import annotations
 

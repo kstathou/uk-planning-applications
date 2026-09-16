@@ -834,7 +834,15 @@ def _assert_document_url(url: str, expected_locator: str) -> None:
         _raise_parse("document metadata link")
 
 
-def _parse_result_table(table: Tag) -> tuple[CheshireEastSearchResultV1, ...]:
+def _parse_result_table(
+    table: Tag | bytes,
+) -> tuple[CheshireEastSearchResultV1, ...]:
+    if isinstance(table, bytes):
+        soup = BeautifulSoup(table, "html.parser")
+        tables = soup.select("table#application_results_table")
+        if len(tables) != 1:
+            return _raise_parse("valid-date result table")
+        table = tables[0]
     rows = table.select("tr")
     if not rows or _has_hidden_ancestor(rows[0]):
         return _raise_parse("valid-date result table")

@@ -1353,7 +1353,3 @@ def main(
         )
     print(receipt.model_dump_json())
     return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
