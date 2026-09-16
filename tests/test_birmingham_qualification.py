@@ -548,7 +548,9 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
     assert receipt["source_freshness"] == {
         "status": "not-proven",
         "latest_received": "2026-09-15",
+        "latest_accepted": "2026-10-27",
         "latest_record_is_current": True,
+        "future_accepted_date_present": True,
         "volume_continuity": "not-proven",
         "calendar_2025_count": 5802,
         "july_2026_count": 453,
