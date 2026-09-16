@@ -336,9 +336,7 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
     assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
     assert receipt["costs"]["rerun"]["request_count"] == 0
     assert all(check["ok"] for check in receipt["checks"])
-    assert "authority-readiness" in {
-        check["name"] for check in receipt["checks"]
-    }
+    assert "authority-readiness" in {check["name"] for check in receipt["checks"]}
     assert manifest.live_status.evidence == (
         f"{_OPDC_EVIDENCE_PATH} records 55 complete applications",
     )
