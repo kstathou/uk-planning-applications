@@ -144,7 +144,8 @@ without `--resume`, and rejects a changed scope in an existing qualification
 store before opening a network session. It writes
 `opdc-qualification-v1.json` only after the exact query inventory, reference
 agreement, complete application evidence, SQLite integrity, zero retry and
-failure counts, attachment policy, and immediate zero-network rerun all pass.
+failure counts, evidence digest verification, exact per-application capture URL
+associations, attachment policy, and immediate zero-network rerun all pass.
 Its data directory contains the SQLite store and compressed source evidence;
 document bodies are never requested.
 
