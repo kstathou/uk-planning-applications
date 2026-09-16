@@ -58,6 +58,7 @@ def _query(kind: BlackburnQueryKind) -> BlackburnQueryV1:
 def _control(*, value: str | None = None) -> MagicMock:
     control = MagicMock()
     control.count = AsyncMock(return_value=1)
+    control.wait_for = AsyncMock()
     control.fill = AsyncMock()
     control.get_attribute = AsyncMock(return_value=value)
     return control
@@ -154,6 +155,7 @@ def test_blackburn_page_object_submits_exact_hyphen_date_fields(
         "https://online.blackburn.gov.uk/planning/index.html?fa=search",
         wait_until="domcontentloaded",
     )
+    page.form.wait_for.assert_awaited_once_with(state="attached", timeout=20_000)
     page.controls[f'input[name="{start_name}"]'].fill.assert_awaited_once_with(
         "18-08-2026"
     )
@@ -324,7 +326,7 @@ def test_blackburn_page_object_factory_and_default_pause(
 
     asyncio.run(exercise())
 
-    create.assert_awaited_once_with()
+    create.assert_awaited_once_with(headless=False)
     assert sleep.await_count == 2
     sleep.assert_awaited_with(2.0)
     assert boundary.closed
