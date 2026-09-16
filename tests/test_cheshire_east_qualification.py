@@ -786,6 +786,11 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_form().replace(
             b"</form>", b'<input name="unknown_filter" value="narrow"></form>'
         ),
+        _search_form().replace(
+            b"</form>",
+            b'<input type="hidden" name="unknown_hidden_filter" '
+            b'value="narrow"></form>',
+        ),
         _search_form() + _search_form(),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
