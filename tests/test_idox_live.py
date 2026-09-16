@@ -125,6 +125,13 @@ CASES = (
 )
 
 _WEST_SUFFOLK_CASE = CASES[2]
+_DURHAM_CASE = CASES[1]
+_DURHAM_OPEN_REFERENCES = (
+    ("DM/26/03001/FPA", "DUR-OPEN-A"),
+    ("DM/26/03002/FPA", "DUR-OPEN-B"),
+    ("DM/26/03003/AD", "DUR-OPEN-C"),
+    ("DM/26/03004/FPA", "DUR-OPEN-D"),
+)
 _WEST_SUFFOLK_OPEN_REFERENCES = (
     ("DC/26/2001/FUL", "WEST-OPEN-A"),
     ("DC/26/2002/FUL", "WEST-OPEN-B"),
@@ -231,6 +238,44 @@ def _advanced_form(
       <input name="date(appealDecisionStart)" value="">
       <input name="date(appealDecisionEnd)" value="">
       {hidden_fields}
+      <input type="hidden" name="tag" value="one">
+      <input type="hidden" name="tag" value="two">
+      <input type="submit" name="submit" value="Search">
+    </form>
+    """.encode()
+
+
+def _durham_advanced_form(*, missing_case_type: bool = False) -> bytes:
+    case_types = tuple(getattr(durham_adapter, "_CASE_TYPES"))
+    options = "".join(
+        f'<option value="{value}">{value}</option>'
+        for value in case_types
+        if not (missing_case_type and value == "FPA")
+    )
+    return f"""
+    <form id="advancedSearchForm" method="post"
+      action="/online-applications/advancedSearchResults.do?action=firstPage">
+      <input type="hidden" name="_csrf" value="sanitised-token">
+      <input name="searchCriteria.reference" value="">
+      <select name="searchCriteria.caseType" multiple="multiple">{options}</select>
+      <select name="searchCriteria.caseStatus">
+        <option value="" selected>All</option>
+        <option value="Appeal decided">Appeal decided</option>
+        <option value="Appeal lodged">Appeal lodged</option>
+        <option value="Decided">Decided</option>
+        <option value="Pending Consideration">Pending Consideration</option>
+        <option value="Pending Decision">Pending Decision</option>
+        <option value="Registered">Registered</option>
+        <option value="Unknown">Unknown</option>
+      </select>
+      <select name="searchCriteria.appealStatus">
+        <option value="" selected>All</option>
+        <option value="Appeal decided">Appeal decided</option>
+        <option value="Appeal lodged">Appeal lodged</option>
+      </select>
+      <input name="date(applicationReceivedStart)" value="">
+      <input name="date(applicationReceivedEnd)" value="">
+      <input type="hidden" name="searchType" value="Application">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="submit" value="Search">
@@ -491,6 +536,54 @@ def _west_suffolk_open_page(
     raise AssertionError(f"unexpected West Suffolk open query {query!r} page {page}")
 
 
+def _durham_open_page(
+    query: tuple[str, str, str, str, str],
+    page: int,
+    fault: str | None,
+) -> bytes:
+    field, value, case_type, received_start, _received_end = query
+    open_rows = _DURHAM_OPEN_REFERENCES
+    if fault == "too-many-results" and case_type == "AACON":
+        return b"<p>Please check the search criteria: Too many results found.</p>"
+    if field == "searchCriteria.caseStatus":
+        if value == "Pending Decision":
+            if page == 1:
+                return _result_page_with_showing_markers(
+                    ((_DURHAM_CASE.references[3], _DURHAM_CASE.locators[3]), open_rows[0]),
+                    ("Showing 1-2 of 3", "Showing 1-2 of 3"),
+                    current_page="",
+                )
+            return _result_page_with_showing_markers(
+                (open_rows[1],),
+                ("Showing 3-3 of 3", "Showing 3-3 of 3"),
+                current_page="2",
+                numbered_page=1,
+            )
+        if value in {"Appeal lodged", "Registered", "Unknown"}:
+            return b"<p>No results found.</p>"
+        if value == "Pending Consideration":
+            if case_type == "AD" and not received_start:
+                return _advanced_detail_redirect_for(open_rows[2])
+            if case_type == "FPA" and received_start == "01/01/2026":
+                return _advanced_detail_redirect_for(open_rows[3])
+            return b"<p>No results found.</p>"
+    if field == "searchCriteria.appealStatus" and value == "Appeal lodged":
+        return _result_page((open_rows[0],), count=1)
+    raise AssertionError(f"unexpected Durham open query {query!r} page {page}")
+
+
+def _advanced_detail_redirect_for(row: tuple[str, str]) -> bytes:
+    reference, locator = row
+    return (
+        '<table id="simpleDetailsTable">'
+        f"<tr><th>Reference</th><td>{reference}</td></tr></table>"
+        f'<a href="applicationDetails.do?keyVal={locator}&amp;activeTab=summary">'
+        "Summary</a>"
+        f'<a href="applicationDetails.do?keyVal={locator}&amp;activeTab=documents">'
+        "Documents</a>"
+    ).encode()
+
+
 def _expected_advanced_fields(
     target_field: str,
     value: str,
@@ -559,6 +652,7 @@ class _IdoxMock:
         expected_week: str = "14/09/2026",
         validated_current_page: str = "1",
         west_suffolk_open_fault: str | None = None,
+        durham_open_fault: str | None = None,
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -579,8 +673,9 @@ class _IdoxMock:
         self.expected_week = expected_week
         self.validated_current_page = validated_current_page
         self.west_suffolk_open_fault = west_suffolk_open_fault
+        self.durham_open_fault = durham_open_fault
         self.current_date_type = ""
-        self.current_open_query: tuple[str, str] | None = None
+        self.current_open_query: tuple[str, ...] | None = None
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
 
@@ -596,6 +691,14 @@ class _IdoxMock:
                 content=_weekly_form(self.search_type),
             )
         if path.endswith("/search.do") and action == "advanced":
+            if self.case.authority_id == AuthorityId("durham"):
+                return httpx.Response(
+                    200,
+                    content=_durham_advanced_form(
+                        missing_case_type=self.durham_open_fault
+                        == "missing-case-type",
+                    ),
+                )
             assert self.case.authority_id == AuthorityId("west-suffolk")
             return httpx.Response(
                 200,
@@ -688,7 +791,6 @@ class _IdoxMock:
                 ),
             )
         if path.endswith("/advancedSearchResults.do"):
-            assert self.case.authority_id == AuthorityId("west-suffolk")
             values = dict(fields)
             active = tuple(
                 (field, values[field])
@@ -700,6 +802,24 @@ class _IdoxMock:
             )
             assert len(active) == 1
             self.current_date_type = ""
+            if self.case.authority_id == AuthorityId("durham"):
+                field, value = active[0]
+                self.current_open_query = (
+                    field,
+                    value,
+                    values.get("searchCriteria.caseType", ""),
+                    values["date(applicationReceivedStart)"],
+                    values["date(applicationReceivedEnd)"],
+                )
+                return httpx.Response(
+                    200,
+                    content=_durham_open_page(
+                        self.current_open_query,
+                        1,
+                        self.durham_open_fault,
+                    ),
+                )
+            assert self.case.authority_id == AuthorityId("west-suffolk")
             self.current_open_query = active[0]
             return httpx.Response(
                 200,
@@ -711,10 +831,22 @@ class _IdoxMock:
             )
         if path.endswith("/pagedSearchResults.do"):
             if self.current_open_query is not None:
+                if self.case.authority_id == AuthorityId("durham"):
+                    return httpx.Response(
+                        200,
+                        content=_durham_open_page(
+                            cast(
+                                "tuple[str, str, str, str, str]",
+                                self.current_open_query,
+                            ),
+                            2,
+                            self.durham_open_fault,
+                        ),
+                    )
                 return httpx.Response(
                     200,
                     content=_west_suffolk_open_page(
-                        self.current_open_query,
+                        cast("tuple[str, str]", self.current_open_query),
                         2,
                         self.west_suffolk_open_fault,
                     ),
@@ -740,7 +872,10 @@ class _IdoxMock:
             locator = request.url.params["keyVal"]
             known = dict(zip(self.case.locators, self.case.references, strict=True)) | {
                 open_locator: open_reference
-                for open_reference, open_locator in _WEST_SUFFOLK_OPEN_REFERENCES
+                for open_reference, open_locator in (
+                    *_WEST_SUFFOLK_OPEN_REFERENCES,
+                    *_DURHAM_OPEN_REFERENCES,
+                )
             }
             reference = known[locator]
             tab = request.url.params["activeTab"]
@@ -1094,7 +1229,10 @@ def test_authority_weekly_discovery_rejects_mismatch_and_open_scope(
 
     asyncio.run(mismatch())
 
-    if case.authority_id == AuthorityId("west-suffolk"):
+    if case.authority_id in {
+        AuthorityId("durham"),
+        AuthorityId("west-suffolk"),
+    }:
         return
 
     async def open_scope() -> None:
@@ -1109,6 +1247,315 @@ def test_authority_weekly_discovery_rejects_mismatch_and_open_scope(
         await session.aclose()
 
     asyncio.run(open_scope())
+
+
+def test_durham_open_discovery_exhausts_authoritative_partitions() -> None:
+    """Durham preserves the live form and completes every bounded partition."""
+    package = pilot_registry().get(AuthorityId("durham"))
+    mock = _IdoxMock(_DURHAM_CASE)
+    session = _PortalRequestSpy(mock)
+    window = WEEK.model_copy(update={"include_open": True})
+
+    async def discover_all() -> list[DurableDiscoveryBatch]:
+        batches = [batch async for batch in package.discover(session, window, None)]
+        await session.aclose()
+        return batches
+
+    batches = asyncio.run(discover_all())
+    assert [
+        reference.reference for batch in batches for reference in batch.references
+    ] == [
+        *_DURHAM_CASE.references,
+        *[reference for reference, _locator in _DURHAM_OPEN_REFERENCES],
+    ]
+    assert batches[-1].complete
+    checkpoint = durham_adapter.DurhamCheckpointV1.model_validate_json(
+        batches[-1].next_checkpoint.payload_json
+    )
+    assert checkpoint.completed_queries == (
+        "14/09/2026|DC_Validated",
+        "14/09/2026|DC_Decided",
+        *durham_adapter.durham_open_query_keys(window.end),
+    )
+    queries = getattr(durham_adapter, "_advanced_queries")(window.end)
+    advanced_posts = [
+        request.form
+        for request in session.requests
+        if request.method.value == "POST"
+        and str(request.url.path).endswith("/advancedSearchResults.do")
+    ]
+    assert len(advanced_posts) == len(queries)
+    for form, query in zip(advanced_posts, queries, strict=True):
+        rendered = tuple((field.name, field.value) for field in form)
+        values = dict(rendered)
+        assert values["searchCriteria.caseStatus"] == (
+            query.value if query.field == "searchCriteria.caseStatus" else ""
+        )
+        assert values["searchCriteria.appealStatus"] == (
+            query.value if query.field == "searchCriteria.appealStatus" else ""
+        )
+        assert values.get("searchCriteria.caseType") == query.case_type
+        assert values["date(applicationReceivedStart)"] == (
+            ""
+            if query.received_start is None
+            else query.received_start.strftime("%d/%m/%Y")
+        )
+        assert values["date(applicationReceivedEnd)"] == (
+            ""
+            if query.received_end is None
+            else query.received_end.strftime("%d/%m/%Y")
+        )
+        assert tuple(item for item in rendered if item[0] == "tag") == (
+            ("tag", "one"),
+            ("tag", "two"),
+        )
+    assert mock.attachment_paths == []
+    assert session.attachment_body_requests == 0
+
+
+def test_durham_open_discovery_resumes_and_terminal_rerun_is_zero_io() -> None:
+    """A resumed advanced page restores state and terminal discovery is local."""
+    package = pilot_registry().get(AuthorityId("durham"))
+    window = WEEK.model_copy(update={"include_open": True})
+    first_session = _session(_IdoxMock(_DURHAM_CASE))
+
+    async def stop_on_page_two() -> tuple[list[str], StoredCheckpoint]:
+        references: list[str] = []
+        discovery = cast(
+            "AsyncGenerator[DurableDiscoveryBatch]",
+            package.discover(first_session, window, None),
+        )
+        try:
+            async for batch in discovery:
+                references.extend(reference.reference for reference in batch.references)
+                checkpoint = durham_adapter.DurhamCheckpointV1.model_validate_json(
+                    batch.next_checkpoint.payload_json
+                )
+                if checkpoint.active_query == (
+                    "advanced|searchCriteria.caseStatus|Pending Decision"
+                ):
+                    return references, batch.next_checkpoint
+        finally:
+            await discovery.aclose()
+            await first_session.aclose()
+        message = "Durham discovery did not reach an advanced second page"
+        raise AssertionError(message)
+
+    first_references, checkpoint = asyncio.run(stop_on_page_two())
+    assert first_references == [*_DURHAM_CASE.references, "DM/26/03001/FPA"]
+    resumed_mock = _IdoxMock(_DURHAM_CASE)
+    resumed_session = _session(resumed_mock)
+
+    async def resume() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(resumed_session, window, checkpoint)
+        ]
+        await resumed_session.aclose()
+        return batches
+
+    resumed = asyncio.run(resume())
+    assert [
+        reference.reference for batch in resumed for reference in batch.references
+    ] == ["DM/26/03002/FPA", "DM/26/03003/AD", "DM/26/03004/FPA"]
+    assert resumed[-1].complete
+    advanced_requests = [
+        (method, path)
+        for method, path, _fields in resumed_mock.requests
+        if path.endswith(("/advancedSearchResults.do", "/pagedSearchResults.do"))
+    ]
+    assert advanced_requests[:2] == [
+        ("POST", "/online-applications/advancedSearchResults.do"),
+        ("GET", "/online-applications/pagedSearchResults.do"),
+    ]
+
+    terminal_session = _session(_IdoxMock(_DURHAM_CASE))
+
+    async def terminal() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(
+                terminal_session,
+                window,
+                resumed[-1].next_checkpoint,
+            )
+        ]
+        await terminal_session.aclose()
+        return batches
+
+    assert asyncio.run(terminal()) == [
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=resumed[-1].next_checkpoint,
+            complete=True,
+        )
+    ]
+    assert terminal_session.requested_urls == ()
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("missing-case-type", "advanced form case type options"),
+        ("too-many-results", "reported result count"),
+    ],
+)
+def test_durham_open_discovery_fails_closed(fault: str, message: str) -> None:
+    """Missing form values and portal result caps never imply completeness."""
+    package = pilot_registry().get(AuthorityId("durham"))
+    session = _session(_IdoxMock(_DURHAM_CASE, durham_open_fault=fault))
+    window = WEEK.model_copy(update={"include_open": True})
+
+    async def discover_all() -> None:
+        with pytest.raises(ValueError, match=message):
+            async for _batch in package.discover(session, window, None):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
+
+
+def test_durham_open_discovery_recovers_completed_progress() -> None:
+    """Completed Durham partitions converge if a crash missed the terminal bit."""
+    package = pilot_registry().get(AuthorityId("durham"))
+    window = WEEK.model_copy(update={"include_open": True})
+    checkpoint = durham_adapter.DurhamCheckpointV1(
+        result_page="live",
+        live_scope=durham_adapter.DurhamDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=True,
+        ),
+        completed_queries=(
+            "14/09/2026|DC_Validated",
+            "14/09/2026|DC_Decided",
+            *durham_adapter.durham_open_query_keys(window.end),
+        ),
+    )
+    session = _session(_IdoxMock(_DURHAM_CASE))
+
+    async def discover_all() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(
+                session,
+                window,
+                StoredCheckpoint(
+                    schema_version=1,
+                    payload_json=checkpoint.model_dump_json(),
+                ),
+            )
+        ]
+        await session.aclose()
+        return batches
+
+    batches = asyncio.run(discover_all())
+    assert len(batches) == 1
+    assert batches[0].references == ()
+    assert batches[0].complete
+
+
+def test_durham_advanced_form_and_detail_boundaries_fail_closed() -> None:
+    """Every Durham form and single-result redirect invariant is explicit."""
+    parse_form = getattr(durham_adapter, "_parse_advanced_form")
+    queries = getattr(durham_adapter, "_advanced_queries")(WEEK.end)
+    valid_form = _durham_advanced_form().decode()
+    malformed_forms = (
+        valid_form.replace('id="advancedSearchForm"', 'id="other"'),
+        valid_form.replace('method="post"', 'method="get"'),
+        valid_form.replace(
+            'name="searchCriteria.caseStatus"',
+            'name="otherStatus"',
+        ),
+        valid_form.replace(
+            '<option value="Appeal lodged">Appeal lodged</option>',
+            "",
+            1,
+        ),
+        valid_form.replace('name="searchType"', 'name="otherType"'),
+    )
+    for body in malformed_forms:
+        with pytest.raises(durham_adapter.DurhamParseError):
+            parse_form(body.encode(), queries=queries)
+
+    parse_page = getattr(durham_adapter, "_parse_advanced_search_page")
+    redirect = _advanced_detail_redirect_for(_DURHAM_OPEN_REFERENCES[0])
+    with pytest.raises(durham_adapter.DurhamParseError, match="advanced detail"):
+        parse_page(redirect, page=2)
+    redirect_text = redirect.decode()
+    malformed_redirects = (
+        redirect_text.replace(
+            "</table>",
+            '</table><table id="simpleDetailsTable"></table>',
+            1,
+        ),
+        redirect_text + '<li class="searchresult">Mixed</li>',
+        redirect_text + "<p>No results found.</p>",
+        redirect_text.replace("keyVal=DUR-OPEN-A", "activeTab=summary", 1),
+        redirect_text.replace(
+            "keyVal=DUR-OPEN-A&amp;activeTab=documents",
+            "keyVal=DUR-OTHER&amp;activeTab=documents",
+        ),
+    )
+    for body in malformed_redirects:
+        with pytest.raises(durham_adapter.DurhamParseError):
+            parse_page(body.encode(), page=1)
+
+
+def test_durham_count_parser_validates_visible_and_hidden_page_markers() -> None:
+    """Durham pagination markers must agree with ranges and page capacity."""
+    parse_page = getattr(durham_adapter, "_parse_search_page")
+    rows = tuple((f"DM/26/{index:05d}/FPA", f"DUR-{index}") for index in range(5))
+    valid = _result_page_with_showing_markers(
+        rows,
+        ("Showing 41-45 of 45", "Showing 41-45 of 45"),
+        current_page="1",
+        numbered_page=4,
+        visible_page="5",
+    )
+    assert parse_page(valid).reported == 45
+
+    invalid_pages = (
+        _result_page_with_showing_markers(
+            (rows[0],),
+            ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+            visible_page="later",
+        ),
+        _result_page_with_showing_markers(
+            (rows[0],),
+            ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+            visible_page="1",
+            capacity=None,
+        ),
+        _result_page_with_showing_markers(
+            (rows[0],),
+            ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+            visible_page="1",
+            capacity="many",
+        ),
+        _result_page_with_showing_markers(
+            (rows[0],),
+            ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+            visible_page="1",
+            capacity="0",
+        ),
+        _result_page_with_showing_markers(
+            (rows[0],),
+            ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+            visible_page="2",
+        ),
+        _result_page_with_showing_markers(
+            (rows[0],),
+            ("Showing 1-1 of 1",),
+            current_page="not-a-page",
+        ),
+    )
+    for body in invalid_pages:
+        with pytest.raises(
+            durham_adapter.DurhamParseError,
+            match="reported result count",
+        ):
+            parse_page(body)
 
 
 def test_west_suffolk_open_discovery_exhausts_all_active_partitions() -> None:
@@ -1795,7 +2242,10 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
             ),
             live_complete=True,
         )
-        if case.authority_id == AuthorityId("west-suffolk"):
+        if case.authority_id in {
+            AuthorityId("durham"),
+            AuthorityId("west-suffolk"),
+        }:
             terminal_open = [
                 batch
                 async for batch in adapter.discover(

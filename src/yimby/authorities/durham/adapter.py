@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime, timedelta
 from html import unescape
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Literal, NoReturn
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
@@ -56,6 +56,8 @@ SOURCE = SourceId("durham-idox-public-access")
 BASE_URL = "https://publicaccess.durham.gov.uk/online-applications"
 _WEEKLY_FORM_URL = f"{BASE_URL}/search.do?action=weeklyList"
 _WEEKLY_RESULTS_URL = f"{BASE_URL}/weeklyListResults.do?action=firstPage"
+_ADVANCED_FORM_URL = f"{BASE_URL}/search.do?action=advanced"
+_ADVANCED_RESULTS_URL = f"{BASE_URL}/advancedSearchResults.do?action=firstPage"
 _PAGED_RESULTS_URL = f"{BASE_URL}/pagedSearchResults.do"
 _DATE_TYPES = ("DC_Validated", "DC_Decided")
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
@@ -81,6 +83,205 @@ class DurhamCheckpointV1(FrozenModel):
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
     live_complete: bool = False
+
+
+class _WeeklyQuery(FrozenModel):
+    week: str
+    date_type: str
+
+    @property
+    def key(self) -> str:
+        return f"{self.week}|{self.date_type}"
+
+
+class _AdvancedQuery(FrozenModel):
+    field: Literal[
+        "searchCriteria.caseStatus",
+        "searchCriteria.appealStatus",
+    ]
+    value: str
+    case_type: str | None = None
+    received_start: date | None = None
+    received_end: date | None = None
+
+    @property
+    def key(self) -> str:
+        parts = ["advanced", self.field, self.value]
+        if self.case_type is not None:
+            parts.append(f"case-type={self.case_type}")
+        if self.received_start is not None and self.received_end is not None:
+            parts.append(
+                f"received={self.received_start.isoformat()}.."
+                f"{self.received_end.isoformat()}"
+            )
+        return "|".join(parts)
+
+
+_CASE_TYPES = (
+    "AACON",
+    "AD",
+    "CEU",
+    "CPO",
+    "CAC",
+    "REPTPO",
+    "DRC",
+    "EIA",
+    "FL",
+    "FPA",
+    "GD",
+    "HRA",
+    "HAZ",
+    "HRN",
+    "HPN",
+    "LB",
+    "MIN",
+    "NMA",
+    "BNGEOI",
+    "OUT",
+    "PIP",
+    "PA56",
+    "PN56",
+    "PNA",
+    "PND",
+    "PNME",
+    "RM",
+    "SCO",
+    "SCR",
+    "S106A",
+    "SU",
+    "TDC",
+    "TEL",
+    "TMP",
+    "TPO",
+    "TCA",
+    "VOC",
+    "VOCMW",
+    "WAS",
+)
+_DATE_PARTITION_START = date(1948, 1, 1)
+_DIRECT_OPEN_QUERIES = (
+    _AdvancedQuery(
+        field="searchCriteria.caseStatus",
+        value="Appeal lodged",
+    ),
+    _AdvancedQuery(
+        field="searchCriteria.caseStatus",
+        value="Pending Decision",
+    ),
+    _AdvancedQuery(
+        field="searchCriteria.caseStatus",
+        value="Registered",
+    ),
+    _AdvancedQuery(
+        field="searchCriteria.caseStatus",
+        value="Unknown",
+    ),
+    _AdvancedQuery(
+        field="searchCriteria.appealStatus",
+        value="Appeal lodged",
+    ),
+)
+
+
+def _bounded_range(start: date, end: date, boundary: date) -> tuple[date, date] | None:
+    bounded_end = min(end, boundary)
+    return None if start > bounded_end else (start, bounded_end)
+
+
+def _fpa_partitions(end: date) -> tuple[tuple[date, date], ...]:
+    candidates = (
+        (date(1948, 1, 1), date(1959, 12, 31)),
+        (date(1960, 1, 1), date(1969, 12, 31)),
+        (date(1970, 1, 1), date(1979, 12, 31)),
+        (date(1980, 1, 1), date(1989, 12, 31)),
+        *((date(year, 1, 1), date(year, 12, 31)) for year in range(1990, 2000)),
+        (date(2000, 1, 1), date(2009, 12, 31)),
+        (date(2010, 1, 1), date(2019, 12, 31)),
+        *((date(year, 1, 1), date(year, 12, 31)) for year in range(2020, end.year + 1)),
+    )
+    return tuple(
+        bounded
+        for start, boundary in candidates
+        if (bounded := _bounded_range(start, end, boundary)) is not None
+    )
+
+
+def _eia_partitions(end: date) -> tuple[tuple[date, date], ...]:
+    candidates = (
+        (date(1948, 1, 1), date(1969, 12, 31)),
+        (date(1970, 1, 1), date(1979, 12, 31)),
+        (date(1980, 1, 1), date(1989, 12, 31)),
+        (date(1990, 1, 1), date(1999, 12, 31)),
+        (date(2000, 1, 1), date(2009, 12, 31)),
+        (date(2010, 1, 1), date(2019, 12, 31)),
+        (date(2020, 1, 1), end),
+    )
+    return tuple(
+        bounded
+        for start, boundary in candidates
+        if (bounded := _bounded_range(start, end, boundary)) is not None
+    )
+
+
+def _pa56_partitions(end: date) -> tuple[tuple[date, date], ...]:
+    candidates = (
+        (date(1948, 1, 1), date(2019, 12, 31)),
+        *((date(year, 1, 1), date(year, 12, 31)) for year in range(2020, end.year + 1)),
+    )
+    return tuple(
+        bounded
+        for start, boundary in candidates
+        if (bounded := _bounded_range(start, end, boundary)) is not None
+    )
+
+
+def _two_era_partitions(end: date) -> tuple[tuple[date, date], ...]:
+    candidates = (
+        (_DATE_PARTITION_START, date(2019, 12, 31)),
+        (date(2020, 1, 1), end),
+    )
+    return tuple(
+        bounded
+        for start, boundary in candidates
+        if (bounded := _bounded_range(start, end, boundary)) is not None
+    )
+
+
+def _advanced_queries(end: date) -> tuple[_AdvancedQuery, ...]:
+    partitioned = {
+        "EIA": _eia_partitions(end),
+        "FPA": _fpa_partitions(end),
+        "PA56": _pa56_partitions(end),
+        "VOCMW": _two_era_partitions(end),
+    }
+    pending = []
+    for case_type in _CASE_TYPES:
+        ranges = partitioned.get(case_type)
+        if ranges is None:
+            pending.append(
+                _AdvancedQuery(
+                    field="searchCriteria.caseStatus",
+                    value="Pending Consideration",
+                    case_type=case_type,
+                )
+            )
+            continue
+        pending.extend(
+            _AdvancedQuery(
+                field="searchCriteria.caseStatus",
+                value="Pending Consideration",
+                case_type=case_type,
+                received_start=start,
+                received_end=received_end,
+            )
+            for start, received_end in ranges
+        )
+    return (*_DIRECT_OPEN_QUERIES, *pending)
+
+
+def durham_open_query_keys(end: date) -> tuple[str, ...]:
+    """Return the exact authoritative older-open partition inventory."""
+    return tuple(query.key for query in _advanced_queries(end))
 
 
 class DurhamDocumentV1(FrozenModel):
@@ -129,7 +330,7 @@ class DurhamAdapter:
         window: DiscoveryWindow,
         checkpoint: DurhamCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[DurhamCheckpointV1]]:
-        """Use fixture discovery or Durham's captured weekly IDOX flow."""
+        """Use fixtures or Durham's captured weekly and active IDOX flows."""
         if session.mode == TransportMode.FIXTURE:
             async for batch in self._discover_fixture(session, window, checkpoint):
                 yield batch
@@ -163,7 +364,7 @@ class DurhamAdapter:
             complete=next_page == "complete",
         )
 
-    async def _discover_live(  # noqa: C901, PLR0912
+    async def _discover_live(  # noqa: C901, PLR0912, PLR0915
         self,
         session: PortalSession,
         window: DiscoveryWindow,
@@ -180,8 +381,6 @@ class DurhamAdapter:
                 result_page="live",
                 live_scope=requested_scope,
             )
-        if window.include_open and progress.live_complete:
-            raise DurhamOpenEnumerationUnsupportedError
         if progress.live_complete:
             yield DiscoveryBatch(references=(), next_checkpoint=progress, complete=True)
             return
@@ -189,87 +388,139 @@ class DurhamAdapter:
             PortalRequest(url=HttpUrl(_WEEKLY_FORM_URL), intent=RequestIntent.SEARCH)
         )
         form = _parse_form(form_capture.body)
-        query_keys = tuple(
-            f"{week}|{date_type}"
+        weekly_queries = tuple(
+            _WeeklyQuery(week=week, date_type=date_type)
             for week in _intersecting_weeks(form, window)
             for date_type in _DATE_TYPES
+        )
+        advanced_queries = _advanced_queries(window.end) if window.include_open else ()
+        query_keys = tuple(query.key for query in weekly_queries) + tuple(
+            query.key for query in advanced_queries
         )
         if (
             progress.active_query is not None
             and progress.active_query not in query_keys
         ):
             raise DurhamCheckpointError(progress.active_query)
-        pending = tuple(
-            query for query in query_keys if query not in progress.completed_queries
+        pending_weekly = tuple(
+            query
+            for query in weekly_queries
+            if query.key not in progress.completed_queries
         )
-        for query in pending:
-            week, date_type = query.split("|", maxsplit=1)
-            page = progress.next_page if progress.active_query == query else 1
-            row_count = (
-                progress.query_row_count if progress.active_query == query else 0
+        for weekly_query in pending_weekly:
+            page = (
+                progress.next_page if progress.active_query == weekly_query.key else 1
             )
-            if progress.active_query == query and page > 1:
-                await session.fetch(_weekly_request(form, week, date_type, 1))
+            row_count = (
+                progress.query_row_count
+                if progress.active_query == weekly_query.key
+                else 0
+            )
+            if progress.active_query == weekly_query.key and page > 1:
+                await session.fetch(
+                    _weekly_request(
+                        form,
+                        weekly_query.week,
+                        weekly_query.date_type,
+                        1,
+                    )
+                )
             while True:
                 capture = await session.fetch(
-                    _weekly_request(form, week, date_type, page)
+                    _weekly_request(
+                        form,
+                        weekly_query.week,
+                        weekly_query.date_type,
+                        page,
+                    )
                 )
                 search_page = _parse_search_page(capture.body)
-                row_count += len(search_page.references)
-                if row_count > search_page.reported or (
-                    not search_page.references and row_count < search_page.reported
-                ):
-                    raise DurhamCountMismatchError(
-                        query, search_page.reported, row_count
-                    )
-                seen = set(progress.seen_references)
-                fresh = []
-                for reference in search_page.references:
-                    if reference.reference not in seen:
-                        seen.add(reference.reference)
-                        fresh.append(reference)
-                last_page = row_count == search_page.reported
-                if last_page:
-                    completed_queries = (*progress.completed_queries, query)
-                    next_checkpoint = progress.model_copy(
-                        update={
-                            "completed_queries": completed_queries,
-                            "active_query": None,
-                            "next_page": 1,
-                            "query_row_count": 0,
-                            "seen_references": tuple(seen),
-                            "live_complete": (
-                                len(completed_queries) == len(query_keys)
-                                and not window.include_open
-                            ),
-                        }
-                    )
-                else:
-                    next_checkpoint = progress.model_copy(
-                        update={
-                            "active_query": query,
-                            "next_page": page + 1,
-                            "query_row_count": row_count,
-                            "seen_references": tuple(seen),
-                        }
-                    )
+                next_checkpoint, fresh, last_page = _advance_checkpoint(
+                    progress,
+                    active_page=_ActivePage(
+                        query_key=weekly_query.key,
+                        page=page,
+                        row_count=row_count,
+                    ),
+                    search_page=search_page,
+                    all_query_keys=query_keys,
+                )
                 yield DiscoveryBatch(
-                    references=tuple(fresh),
+                    references=fresh,
                     next_checkpoint=next_checkpoint,
                     complete=next_checkpoint.live_complete,
                 )
                 progress = next_checkpoint
                 if last_page:
                     break
+                row_count = next_checkpoint.query_row_count
                 page += 1
-        if not pending and not window.include_open:
+        if not window.include_open:
+            if pending_weekly:
+                return
             completed_checkpoint = progress.model_copy(update={"live_complete": True})
             yield DiscoveryBatch(
                 references=(), next_checkpoint=completed_checkpoint, complete=True
             )
             return
-        if window.include_open:
-            raise DurhamOpenEnumerationUnsupportedError
+
+        advanced_form = _parse_advanced_form(
+            (
+                await session.fetch(
+                    PortalRequest(
+                        url=HttpUrl(_ADVANCED_FORM_URL),
+                        intent=RequestIntent.SEARCH,
+                    )
+                )
+            ).body,
+            queries=advanced_queries,
+        )
+        pending_open = tuple(
+            query
+            for query in advanced_queries
+            if query.key not in progress.completed_queries
+        )
+        for open_query in pending_open:
+            page = progress.next_page if progress.active_query == open_query.key else 1
+            row_count = (
+                progress.query_row_count
+                if progress.active_query == open_query.key
+                else 0
+            )
+            if progress.active_query == open_query.key and page > 1:
+                await session.fetch(_advanced_request(advanced_form, open_query, 1))
+            while True:
+                capture = await session.fetch(
+                    _advanced_request(advanced_form, open_query, page)
+                )
+                search_page = _parse_advanced_search_page(capture.body, page=page)
+                next_checkpoint, fresh, last_page = _advance_checkpoint(
+                    progress,
+                    active_page=_ActivePage(
+                        query_key=open_query.key,
+                        page=page,
+                        row_count=row_count,
+                    ),
+                    search_page=search_page,
+                    all_query_keys=query_keys,
+                )
+                yield DiscoveryBatch(
+                    references=fresh,
+                    next_checkpoint=next_checkpoint,
+                    complete=next_checkpoint.live_complete,
+                )
+                progress = next_checkpoint
+                if last_page:
+                    break
+                row_count = next_checkpoint.query_row_count
+                page += 1
+        if not pending_open:
+            completed_checkpoint = progress.model_copy(update={"live_complete": True})
+            yield DiscoveryBatch(
+                references=(),
+                next_checkpoint=completed_checkpoint,
+                complete=True,
+            )
 
     async def fetch(
         self,
@@ -419,6 +670,59 @@ class _SearchPage(FrozenModel):
     reported: int
 
 
+class _ActivePage(FrozenModel):
+    query_key: str
+    page: int
+    row_count: int
+
+
+def _advance_checkpoint(
+    progress: DurhamCheckpointV1,
+    *,
+    active_page: _ActivePage,
+    search_page: _SearchPage,
+    all_query_keys: tuple[str, ...],
+) -> tuple[DurhamCheckpointV1, tuple[SourceReference, ...], bool]:
+    next_row_count = active_page.row_count + len(search_page.references)
+    if next_row_count > search_page.reported or (
+        not search_page.references and next_row_count < search_page.reported
+    ):
+        raise DurhamCountMismatchError(
+            active_page.query_key,
+            search_page.reported,
+            next_row_count,
+        )
+    seen = set(progress.seen_references)
+    fresh = []
+    for reference in search_page.references:
+        if reference.reference not in seen:
+            seen.add(reference.reference)
+            fresh.append(reference)
+    last_page = next_row_count == search_page.reported
+    if last_page:
+        completed_queries = (*progress.completed_queries, active_page.query_key)
+        checkpoint = progress.model_copy(
+            update={
+                "completed_queries": completed_queries,
+                "active_query": None,
+                "next_page": 1,
+                "query_row_count": 0,
+                "seen_references": tuple(seen),
+                "live_complete": len(completed_queries) == len(all_query_keys),
+            }
+        )
+    else:
+        checkpoint = progress.model_copy(
+            update={
+                "active_query": active_page.query_key,
+                "next_page": active_page.page + 1,
+                "query_row_count": next_row_count,
+                "seen_references": tuple(seen),
+            }
+        )
+    return checkpoint, tuple(fresh), last_page
+
+
 def _parse_form(body: bytes) -> Tag:
     soup = BeautifulSoup(body, "html.parser")
     form = soup.select_one("form")
@@ -429,8 +733,61 @@ def _parse_form(body: bytes) -> Tag:
     return form
 
 
+def _parse_advanced_form(
+    body: bytes,
+    *,
+    queries: tuple[_AdvancedQuery, ...],
+) -> Tag:
+    soup = BeautifulSoup(body, "html.parser")
+    forms = soup.select("form#advancedSearchForm")
+    if len(forms) != 1 or not isinstance(forms[0], Tag):
+        _raise_parse("advanced form")
+    form = forms[0]
+    action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
+    if (
+        str(form.get("method", "")).casefold() != "post"
+        or action != _ADVANCED_RESULTS_URL
+    ):
+        _raise_parse("advanced form")
+    selects: dict[str, Tag] = {}
+    for name in (
+        "searchCriteria.caseType",
+        "searchCriteria.caseStatus",
+        "searchCriteria.appealStatus",
+    ):
+        controls = form.select(f'select[name="{name}"]')
+        if len(controls) != 1:
+            _raise_parse("advanced form status fields")
+        selects[name] = controls[0]
+    option_values = {
+        name: tuple(
+            str(option.get("value", ""))
+            for option in select.select("option[value]")
+        )
+        for name, select in selects.items()
+    }
+    for query in queries:
+        if option_values[query.field].count(query.value) != 1:
+            _raise_parse("advanced form status options")
+        if (
+            query.case_type is not None
+            and option_values["searchCriteria.caseType"].count(query.case_type) != 1
+        ):
+            _raise_parse("advanced form case type options")
+    field_names = {field.name for field in _form_fields(form)}
+    required_fields = {
+        "_csrf",
+        "date(applicationReceivedStart)",
+        "date(applicationReceivedEnd)",
+        "searchType",
+    }
+    if not required_fields.issubset(field_names):
+        _raise_parse("advanced form")
+    return form
+
+
 def _form_fields(form: Tag) -> tuple[FormField, ...]:
-    fields = []
+    fields: list[FormField] = []
     for control in form.select("input[name], select[name], textarea[name]"):
         name = control.get("name")
         if not isinstance(name, str):
@@ -441,8 +798,17 @@ def _form_fields(form: Tag) -> tuple[FormField, ...]:
                 continue
             value = str(control.get("value", ""))
         elif control.name == "select":
-            selected = control.select_one("option[selected]") or control.select_one(
-                "option"
+            selected_options = control.select("option[selected]")
+            if control.has_attr("multiple"):
+                fields.extend(
+                    FormField(name=name, value=str(option.get("value", "")))
+                    for option in selected_options
+                )
+                continue
+            selected = (
+                selected_options[0]
+                if selected_options
+                else control.select_one("option")
             )
             value = "" if selected is None else str(selected.get("value", ""))
         else:
@@ -505,8 +871,67 @@ def _weekly_request(form: Tag, week: str, date_type: str, page: int) -> PortalRe
     )
 
 
+def _advanced_request(
+    form: Tag,
+    query: _AdvancedQuery,
+    page: int,
+) -> PortalRequest:
+    if page == 1:
+        values = {
+            "searchCriteria.caseStatus": (
+                query.value if query.field == "searchCriteria.caseStatus" else ""
+            ),
+            "searchCriteria.appealStatus": (
+                query.value if query.field == "searchCriteria.appealStatus" else ""
+            ),
+            "date(applicationReceivedStart)": (
+                ""
+                if query.received_start is None
+                else query.received_start.strftime("%d/%m/%Y")
+            ),
+            "date(applicationReceivedEnd)": (
+                ""
+                if query.received_end is None
+                else query.received_end.strftime("%d/%m/%Y")
+            ),
+        }
+        if query.case_type is not None:
+            values["searchCriteria.caseType"] = query.case_type
+        return PortalRequest(
+            url=HttpUrl(_ADVANCED_RESULTS_URL),
+            intent=RequestIntent.SEARCH,
+            method=RequestMethod.POST,
+            form=_override_fields(form, values),
+        )
+    return PortalRequest(
+        url=HttpUrl(f"{_PAGED_RESULTS_URL}?action=page&searchCriteria.page={page}"),
+        intent=RequestIntent.SEARCH,
+    )
+
+
 def _parse_search_page(body: bytes) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
+    return _parse_result_list(soup, terminal_first_page_marker="1")
+
+
+def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
+    soup = BeautifulSoup(body, "html.parser")
+    detail_tables = soup.select("#simpleDetailsTable")
+    if detail_tables:
+        if page != 1:
+            _raise_parse("advanced detail redirect")
+        return _parse_redirected_detail(body, soup, detail_tables)
+    return _parse_result_list(
+        soup,
+        terminal_first_page_marker="" if page == 1 else None,
+    )
+
+
+def _parse_result_list(
+    soup: BeautifulSoup,
+    *,
+    terminal_first_page_marker: str | None,
+) -> _SearchPage:
     references = []
     for row in soup.select("li.searchresult"):
         link = row.select_one('a[href*="applicationDetails.do"]')
@@ -523,15 +948,68 @@ def _parse_search_page(body: bytes) -> _SearchPage:
             )
         )
     try:
-        reported = _reported_count(soup, row_count=len(references))
+        reported = _reported_count(
+            soup,
+            row_count=len(references),
+            allow_empty_first_page_marker=terminal_first_page_marker == "",
+        )
     except DurhamParseError:
-        if not _is_uncounted_terminal_first_page(soup, row_count=len(references)):
+        if not _is_uncounted_terminal_first_page(
+            soup,
+            row_count=len(references),
+            expected_page_marker=terminal_first_page_marker,
+        ):
             raise
         reported = len(references)
     return _SearchPage(references=tuple(references), reported=reported)
 
 
-def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
+def _parse_redirected_detail(
+    body: bytes,
+    soup: BeautifulSoup,
+    detail_tables: list[Tag],
+) -> _SearchPage:
+    if (
+        len(detail_tables) != 1
+        or soup.select_one("li.searchresult") is not None
+        or "no results found" in soup.get_text(" ", strip=True).casefold()
+    ):
+        _raise_parse("advanced detail redirect")
+    locators = []
+    for link in soup.select('a[href*="applicationDetails.do"]'):
+        values = parse_qs(urlsplit(str(link.get("href", ""))).query).get(
+            "keyVal",
+            [],
+        )
+        if len(values) != 1 or not values[0]:
+            _raise_parse("advanced detail keyVal")
+        locators.append(values[0])
+    unique_locators = set(locators)
+    if len(unique_locators) != 1:
+        _raise_parse("advanced detail keyVal")
+    fields = _parse_summary(body)
+    return _SearchPage(
+        references=(
+            SourceReference(
+                source_id=SOURCE,
+                reference=_required_field(
+                    fields,
+                    "reference",
+                    "application reference",
+                ),
+                locator=unique_locators.pop(),
+            ),
+        ),
+        reported=1,
+    )
+
+
+def _reported_count(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+    allow_empty_first_page_marker: bool = False,
+) -> int:
     element = soup.select_one("[data-result-count]")
     if isinstance(element, Tag):
         return int(str(element.get("data-result-count")))
@@ -556,9 +1034,14 @@ def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
             _raise_parse("reported result count")
-        current_pages = tuple(
-            int(str(control.get("value")))
-            for control in soup.select('input[name="searchCriteria.page"][value]')
+        visible_page = _visible_result_page(soup, displayed_range)
+        current_pages = (
+            (visible_page,)
+            if visible_page is not None
+            else _current_result_pages(
+                soup,
+                allow_empty_first_page_marker=allow_empty_first_page_marker,
+            )
         )
         numbered_pages = tuple(
             int(value)
@@ -584,16 +1067,70 @@ def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
     return int(match.group(1))
 
 
+def _visible_result_page(
+    soup: BeautifulSoup,
+    displayed_range: tuple[int, int, int],
+) -> int | None:
+    labels = tuple(
+        marker.get_text(" ", strip=True)
+        for pager in soup.select(".pager")
+        for marker in pager.find_all("strong", recursive=False)
+    )
+    if not labels:
+        return None
+    pages = tuple(
+        int(match.group(0))
+        for label in labels
+        if (match := re.fullmatch(r"[1-9]\d*", label)) is not None
+    )
+    if len(pages) != len(labels) or any(page != pages[0] for page in pages[1:]):
+        return _raise_parse("reported result count")
+    selected_capacities = soup.select(
+        'select[name="searchCriteria.resultsPerPage"] option[selected]'
+    )
+    try:
+        (selected_capacity,) = selected_capacities
+        capacity = int(str(selected_capacity.get("value", "")).strip())
+    except ValueError:
+        return _raise_parse("reported result count")
+    page = pages[0]
+    first, last, total = displayed_range
+    expected_first = (page - 1) * capacity + 1
+    expected_last = min(expected_first + capacity - 1, total)
+    if capacity <= 0 or (first, last) != (expected_first, expected_last):
+        return _raise_parse("reported result count")
+    return page
+
+
+def _current_result_pages(
+    soup: BeautifulSoup,
+    *,
+    allow_empty_first_page_marker: bool,
+) -> tuple[int, ...]:
+    page_values = tuple(
+        str(control.get("value", "")).strip()
+        for control in soup.select('input[name="searchCriteria.page"][value]')
+    )
+    if allow_empty_first_page_marker and page_values == ("",):
+        return (1,)
+    try:
+        return tuple(int(value) for value in page_values)
+    except ValueError:
+        return _raise_parse("reported result count")
+
+
 def _is_uncounted_terminal_first_page(
     soup: BeautifulSoup,
     *,
     row_count: int,
+    expected_page_marker: str | None = "1",
 ) -> bool:
     page_inputs = soup.select('input[name="searchCriteria.page"][value]')
     if (
-        row_count == 0
+        expected_page_marker is None
+        or row_count == 0
         or len(page_inputs) != 1
-        or str(page_inputs[0].get("value", "")).strip() != "1"
+        or str(page_inputs[0].get("value", "")).strip() != expected_page_marker
         or soup.select_one(".showing") is not None
     ):
         return False
@@ -866,14 +1403,6 @@ class DurhamCountMismatchError(DurhamParseError):
     def __init__(self, section: str, expected: int, actual: int) -> None:
         """Describe the bounded count disagreement."""
         super().__init__(f"{section} count expected {expected} actual {actual}")
-
-
-class DurhamOpenEnumerationUnsupportedError(RuntimeError):
-    """Older-open Durham enumeration lacks a proven bounded partition."""
-
-    def __init__(self) -> None:
-        """Prevent weekly discovery from claiming full bootstrap coverage."""
-        super().__init__("Durham older-open enumeration is not implemented")
 
 
 class DurhamCheckpointError(ValueError):
