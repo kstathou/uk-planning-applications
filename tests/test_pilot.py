@@ -385,6 +385,16 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
                 ],
             }
         )
+    with pytest.raises(ValidationError):
+        receipt_model.model_validate(
+            {
+                **receipt,
+                "evidence_commitment": {
+                    **receipt["evidence_commitment"],
+                    "identities": ["private"],
+                },
+            }
+        )
     assert manifest.live_status.evidence == (
         f"{_OPDC_EVIDENCE_PATH} records 55 complete applications",
     )
