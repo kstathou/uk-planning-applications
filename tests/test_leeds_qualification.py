@@ -6,18 +6,32 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl
 
 import httpx
 import pytest
 
 from yimby.authorities.leeds.adapter import (
+    SOURCE,
     LeedsAdapter,
+    LeedsApplicationV1,
     LeedsCheckpointV1,
     LeedsParseError,
 )
-from yimby.domain import DiscoveryBatch, DiscoveryWindow
+from yimby.domain import (
+    DiscoveryBatch,
+    DiscoveryWindow,
+    EmptySection,
+    FailedSection,
+    NativeSnapshot,
+    SourceReference,
+    UnavailableSection,
+)
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 WINDOW = DiscoveryWindow(
     start=date(2026, 8, 18),
@@ -179,7 +193,9 @@ class _LeedsSearchMock:
         raise AssertionError(message)
 
 
-def _session(mock: _LeedsSearchMock) -> HttpxPortalSession:
+def _session(
+    mock: Callable[[httpx.Request], httpx.Response],
+) -> HttpxPortalSession:
     return HttpxPortalSession(
         client=httpx.AsyncClient(transport=httpx.MockTransport(mock)),
         limiter=HostRateLimiter(0),
@@ -276,3 +292,172 @@ def test_leeds_terminal_checkpoint_rerun_has_zero_network_io() -> None:
     assert second[0].complete
     assert second[0].references == ()
     assert mock.requests == []
+
+
+def _summary(
+    *,
+    reference: str = "26/05177/TR",
+    blank_optional: bool = False,
+) -> bytes:
+    optional = "" if blank_optional else "16/09/2026"
+    address = "" if blank_optional else "1 Park Row, Leeds"
+    appeal_status = "" if blank_optional else "Appeal lodged"
+    appeal_decision = "" if blank_optional else "Unknown"
+    return f"""
+    <table id="simpleDetailsTable">
+      <tr><th>Reference</th><td>{reference}</td></tr>
+      <tr><th>Application Validated</th><td>{optional}</td></tr>
+      <tr><th>Address</th><td>{address}</td></tr>
+      <tr><th>Proposal</th><td>Works to protected trees</td></tr>
+      <tr><th>Status</th><td>Current</td></tr>
+      <tr><th>Appeal Status</th><td>{appeal_status}</td></tr>
+      <tr><th>Appeal Decision</th><td>{appeal_decision}</td></tr>
+    </table>
+    """.encode()
+
+
+def _documents(*, header_only: bool = False, malformed: bool = False) -> bytes:
+    if malformed:
+        return b"<h2>Documents</h2><p>Unexpected response</p>"
+    row = (
+        ""
+        if header_only
+        else """
+      <tr><td></td><td>15/09/2026</td><td>Plan</td><td>A-01</td>
+      <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
+    """
+    )
+    return f"""
+    <table summary="Documents">
+      <tr><td></td><td>Date Published</td><td>Document Type</td><td>Measure</td>
+      <td>Description</td><td>View</td></tr>
+      {row}
+    </table>
+    """.encode()
+
+
+class _LeedsDetailMock:
+    def __init__(
+        self,
+        *,
+        reference: str = "26/05177/TR",
+        blank_optional: bool = False,
+        header_only: bool = False,
+        malformed_documents: bool = False,
+        failed_documents: bool = False,
+    ) -> None:
+        self.reference = reference
+        self.blank_optional = blank_optional
+        self.header_only = header_only
+        self.malformed_documents = malformed_documents
+        self.failed_documents = failed_documents
+        self.tabs: list[str] = []
+        self.attachment_paths: list[str] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/applicationDetails.do"):
+            tab = request.url.params["activeTab"]
+            self.tabs.append(tab)
+            if tab == "summary":
+                return httpx.Response(
+                    200,
+                    content=_summary(
+                        reference=self.reference,
+                        blank_optional=self.blank_optional,
+                    ),
+                )
+            if tab == "documents":
+                if self.failed_documents:
+                    return httpx.Response(503)
+                return httpx.Response(
+                    200,
+                    content=_documents(
+                        header_only=self.header_only,
+                        malformed=self.malformed_documents,
+                    ),
+                )
+        if request.url.path.endswith(".pdf"):
+            self.attachment_paths.append(request.url.path)
+            return httpx.Response(500)
+        message = f"unexpected request {request.method} {request.url}"
+        raise AssertionError(message)
+
+
+async def _fetch(mock: _LeedsDetailMock) -> NativeSnapshot[LeedsApplicationV1]:
+    session = _session(mock)
+    try:
+        return await LeedsAdapter().fetch(
+            session,
+            SourceReference(
+                source_id=SOURCE,
+                reference="26/05177/TR",
+                locator="TLESK5JBLRI00",
+            ),
+        )
+    finally:
+        await session.aclose()
+
+
+def test_leeds_fetches_summary_and_six_cell_document_metadata() -> None:
+    """Successful detail retains source fields without opening attachments."""
+    mock = _LeedsDetailMock()
+
+    snapshot = asyncio.run(_fetch(mock))
+    payload = snapshot.payload
+
+    assert payload.application_reference == "26/05177/TR"
+    assert payload.validated_date == date(2026, 9, 16)
+    assert payload.address == "1 Park Row, Leeds"
+    assert payload.appeal_status == "Appeal lodged"
+    assert payload.appeal_decision == "Unknown"
+    assert payload.application_type is None
+    assert len(payload.documents) == 1
+    assert payload.documents[0].published_date == date(2026, 9, 15)
+    assert payload.documents[0].document_type == "Plan"
+    assert payload.documents[0].drawing_number == "A-01"
+    assert payload.documents[0].description == "Tree location plan"
+    assert str(payload.documents[0].url).endswith("/files/tree-plan.pdf")
+    assert isinstance(snapshot.completeness.comments, UnavailableSection)
+    assert mock.tabs == ["summary", "documents"]
+    assert mock.attachment_paths == []
+
+    normalised = LeedsAdapter().normalise(snapshot)
+    assert normalised.metadata.address == "1 Park Row, Leeds"
+    assert normalised.metadata.validated_date == date(2026, 9, 16)
+    assert normalised.normaliser_version == "leeds-v2"
+
+
+def test_leeds_accepts_blank_optional_summary_and_header_only_documents() -> None:
+    """Blank source fields stay absent and a proven header-only table is empty."""
+    snapshot = asyncio.run(
+        _fetch(_LeedsDetailMock(blank_optional=True, header_only=True))
+    )
+
+    assert snapshot.payload.validated_date is None
+    assert snapshot.payload.address is None
+    assert snapshot.payload.appeal_status is None
+    assert snapshot.payload.appeal_decision is None
+    assert snapshot.payload.documents == ()
+    assert isinstance(snapshot.completeness.documents, EmptySection)
+
+
+@pytest.mark.parametrize("failure", ["malformed", "unavailable"])
+def test_leeds_preserves_document_section_failures(failure: str) -> None:
+    """An unverified document index remains failed rather than empty."""
+    snapshot = asyncio.run(
+        _fetch(
+            _LeedsDetailMock(
+                malformed_documents=failure == "malformed",
+                failed_documents=failure == "unavailable",
+            )
+        )
+    )
+
+    assert snapshot.payload.documents == ()
+    assert isinstance(snapshot.completeness.documents, FailedSection)
+
+
+def test_leeds_rejects_published_reference_disagreement() -> None:
+    """The source summary cannot silently replace the queued identity."""
+    with pytest.raises(ValueError, match="reference"):
+        asyncio.run(_fetch(_LeedsDetailMock(reference="MISMATCH/0001")))
