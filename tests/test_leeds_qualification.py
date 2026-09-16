@@ -25,6 +25,7 @@ from yimby.authorities.leeds.adapter import (
     LeedsParseError,
 )
 from yimby.domain import (
+    CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
     EmptySection,
@@ -407,14 +408,19 @@ def _summary(
     """.encode()
 
 
-def _documents(*, header_only: bool = False, malformed: bool = False) -> bytes:
+def _documents(
+    *,
+    header_only: bool = False,
+    malformed: bool = False,
+    structural_cell: str = "",
+) -> bytes:
     if malformed:
         return b"<h2>Documents</h2><p>Unexpected response</p>"
     row = (
         ""
         if header_only
-        else """
-      <tr><td></td><td>15/09/2026</td><td>Plan</td><td>A-01</td>
+        else f"""
+      <tr><td>{structural_cell}</td><td>15/09/2026</td><td>Plan</td><td>A-01</td>
       <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
     """
     )
@@ -438,6 +444,8 @@ class _LeedsDetailMock:
         malformed_documents: bool = False,
         failed_documents: bool = False,
         transient_summary_failures: int = 0,
+        structural_document_cell: bool = False,
+        invalid_document_cell_text: bool = False,
     ) -> None:
         self.reference = reference
         self.blank_optional = blank_optional
@@ -446,6 +454,8 @@ class _LeedsDetailMock:
         self.malformed_documents = malformed_documents
         self.failed_documents = failed_documents
         self.transient_summary_failures = transient_summary_failures
+        self.structural_document_cell = structural_document_cell
+        self.invalid_document_cell_text = invalid_document_cell_text
         self.tabs: list[str] = []
         self.attachment_paths: list[str] = []
 
@@ -479,6 +489,12 @@ class _LeedsDetailMock:
                     content=_documents(
                         header_only=self.header_only,
                         malformed=self.malformed_documents,
+                        structural_cell=(
+                            '<label class="hide">Select this document</label>'
+                            '<input type="checkbox" name="file" value="plan.pdf">'
+                            if self.structural_document_cell
+                            else "Unexpected" if self.invalid_document_cell_text else ""
+                        ),
                     ),
                 )
         if request.url.path.endswith(".pdf"):
@@ -530,6 +546,23 @@ def test_leeds_fetches_summary_and_six_cell_document_metadata() -> None:
     assert normalised.metadata.address == "1 Park Row, Leeds"
     assert normalised.metadata.validated_date == date(2026, 9, 16)
     assert normalised.normaliser_version == "leeds-v2"
+
+
+def test_leeds_accepts_the_live_document_selection_cell() -> None:
+    """Accessibility text in the structural cell is not document metadata."""
+    snapshot = asyncio.run(_fetch(_LeedsDetailMock(structural_document_cell=True)))
+
+    assert len(snapshot.payload.documents) == 1
+    assert snapshot.payload.documents[0].title == "Tree location plan"
+    assert isinstance(snapshot.completeness.documents, CompleteSection)
+
+
+def test_leeds_rejects_unrecognised_document_selection_text() -> None:
+    """Unexpected data in the structural cell cannot shift document columns."""
+    snapshot = asyncio.run(_fetch(_LeedsDetailMock(invalid_document_cell_text=True)))
+
+    assert snapshot.payload.documents == ()
+    assert isinstance(snapshot.completeness.documents, FailedSection)
 
 
 def test_leeds_accepts_blank_optional_summary_and_header_only_documents() -> None:
