@@ -970,7 +970,12 @@ def _advanced_request(
         url=HttpUrl(_ADVANCED_URL),
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
-        form=(*fields, FormField(name=query.submit_name, value="Search")),
+        form=(
+            FormField(name="__EVENTTARGET", value=""),
+            FormField(name="__EVENTARGUMENT", value=""),
+            *fields,
+            FormField(name=query.submit_name, value="Search"),
+        ),
     )
 
 
@@ -1023,7 +1028,12 @@ def _next_page_request(page: _ResultPage) -> PortalRequest:
         url=HttpUrl(_RESULTS_URL),
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
-        form=(*page.form, FormField(name=_NEXT_BUTTON, value=" ")),
+        form=(
+            FormField(name="__EVENTTARGET", value=""),
+            FormField(name="__EVENTARGUMENT", value=""),
+            *page.form,
+            FormField(name=_NEXT_BUTTON, value=" "),
+        ),
     )
 
 
