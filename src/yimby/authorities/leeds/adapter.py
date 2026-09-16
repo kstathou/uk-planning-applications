@@ -74,6 +74,7 @@ _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_CELL_COUNT = 6
 _COMPACT_DOCUMENT_CELL_COUNT = 4
 _DETAIL_BODY_ATTEMPTS = 3
+_LIVE_EVIDENCE_CAPTURE_COUNT = 2
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
 _CASE_TYPES = (
     ("DAG", "Agricultural Determination"),
@@ -510,31 +511,17 @@ class LeedsAdapter:
             reference.locator,
             evidence,
         )
-        comment_state = UnavailableSection(
-            reason="Leeds City Council does not publish public comment text"
-        )
-        payload = LeedsApplicationV1(
-            idox_key=reference.locator,
-            application_reference=published_reference,
-            proposal_text=_required_field(fields, "proposal", "description"),
-            case_status=_required_field(fields, "status"),
-            documents=documents,
-            application_type=_optional_field(fields, "application type"),
-            address=_optional_field(fields, "address"),
-            validated_date=_optional_date(fields, "application validated"),
-            appeal_status=_optional_field(fields, "appeal status"),
-            appeal_decision=_optional_field(fields, "appeal decision"),
-            comment_state=comment_state,
+        payload, completeness = _live_payload(
+            reference,
+            fields,
+            documents,
+            document_state,
         )
         return NativeSnapshot(
             reference=reference,
             observed_at=datetime.now(UTC),
             payload=payload,
-            completeness=Completeness(
-                application=CompleteSection(item_count=1),
-                documents=document_state,
-                comments=comment_state,
-            ),
+            completeness=completeness,
             evidence=tuple(evidence),
         )
 
@@ -694,6 +681,8 @@ def _parse_advanced_form(body: bytes) -> Tag:
         (("", "All"), *_CASE_TYPES),
         "case type",
     )
+    if form.select("[name][disabled]"):
+        _raise_parse("advanced form fields")
     fields = _form_fields(form)
     if Counter(field.name for field in fields) != Counter(_ADVANCED_FORM_FIELD_NAMES):
         _raise_parse("advanced form fields")
@@ -719,8 +708,11 @@ def _require_options(
     control = controls[0]
     if control.has_attr("disabled"):
         _raise_parse(f"advanced {label}")
-    options = control.select("option[value]")
-    if any(option.has_attr("disabled") for option in options):
+    options = control.select("option")
+    if any(
+        not option.has_attr("value") or option.has_attr("disabled")
+        for option in options
+    ):
         _raise_parse(f"advanced {label} options")
     actual = tuple(
         (str(option.get("value", "")), option.get_text(" ", strip=True))
@@ -993,7 +985,7 @@ def _parse_documents(
         return (), UnavailableSection(
             reason="documents are restricted by Leeds Public Access"
         )
-    expected = _section_count(soup, "documents")
+    expected, stale_zero_marker = _section_count(soup, "documents")
     tables = soup.select('table[summary="Documents" i]')
     if not tables:
         if expected == 0:
@@ -1029,8 +1021,60 @@ def _parse_documents(
     if table.select_one('a[href*="pagedSearchResults.do"]') is not None:
         _raise_parse("documents pagination")
     documents = [_parse_document_row(row, compact=compact) for row in rows[1:]]
-    _assert_count("documents", expected, len(documents))
+    if not (stale_zero_marker and expected == 0 and documents):
+        _assert_count("documents", expected, len(documents))
     return tuple(documents), collection_state(len(documents))
+
+
+def reparse_leeds_live_evidence(
+    reference: SourceReference,
+    evidence: tuple[EvidenceCapture, ...],
+) -> tuple[LeedsApplicationV1, Completeness]:
+    """Rebuild one retained live record under the current parser contract."""
+    if len(evidence) != _LIVE_EVIDENCE_CAPTURE_COUNT:
+        _raise_parse("retained live evidence")
+    fields = _parse_summary(evidence[0].body)
+    documents, document_state = _parse_documents(evidence[1].body)
+    return _live_payload(reference, fields, documents, document_state)
+
+
+def _live_payload(
+    reference: SourceReference,
+    fields: dict[str, str],
+    documents: tuple[LeedsDocumentV1, ...],
+    document_state: SectionState,
+) -> tuple[LeedsApplicationV1, Completeness]:
+    if reference.locator is None:
+        raise LeedsRoutingError(reference.reference)
+    published_reference = _required_field(fields, "reference")
+    if published_reference != reference.reference:
+        raise LeedsReferenceMismatchError(
+            reference.reference,
+            published_reference,
+        )
+    comment_state = UnavailableSection(
+        reason="Leeds City Council does not publish public comment text"
+    )
+    return (
+        LeedsApplicationV1(
+            idox_key=reference.locator,
+            application_reference=published_reference,
+            proposal_text=_required_field(fields, "proposal", "description"),
+            case_status=_required_field(fields, "status"),
+            documents=documents,
+            application_type=_optional_field(fields, "application type"),
+            address=_optional_field(fields, "address"),
+            validated_date=_optional_date(fields, "application validated"),
+            appeal_status=_optional_field(fields, "appeal status"),
+            appeal_decision=_optional_field(fields, "appeal decision"),
+            comment_state=comment_state,
+        ),
+        Completeness(
+            application=CompleteSection(item_count=1),
+            documents=document_state,
+            comments=comment_state,
+        ),
+    )
 
 
 def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
@@ -1071,15 +1115,27 @@ def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
     )
 
 
-def _section_count(soup: BeautifulSoup, label: str) -> int:
-    match = re.search(
+def _section_count(soup: BeautifulSoup, label: str) -> tuple[int, bool]:
+    if label != "documents":
+        _raise_parse(f"{label} displayed count")
+    markers = soup.select("a#tab_documents.active, li.nodocuments")
+    if len(markers) != 1:
+        _raise_parse(f"{label} displayed count")
+    marker = markers[0]
+    match = re.fullmatch(
         rf"{re.escape(label)}\s*\((\d+)\)",
-        soup.get_text(" ", strip=True),
+        marker.get_text(" ", strip=True),
         re.IGNORECASE,
     )
     if match is None:
         _raise_parse(f"{label} displayed count")
-    return int(match.group(1))
+    count = int(match.group(1))
+    stale_zero_marker = marker.name == "li" and "nodocuments" in (
+        marker.get("class") or ()
+    )
+    if stale_zero_marker and count != 0:
+        _raise_parse(f"{label} displayed count")
+    return count, stale_zero_marker
 
 
 def _assert_count(section: str, expected: int, actual: int) -> None:

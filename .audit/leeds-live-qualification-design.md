@@ -69,8 +69,8 @@ allowlisted repeated opaque fields. It preserves every enabled named control in
 DOM order. It replaces only fields owned by the active query and preserves
 `caseAddressType=Application`, the nonblank `_csrf`,
 `searchType=Application`, blank defaults, and both opaque fields. Unknown or
-duplicate controls, disabled named controls or options, and taxonomy drift fail
-closed.
+duplicate controls, any disabled named control or option, unvalued options, and
+taxonomy drift fail closed.
 
 ## Checkpoint
 
@@ -113,15 +113,19 @@ The live document index has two explicit shapes. The six-cell shape contains a
 selection cell followed by `Date Published`, `Document Type`, `Measure`,
 `Description`, and `View`; the selection cell can contain the portal's hidden
 label and checkbox. The four-cell compact shape omits selection and measure.
-The parser stores metadata and resolved view URLs but never requests them. A
-header-only table or missing table is empty only when the authoritative
-`Documents (N)` count is zero. The exact permission-denied response is
-unavailable. Every other missing or malformed table remains failed. Parsed rows
-must exactly equal the displayed count, including zero; no-documents wording
-cannot overrule a nonzero count. A document transport failure propagates to the
-collector's bounded whole-record retry rather than becoming a successful
-snapshot with a failed section. Public comment text is `UnavailableSection`
-under the verified Leeds policy, and comment tabs are not fetched.
+The parser stores metadata and resolved view URLs but never requests them. The
+active `tab_documents` count must exactly equal parsed rows. A header-only or
+missing table is empty only for the exact `li.nodocuments` zero marker. Five
+retained official pages exposed a narrow Leeds defect: that same stale zero
+marker coexisted with one non-paginated, structurally valid table containing 3,
+3, 5, 6, or 8 rows. Only that exact shape uses the fully enumerated table as
+the source of completeness; any active-tab mismatch, pagination, unknown
+marker, header, row, date, or link still fails closed. The exact
+permission-denied response is unavailable. A document transport failure
+propagates to the collector's bounded whole-record retry rather than becoming a
+successful snapshot with a failed section. Public comment text is
+`UnavailableSection` under the verified Leeds policy, and comment tabs are not
+fetched.
 
 Normalisation maps proposal, status, optional address and validated date, and document metadata. It retains appeal fields only in the native payload and advances to `leeds-v2`.
 
@@ -131,7 +135,16 @@ Normalisation maps proposal, status, optional address and validated date, and do
 
 The set proof compares sorted canonical `(source_id, reference, locator)` triples before hashing them. It compares the terminal checkpoint, the durable discovery queue, and Leeds application views or retained native records through public store APIs. Equal counts alone do not pass.
 
-The first run must leave a nonzero application set, no retry, no current failed section, no unmapped record, and no attachment-body request. The second run uses a new session and must make zero requests, transfer zero bytes, attempt zero attachments, and leave the qualification snapshot and set proof unchanged. Search response bodies are not claimed as retained evidence. Existing retained application captures are rehydrated and rehashed.
+The first run must leave a nonzero application set, no retry, no current failed
+section, no unmapped record, and no attachment-body request. Before a receipt,
+every retained Leeds summary and document capture is reparsed under the current
+adapter and the rebuilt payload and completeness must exactly match the current
+retained record. This prevents a pre-fix stored success from passing after a
+parser-contract change. The second run uses a new session and must make zero
+requests, transfer zero bytes, attempt zero attachments, and leave the
+qualification snapshot, evidence-reparse proof, and set proof unchanged.
+Search response bodies are not claimed as retained evidence. Existing retained
+application captures are also rehydrated and rehashed.
 
 ## Module map
 

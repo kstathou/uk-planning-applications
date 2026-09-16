@@ -21,10 +21,12 @@ from pydantic import Field
 from yimby.authorities.leeds import LEEDS_PACKAGE
 from yimby.authorities.leeds.adapter import (
     SOURCE,
+    LeedsApplicationV1,
     LeedsCheckpointV1,
     LeedsDetailUnavailableError,
     LeedsDetailUnverifiedError,
     LeedsDiscoveryScope,
+    reparse_leeds_live_evidence,
 )
 from yimby.collection import Collector
 from yimby.domain import (
@@ -32,6 +34,7 @@ from yimby.domain import (
     DiscoveryWindow,
     FrozenModel,
     QualificationSnapshot,
+    RetainedNativeRecord,
     RunStatus,
     SourceReference,
 )
@@ -155,6 +158,7 @@ class EvidenceIntegrityV1(FrozenModel):
     """Rehydrated current application evidence proof."""
 
     checked_capture_count: int = Field(ge=1)
+    revalidated_application_count: int = Field(ge=1)
     missing_path_count: Literal[0] = 0
     digest_mismatch_count: Literal[0] = 0
 
@@ -502,9 +506,38 @@ def _evidence_integrity(store: SqliteStore) -> EvidenceIntegrityV1 | None:
         for capture in captures
     )
     missing_paths = store.missing_evidence_paths()
-    if not captures or mismatch_count or missing_paths:
+    revalidated_count = sum(_revalidates_current_record(record) for record in records)
+    if (
+        not captures
+        or mismatch_count
+        or missing_paths
+        or revalidated_count != len(records)
+    ):
         return None
-    return EvidenceIntegrityV1(checked_capture_count=len(captures))
+    return EvidenceIntegrityV1(
+        checked_capture_count=len(captures),
+        revalidated_application_count=revalidated_count,
+    )
+
+
+def _revalidates_current_record(record: RetainedNativeRecord) -> bool:
+    if (
+        record.authority_id != _AUTHORITY_ID
+        or record.native_schema != LeedsApplicationV1.__name__
+    ):
+        return False
+    try:
+        expected_payload, expected_completeness = reparse_leeds_live_evidence(
+            record.reference,
+            record.evidence,
+        )
+        retained_payload = LeedsApplicationV1.model_validate_json(record.native_json)
+    except ValueError:
+        return False
+    return (
+        expected_payload == retained_payload
+        and expected_completeness == record.completeness
+    )
 
 
 def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:

@@ -33,8 +33,8 @@ displayed totals, binds every response to its requested page, and fails closed
 if the form, taxonomy, or pagination identity drifts. Its exact named-control
 inventory and cardinality allow only the two captured repeated opaque fields,
 so an unknown filter or duplicate discriminator cannot silently narrow the
-search. Disabled named controls and options also fail closed. A repeated first
-page cannot advance a resumed checkpoint.
+search. Disabled named controls or options and unvalued options also fail
+closed. A repeated first page cannot advance a resumed checkpoint.
 
 The clean live run completed all ten weekly partitions with totals
 `116, 162, 154, 140, 102, 101, 156, 140, 0, 93`. It then reached page 10 and
@@ -66,12 +66,15 @@ table shapes were observed:
 
 The selection cell may contain the portal's accessibility label and checkbox.
 Unknown headers, row widths, dates, links, or pagination remain failed sections.
-The parsed metadata rows must exactly match the displayed `Documents (N)`
-count, so a truncated or header-only nonzero index cannot pass as complete.
-The exact Leeds permission-denied page maps to unavailable documents rather
-than empty documents. A header-only or missing table maps to empty only when
-the authoritative count is zero; no-documents wording cannot overrule a
-nonzero count.
+For a normal document page, parsed metadata rows must exactly match the active
+`tab_documents` count. A header-only or missing table maps to empty only with
+the exact `li.nodocuments` zero marker. Five retained official pages revealed a
+Leeds defect where that stale zero marker coexisted with one non-paginated,
+structurally valid table containing 3, 3, 5, 6, or 8 rows. Only that exact shape
+uses the fully enumerated table as complete; other count contradictions,
+unknown headers, pagination, and malformed rows fail closed. The exact Leeds
+permission-denied page maps to unavailable documents rather than empty
+documents.
 
 The portal intermittently returns an HTTP-200 remote-exception shell for
 summary or documents. The adapter retries that exact response three times. A
@@ -99,7 +102,9 @@ Add `--resume` when continuing the recorded checkpoint. A successful command
 must complete all 43 searches, prove exact checkpoint/queue/application-set
 agreement, verify retained evidence and SQLite integrity, leave no failed or
 pending work, make no attachment-body request, and perform an immediate
-zero-network rerun. Only then does it atomically write
+zero-network rerun. Every retained summary and document capture is reparsed
+under the current adapter, and its rebuilt payload and completeness must exactly
+match the stored record. Only then does the command atomically write
 `leeds-qualification-v1.json`.
 
 Even that receipt proves only the bootstrap. Successful live refreshes around

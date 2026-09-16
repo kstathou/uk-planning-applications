@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib.util
 import json
 import sys
@@ -28,17 +29,20 @@ from yimby.authorities.leeds.adapter import (
     LeedsParseError,
 )
 from yimby.domain import (
+    ApplicationId,
+    AuthorityId,
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
     EmptySection,
     FailedSection,
     NativeSnapshot,
+    RetainedNativeRecord,
     SourceReference,
     UnavailableSection,
 )
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
-from yimby.transport import SourceUnavailableError
+from yimby.transport import FormField, SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -335,6 +339,23 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
                 b'<input name="searchCriteria.reference" value="">',
                 (
                     b'<input name="searchCriteria.reference" value="">'
+                    b'<input name="searchCriteria.unseen" value="narrow" disabled>'
+                ),
+            ),
+            "advanced form fields",
+        ),
+        (
+            _advanced_form().replace(
+                b'<option value="Current">Current</option>',
+                b'<option value="Current">Current</option><option>New</option>',
+            ),
+            "advanced case status options",
+        ),
+        (
+            _advanced_form().replace(
+                b'<input name="searchCriteria.reference" value="">',
+                (
+                    b'<input name="searchCriteria.reference" value="">'
                     b'<input name="searchCriteria.unseen" value="narrow">'
                 ),
             ),
@@ -390,6 +411,8 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
         "field",
         "discriminator",
         "select",
+        "extra-disabled-filter",
+        "unvalued-option",
         "unknown-filter",
         "duplicate-discriminator",
         "extra-opaque",
@@ -405,6 +428,18 @@ def test_leeds_rejects_advanced_form_boundary_drift(
     """Every portal-owned advanced-form discriminator fails closed."""
     with pytest.raises(LeedsParseError, match=message):
         leeds_adapter._parse_advanced_form(body)
+
+
+def test_leeds_form_fields_exclude_disabled_controls() -> None:
+    """Disabled controls are never copied into a submitted Leeds request."""
+    form = BeautifulSoup(
+        '<form><input name="enabled" value="yes">'
+        '<input name="disabled" value="no" disabled></form>',
+        "html.parser",
+    ).select_one("form")
+    assert form is not None
+
+    assert leeds_adapter._form_fields(form) == (FormField(name="enabled", value="yes"),)
 
 
 def test_leeds_rejects_a_capped_case_type_partition() -> None:
@@ -772,8 +807,16 @@ def _documents(
     if header_drift:
         header = header.replace("View", "Download")
     expected = 0 if header_only else 1
+    marker = (
+        '<li class="nodocuments"><span>Documents (0)</span></li>'
+        if expected == 0
+        else (
+            '<a class="active" id="tab_documents">'
+            f"<span>Documents ({expected})</span></a>"
+        )
+    )
     return f"""
-    <span>Documents ({expected})</span>
+    {marker}
     <table summary="Documents">
       {header}
       {row}
@@ -1014,7 +1057,8 @@ def test_leeds_rejects_malformed_summary_boundaries(
 def test_leeds_accepts_an_explicit_empty_document_page() -> None:
     """Only the official no-documents wording establishes emptiness."""
     documents, state = leeds_adapter._parse_documents(
-        b"<span>Documents (0)</span><p>No documents found</p>"
+        b'<li class="nodocuments"><span>Documents (0)</span></li>'
+        b"<p>No documents found</p>"
     )
 
     assert documents == ()
@@ -1025,7 +1069,8 @@ def test_leeds_rejects_a_contradictory_empty_document_page() -> None:
     """No-documents wording cannot overrule a nonzero authoritative count."""
     with pytest.raises(LeedsParseError, match="documents table"):
         leeds_adapter._parse_documents(
-            b"<span>Documents (2)</span><p>No documents found</p>"
+            b'<a class="active" id="tab_documents">'
+            b"<span>Documents (2)</span></a><p>No documents found</p>"
         )
 
 
@@ -1037,17 +1082,44 @@ def test_leeds_rejects_a_truncated_document_index() -> None:
         leeds_adapter._parse_documents(truncated)
 
 
+def test_leeds_accepts_the_observed_stale_zero_document_tab() -> None:
+    """A Leeds no-documents tab can coexist with one complete metadata table."""
+    body = _documents().replace(
+        b'<a class="active" id="tab_documents"><span>Documents (1)</span></a>',
+        b'<li class="nodocuments"><span>Documents (0)</span></li>',
+    )
+
+    documents, state = leeds_adapter._parse_documents(body)
+
+    assert len(documents) == 1
+    assert isinstance(state, CompleteSection)
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [
-        (_documents() + _documents(header_only=True), "documents table"),
+        (_documents() + b'<table summary="Documents"></table>', "documents table"),
         (
-            _documents().replace(b"<span>Documents (1)</span>", b""),
+            _documents().replace(
+                b'<a class="active" id="tab_documents"><span>Documents (1)</span></a>',
+                b"",
+            ),
             "documents displayed count",
         ),
         (
-            b'<span>Documents (0)</span><table summary="Documents"></table>',
+            (
+                b'<li class="nodocuments"><span>Documents (0)</span></li>'
+                b'<table summary="Documents"></table>'
+            ),
             "documents table header",
+        ),
+        (
+            _documents().replace(b"Documents (1)", b"Files (1)"),
+            "documents displayed count",
+        ),
+        (
+            _documents(header_only=True).replace(b"Documents (0)", b"Documents (1)"),
+            "documents displayed count",
         ),
         (
             _documents().replace(
@@ -1058,7 +1130,8 @@ def test_leeds_rejects_a_truncated_document_index() -> None:
         ),
         (
             (
-                b"<span>Documents (1)</span>"
+                b'<a class="active" id="tab_documents">'
+                b"<span>Documents (1)</span></a>"
                 b'<table summary="Documents">'
                 b"<tr><th>Date Published</th><th>Document Type</th>"
                 b"<th>Description</th><th>View</th></tr>"
@@ -1083,6 +1156,8 @@ def test_leeds_rejects_a_truncated_document_index() -> None:
         "multiple-tables",
         "missing-count",
         "missing-header",
+        "marker-label",
+        "nonzero-no-documents-marker",
         "pagination",
         "row-width",
         "missing-link",
@@ -1152,6 +1227,10 @@ def test_leeds_result_pager_and_required_field_boundaries() -> None:
         leeds_adapter._optional_date(
             {"received date": "not-a-date"},
             "received date",
+        )
+    with pytest.raises(LeedsParseError, match="comments displayed count"):
+        leeds_adapter._section_count(
+            BeautifulSoup("<p></p>", "html.parser"), "comments"
         )
 
 
@@ -1304,6 +1383,76 @@ def _qualification_args(data_dir: Path, *, resume: bool = False) -> list[str]:
     return [*arguments, "--resume"] if resume else arguments
 
 
+def test_leeds_qualification_reparses_retained_current_evidence() -> None:
+    """A pre-fix stored success cannot pass current receipt semantics."""
+    module = _qualification_module()
+    snapshot = asyncio.run(_fetch(_LeedsDetailMock()))
+    record = RetainedNativeRecord(
+        application_id=ApplicationId("leeds:test"),
+        authority_id=AuthorityId("leeds"),
+        reference=snapshot.reference,
+        native_schema=LeedsApplicationV1.__name__,
+        native_json=snapshot.payload.model_dump_json(),
+        observed_at=snapshot.observed_at,
+        completeness=snapshot.completeness,
+        evidence=snapshot.evidence,
+    )
+    assert module._revalidates_current_record(record)
+    assert not module._revalidates_current_record(
+        record.model_copy(update={"authority_id": "cornwall"})
+    )
+    assert not module._revalidates_current_record(
+        record.model_copy(update={"native_schema": "LeedsApplicationLegacy"})
+    )
+    assert not module._revalidates_current_record(
+        record.model_copy(update={"evidence": snapshot.evidence[:1]})
+    )
+    assert not module._revalidates_current_record(
+        record.model_copy(
+            update={
+                "reference": snapshot.reference.model_copy(update={"locator": None})
+            }
+        )
+    )
+    assert not module._revalidates_current_record(
+        record.model_copy(
+            update={
+                "reference": snapshot.reference.model_copy(
+                    update={"reference": "MISMATCH/0001"}
+                )
+            }
+        )
+    )
+
+    truncated = _documents().replace(b"Documents (1)", b"Documents (2)")
+    stale_capture = snapshot.evidence[1].model_copy(
+        update={
+            "body": truncated,
+            "digest": hashlib.sha256(truncated).hexdigest(),
+        }
+    )
+    stale_record = record.model_copy(
+        update={"evidence": (snapshot.evidence[0], stale_capture)}
+    )
+
+    assert not module._revalidates_current_record(stale_record)
+    altered_payload = snapshot.payload.model_copy(
+        update={"proposal_text": "Different retained proposal"}
+    )
+    assert not module._revalidates_current_record(
+        record.model_copy(update={"native_json": altered_payload.model_dump_json()})
+    )
+    assert not module._revalidates_current_record(
+        record.model_copy(
+            update={
+                "completeness": snapshot.completeness.model_copy(
+                    update={"documents": EmptySection()}
+                )
+            }
+        )
+    )
+
+
 def test_leeds_qualification_requires_exact_30_day_scope(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -1345,6 +1494,7 @@ def test_leeds_qualification_writes_typed_receipt_and_zero_io_rerun(
     assert receipt.counts.applications == 1
     assert receipt.durable_sets.exact
     assert receipt.durable_sets.checkpoint_count == 1
+    assert receipt.evidence_integrity.revalidated_application_count == 1
     assert receipt.costs.initial.attachment_body_requests == 0
     assert receipt.costs.rerun.request_count == 0
     assert receipt.costs.rerun.transferred_bytes == 0
