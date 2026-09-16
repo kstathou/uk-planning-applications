@@ -142,10 +142,11 @@ uv run python scripts/qualify_birmingham.py \
 
 The command requires a new empty data directory. It retains every source
 response, verifies the exact 30-day count against ordered pagination, records
-the source-volume and semantic gaps, performs an offline integrity replay, and
-writes a typed blocked receipt. Exit status 1 is expected while the receipt is
-blocked. The command does not promote Birmingham, enumerate applications into
-the collection store, or satisfy a weekly cycle.
+the source-volume and semantic gaps, and recomputes all facts from retained
+evidence before atomically writing a typed blocked receipt. Exit status 1 is
+expected while the receipt is blocked. The command does not promote
+Birmingham, enumerate applications into the collection store, or satisfy a
+weekly cycle.
 
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
