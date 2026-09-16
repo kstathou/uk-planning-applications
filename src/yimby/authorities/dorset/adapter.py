@@ -64,6 +64,7 @@ _RESULTS_PER_PAGE = 10
 _MARKER_COUNT = 2
 _DOCUMENT_CELL_COUNT = 2
 _FORM_STATE_FIELDS = ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")
+_TELERIK_STATE_SUFFIXES = ("_ClientState", "_calendar_SD", "_calendar_AD")
 
 
 class DorsetDiscoveryScope(FrozenModel):
@@ -622,9 +623,9 @@ def _parse_result_page(body: bytes) -> _ResultPage:  # noqa: C901
     ):
         _raise_parse("result form")
     fields = _successful_controls(form)
-    _require_fields(fields, "__EVENTTARGET", "__EVENTARGUMENT", "__VIEWSTATE")
-    _require_hidden_inputs(form, "__EVENTTARGET", "__EVENTARGUMENT", "__VIEWSTATE")
-    if not any(field.name == "__VIEWSTATE" and field.value for field in fields):
+    _require_fields(fields, *_FORM_STATE_FIELDS)
+    _require_hidden_inputs(form, *_FORM_STATE_FIELDS)
+    if any(field.name in _FORM_STATE_FIELDS and not field.value for field in fields):
         _raise_parse("result form viewstate")
     page, total_pages = _page_markers(form)
     references = []
@@ -958,10 +959,13 @@ def _advanced_request(
         }
     else:
         overrides = {_OUTSTANDING: "on"}
-    fields = _override_fields(
-        _successful_controls(form, frozenset(overrides)),
-        overrides,
-    )
+    controls = _successful_controls(form, frozenset(overrides))
+    client_state = {
+        field.name: ""
+        for field in controls
+        if field.name.endswith(_TELERIK_STATE_SUFFIXES)
+    }
+    fields = _override_fields(controls, {**client_state, **overrides})
     return PortalRequest(
         url=HttpUrl(_ADVANCED_URL),
         intent=RequestIntent.SEARCH,

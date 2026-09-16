@@ -785,9 +785,9 @@ def _three_page_result(page: int, rows: tuple[_Result, ...]) -> bytes:
     )
     return f"""
     <form method="post" action="./searchresults.aspx">
-      <input type="hidden" name="__EVENTTARGET" value="">
-      <input type="hidden" name="__EVENTARGUMENT" value="">
       <input type="hidden" name="__VIEWSTATE" value="page-{page}">
+      <input type="hidden" name="__VIEWSTATEGENERATOR" value="216AC575">
+      <input type="hidden" name="__EVENTVALIDATION" value="validation-state">
       <div id="ctl00_ContentPlaceHolder1_lvResults_RadDataPager1">
         <span>Page {page} of 3</span><a class="rdpCurrentPage">{page}</a>
         {next_controls}
