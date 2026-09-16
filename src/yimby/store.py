@@ -76,6 +76,9 @@ _QUALIFICATION_LINEAGE_DEFINITION = (
     "scope_json TEXT NOT NULL, created_at TEXT NOT NULL, "
     "PRIMARY KEY (authority_id, qualification) )"
 )
+_QUALIFICATION_LINEAGE_AUXILIARY_OBJECTS = (
+    ("index", "sqlite_autoindex_qualification_lineage_1", None),
+)
 
 
 class _ApplicationSection(FrozenModel):
@@ -1324,10 +1327,12 @@ class SqliteStore:
             message = "migration 009 Barnet qualification lineage schema is invalid"
             raise sqlite3.IntegrityError(message)
         self._validate_qualification_lineage_accepts_qualified_phase()
+        self._validate_qualification_lineage_auxiliary_objects()
 
     def _validate_qualification_lineage_accepts_qualified_phase(self) -> None:
         message = "migration 009 Barnet qualification lineage phase is invalid"
         probe = str(uuid4())
+        qualification = f"__schema_probe__{probe}"
         self._connection.execute("SAVEPOINT validate_qualification_lineage")
         try:
             try:
@@ -1337,13 +1342,41 @@ class SqliteStore:
                         authority_id, qualification, phase, scope_json, created_at
                     ) VALUES (?, ?, 'qualified', '{}', '2000-01-01T00:00:00+00:00')
                     """,
-                    (f"__schema_probe__{probe}", "valid"),
+                    ("barnet", qualification),
                 )
             except sqlite3.IntegrityError as error:
                 raise sqlite3.IntegrityError(message) from error
+            persisted = self._connection.execute(
+                """
+                SELECT phase, scope_json, created_at FROM qualification_lineage
+                WHERE authority_id = 'barnet' AND qualification = ?
+                """,
+                (qualification,),
+            ).fetchone()
+            if persisted is None or tuple(persisted) != (
+                "qualified",
+                "{}",
+                "2000-01-01T00:00:00+00:00",
+            ):
+                raise sqlite3.IntegrityError(message)
         finally:
             self._connection.execute("ROLLBACK TO validate_qualification_lineage")
             self._connection.execute("RELEASE validate_qualification_lineage")
+
+    def _validate_qualification_lineage_auxiliary_objects(self) -> None:
+        objects = tuple(
+            (row["type"], row["name"], row["sql"])
+            for row in self._connection.execute(
+                """
+                SELECT type, name, sql FROM sqlite_master
+                WHERE tbl_name = 'qualification_lineage' AND type != 'table'
+                ORDER BY type, name
+                """
+            )
+        )
+        if objects != _QUALIFICATION_LINEAGE_AUXILIARY_OBJECTS:
+            message = "migration 009 Barnet qualification lineage schema is invalid"
+            raise sqlite3.IntegrityError(message)
 
     def _application_id(self, normalised: NormalisedObservation) -> ApplicationId:
         return ApplicationId(

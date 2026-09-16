@@ -897,26 +897,51 @@ def test_lineage_migration_requires_exact_phase_semantics(  # noqa: D103
         _store(root)
 
 
-def test_lineage_migration_requires_qualified_phase_to_be_insertable(
-    tmp_path: Path,
-) -> None:
-    """A trigger cannot contradict the canonical table's accepted phase."""
-    root = tmp_path / "contradictory-trigger"
-    store = _store(root)
-    store.close()
-    with closing(sqlite3.connect(root / "yimby.sqlite3")) as connection:
-        connection.execute(
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        (
             """
             CREATE TRIGGER reject_qualified_lineage
             BEFORE INSERT ON qualification_lineage
-            WHEN NEW.phase = 'qualified'
+            WHEN NEW.authority_id = 'barnet' AND NEW.phase = 'qualified'
             BEGIN
                 SELECT RAISE(ABORT, 'qualified phase rejected');
             END
+            """,
+            "phase is invalid",
+        ),
+        (
             """
-        )
+            CREATE TRIGGER delete_qualified_lineage
+            AFTER INSERT ON qualification_lineage
+            WHEN NEW.authority_id = 'barnet' AND NEW.phase = 'qualified'
+            BEGIN
+                DELETE FROM qualification_lineage
+                WHERE authority_id = NEW.authority_id
+                  AND qualification = NEW.qualification;
+            END
+            """,
+            "phase is invalid",
+        ),
+        (
+            "CREATE INDEX extra_lineage_index ON qualification_lineage(phase)",
+            "schema is invalid",
+        ),
+    ],
+)
+def test_lineage_migration_rejects_auxiliary_schema_objects(  # noqa: D103
+    statement: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "auxiliary-schema"
+    store = _store(root)
+    store.close()
+    with closing(sqlite3.connect(root / "yimby.sqlite3")) as connection:
+        connection.execute(statement)
         connection.commit()
-    with pytest.raises(sqlite3.IntegrityError, match="phase is invalid"):
+    with pytest.raises(sqlite3.IntegrityError, match=message):
         _store(root)
 
 

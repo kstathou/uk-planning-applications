@@ -159,10 +159,12 @@ That releases version 006 for OPDC rather than causing its integration migration
 to be skipped. Startup independently verifies migration 009's owning filename
 and canonical table definition, including the exact
 `CHECK (phase = 'qualified')` constraint. A rolled-back schema probe also
-proves that the accepted `qualified` value remains insertable in the presence
-of triggers. An incompatible row, missing/malformed lineage table, wrong phase
-constraint, or contradictory trigger therefore fails closed even when no
-legacy 006 row is present.
+inserts with the real `barnet` authority key and proves the exact row remains
+present. The canonical implicit primary-key index is the only permitted
+auxiliary schema object; explicit triggers or indexes are rejected. An
+incompatible row, missing/malformed lineage table, wrong phase constraint, or
+contradictory trigger therefore fails closed even when no legacy 006 row is
+present.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 
