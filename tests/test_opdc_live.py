@@ -71,6 +71,12 @@ _CONFIG_ERROR = 2
 _QUALIFICATION_SESSION_COUNT = 2
 _QUALIFICATION_REQUEST_COUNT = 15
 _QUALIFICATION_APPLICATION_COUNT = 4
+_QUALIFICATION_APPLICATION_CAPTURE_SHA256 = (
+    "sha256:9c334021f7e6c8aa73cea43ab9c4dbb9b9489b86ae62d2efb8be40a640ce0270"
+)
+_QUALIFICATION_CONTENT_DIGEST_SET_SHA256 = (
+    "sha256:e5a010a715dd805e3873ac0b011f106581e168016aaea0d1f9e7d4334eaef278"
+)
 
 
 def _query_urls(window: DiscoveryWindow = WINDOW) -> tuple[str, ...]:
@@ -849,6 +855,17 @@ def test_opdc_qualification_persists_typed_proof_and_zero_network_rerun(
         "transferred_bytes": 0,
         "attachment_body_requests": 0,
     }
+    assert receipt["evidence_commitment"] == {
+        "canonicalization": "sha256-canonical-json-v1",
+        "applications": 4,
+        "captures_per_application": 3,
+        "capture_associations": 12,
+        "content_digests": 6,
+        "missing_paths": 0,
+        "invalid_paths": 0,
+        "application_capture_sha256": (_QUALIFICATION_APPLICATION_CAPTURE_SHA256),
+        "content_digest_set_sha256": (_QUALIFICATION_CONTENT_DIGEST_SET_SHA256),
+    }
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
     assert all(check["ok"] for check in receipt["checks"])
     store = _store(data_dir)
@@ -870,11 +887,128 @@ def test_opdc_qualification_persists_typed_proof_and_zero_network_rerun(
     sessions.clear()
     assert module.main([*args, "--resume"], session_factory=session_factory) == 0
     resumed = json.loads(capsys.readouterr().out)
-    assert len(sessions) == _QUALIFICATION_SESSION_COUNT
-    assert all(session.closed for session in sessions)
-    assert all(session.requested_urls == () for session in sessions)
-    assert resumed["costs"]["initial"]["request_count"] == 0
+    assert sessions == []
+    assert resumed["costs"]["initial"] == receipt["costs"]["initial"]
     assert resumed["costs"]["rerun"]["request_count"] == 0
+
+
+def test_opdc_qualification_recovers_bootstrap_cost_after_publish_failure(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A staged receipt preserves acquisition proof when publication fails."""
+    module = _qualification_module()
+    data_dir = tmp_path / "publish-failure"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    original_replace = Path.replace
+
+    def fail_receipt_publish(source: Path, target: Path) -> Path:
+        if source.name == ".opdc-qualification-v1.json.tmp":
+            raise OSError
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", fail_receipt_publish)
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert not (data_dir / "opdc-qualification-v1.json").exists()
+    assert (data_dir / ".opdc-qualification-v1.json.tmp").exists()
+    assert (data_dir / "opdc-qualification-proof-v1.json").exists()
+
+    monkeypatch.setattr(Path, "replace", original_replace)
+    sessions.clear()
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 0
+    recovered = json.loads(capsys.readouterr().out)
+    assert sessions == []
+    assert recovered["costs"]["initial"]["request_count"] == (
+        _QUALIFICATION_REQUEST_COUNT
+    )
+
+
+def test_opdc_qualification_adopts_legacy_receipt_without_network(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A legacy public receipt becomes the durable acquisition proof."""
+    module = _qualification_module()
+    data_dir = tmp_path / "legacy-receipt"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    original = json.loads(capsys.readouterr().out)
+    (data_dir / "opdc-qualification-proof-v1.json").unlink()
+    sessions.clear()
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 0
+    adopted = json.loads(capsys.readouterr().out)
+    assert sessions == []
+    assert adopted == original
+    assert (data_dir / "opdc-qualification-proof-v1.json").exists()
+
+
+def test_opdc_qualification_rejects_terminal_store_without_bootstrap_proof(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A terminal store cannot relabel a zero-I/O resume as its bootstrap."""
+    module = _qualification_module()
+    data_dir = tmp_path / "missing-bootstrap-proof"
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    (data_dir / "opdc-qualification-v1.json").unlink()
+    (data_dir / "opdc-qualification-proof-v1.json").unlink()
+    sessions.clear()
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
+    assert sessions == []
+    assert not (data_dir / "opdc-qualification-v1.json").exists()
 
 
 def test_opdc_qualification_rejects_failed_sections_without_a_receipt(
