@@ -15,6 +15,7 @@ from bs4.element import Tag
 from pydantic import Field, HttpUrl, model_validator
 
 from yimby.domain import (
+    ApplicationEvent,
     ApplicationMetadata,
     AuthorityId,
     AuthorityKind,
@@ -24,6 +25,8 @@ from yimby.domain import (
     DiscoveryBatch,
     DiscoveryWindow,
     DocumentRecord,
+    EvidenceCapture,
+    EvidenceDigest,
     FrozenModel,
     NativeSnapshot,
     NormalisedObservation,
@@ -172,11 +175,18 @@ class ArunCompletedQuery(FrozenModel):
     key: str
     reported_count: int = Field(ge=0, lt=_RESULT_CAP)
     enumerated_count: int = Field(ge=0, lt=_RESULT_CAP)
+    references: tuple[str, ...]
+    initial_evidence: EvidenceDigest
+    expanded_evidence: EvidenceDigest | None = None
 
     @model_validator(mode="after")
     def counts_agree(self) -> Self:
         """Reject summaries that conceal incomplete enumeration."""
-        if self.reported_count != self.enumerated_count:
+        if (
+            self.reported_count != self.enumerated_count
+            or self.enumerated_count != len(self.references)
+            or len(self.references) != len(set(self.references))
+        ):
             message = "Arun completed-query counts disagree"
             raise ValueError(message)
         return self
@@ -199,6 +209,7 @@ class ArunAwaitingShowAll(FrozenModel):
     completed: tuple[ArunCompletedQuery, ...] = ()
     reported_count: int = Field(gt=0, lt=_RESULT_CAP)
     initial_references: tuple[str, ...] = Field(min_length=1)
+    initial_evidence: EvidenceDigest
     seen_references: tuple[str, ...] = ()
 
 
@@ -230,6 +241,7 @@ class ArunLiveCursor(FrozenModel):
     scope: ArunDiscoveryScope
     plan: tuple[ArunQuery, ...] = Field(min_length=1)
     progress: ArunProgress
+    search_form_evidence: EvidenceDigest | None = None
 
     @model_validator(mode="after")
     def progress_matches_plan(self) -> Self:
@@ -240,7 +252,8 @@ class ArunLiveCursor(FrozenModel):
         if tuple(item.key for item in completed) != expected_keys:
             message = "Arun completed queries are not a plan prefix"
             raise ValueError(message)
-        if len(progress.seen_references) != len(set(progress.seen_references)):
+        expected_seen = _completed_references(completed)
+        if progress.seen_references != expected_seen:
             message = "Arun checkpoint references are not unique"
             raise ValueError(message)
         if isinstance(progress, ArunComplete):
@@ -253,10 +266,10 @@ class ArunLiveCursor(FrozenModel):
         ):
             message = "Arun next query does not follow the completed prefix"
             raise ValueError(message)
-        if isinstance(progress, ArunAwaitingShowAll) and not set(
+        if isinstance(progress, ArunAwaitingShowAll) and len(
             progress.initial_references
-        ).issubset(progress.seen_references):
-            message = "Arun first-page references are absent from the seen set"
+        ) != len(set(progress.initial_references)):
+            message = "Arun first-page references are not unique"
             raise ValueError(message)
         return self
 
@@ -293,6 +306,9 @@ class ArunApplicationV1(FrozenModel):
     application_type: str | None = None
     received_date: date | None = None
     validated_date: date | None = None
+    decision_by_date: date | None = None
+    comment_by_date: date | None = None
+    target_committee_date: date | None = None
     decision_date: date | None = None
     case_officer: str | None = None
     applicant: str | None = None
@@ -402,6 +418,10 @@ class ArunAdapter:
             PortalRequest(url=HttpUrl(_SEARCH_URL), intent=RequestIntent.SEARCH)
         )
         form = _parse_search_form(form_capture.body)
+        cursor = cursor.model_copy(
+            update={"search_form_evidence": form_capture.digest}
+        )
+        pending_evidence: tuple[EvidenceCapture, ...] = (form_capture,)
         while True:
             progress = cursor.progress
             if _is_complete(progress):
@@ -410,6 +430,11 @@ class ArunAdapter:
             query = cursor.plan[progress.next_query]
             initial_capture = await session.fetch(_initial_search_request(form, query))
             initial = _parse_search_results(initial_capture.body)
+            query_evidence: tuple[EvidenceCapture, ...] = (
+                *pending_evidence,
+                initial_capture,
+            )
+            pending_evidence = ()
             if len(initial.references) > initial.reported:
                 raise ArunCountMismatchError(initial.reported, len(initial.references))
             if isinstance(progress, ArunAwaitingShowAll):
@@ -419,23 +444,28 @@ class ArunAdapter:
                     != progress.initial_references
                 )
                 if replay_changed:
-                    fresh, seen = _fresh(
-                        initial.references,
-                        progress.seen_references,
-                    )
                     if len(initial.references) == initial.reported:
                         if initial.has_show_all:
                             raise ArunQueryReplayError
+                        fresh, _ = _fresh(
+                            initial.references,
+                            progress.seen_references,
+                        )
                         cursor = _complete_query(
                             cursor,
-                            query,
-                            initial.reported,
-                            seen,
+                            _completed_query(
+                                query,
+                                initial.reported,
+                                initial.references,
+                                initial_capture.digest,
+                                None,
+                            ),
                         )
                         yield DiscoveryBatch(
                             references=fresh,
                             next_checkpoint=ArunCheckpointV1(cursor=cursor),
                             complete=isinstance(cursor.progress, ArunComplete),
+                            evidence=query_evidence,
                         )
                         continue
                     if not initial.has_show_all:
@@ -450,7 +480,8 @@ class ArunAdapter:
                         initial_references=tuple(
                             reference.reference for reference in initial.references
                         ),
-                        seen_references=seen,
+                        initial_evidence=initial_capture.digest,
+                        seen_references=progress.seen_references,
                     )
                     cursor = ArunLiveCursor(
                         scope=cursor.scope,
@@ -458,28 +489,40 @@ class ArunAdapter:
                         progress=progress,
                     )
                     yield DiscoveryBatch(
-                        references=fresh,
+                        references=(),
                         next_checkpoint=ArunCheckpointV1(cursor=cursor),
                         complete=False,
+                        evidence=query_evidence,
                     )
+                    query_evidence = ()
+                else:
+                    progress = progress.model_copy(
+                        update={"initial_evidence": initial_capture.digest}
+                    )
+                    cursor = cursor.model_copy(update={"progress": progress})
             else:
-                fresh, seen = _fresh(
-                    initial.references,
-                    progress.seen_references,
-                )
                 if len(initial.references) == initial.reported:
                     if initial.has_show_all:
                         raise ArunQueryReplayError
+                    fresh, _ = _fresh(
+                        initial.references,
+                        progress.seen_references,
+                    )
                     cursor = _complete_query(
                         cursor,
-                        query,
-                        initial.reported,
-                        seen,
+                        _completed_query(
+                            query,
+                            initial.reported,
+                            initial.references,
+                            initial_capture.digest,
+                            None,
+                        ),
                     )
                     yield DiscoveryBatch(
                         references=fresh,
                         next_checkpoint=ArunCheckpointV1(cursor=cursor),
                         complete=isinstance(cursor.progress, ArunComplete),
+                        evidence=query_evidence,
                     )
                     continue
                 if not initial.has_show_all:
@@ -494,18 +537,24 @@ class ArunAdapter:
                     initial_references=tuple(
                         reference.reference for reference in initial.references
                     ),
-                    seen_references=seen,
+                    initial_evidence=initial_capture.digest,
+                    seen_references=progress.seen_references,
                 )
                 cursor = cursor.model_copy(update={"progress": progress})
                 yield DiscoveryBatch(
-                    references=fresh,
+                    references=(),
                     next_checkpoint=ArunCheckpointV1(cursor=cursor),
                     complete=False,
+                    evidence=query_evidence,
                 )
+                query_evidence = ()
             expanded_capture = await session.fetch(
                 _show_all_request(initial.show_all_form, query)
             )
-            expanded = _parse_search_results(expanded_capture.body)
+            expanded = _parse_search_results(
+                expanded_capture.body,
+                expected_reported=progress.reported_count,
+            )
             if (
                 expanded.has_show_all
                 or expanded.reported != progress.reported_count
@@ -515,20 +564,25 @@ class ArunAdapter:
                     progress.reported_count,
                     len(expanded.references),
                 )
-            fresh, seen = _fresh(
+            fresh, _ = _fresh(
                 expanded.references,
                 progress.seen_references,
             )
             cursor = _complete_query(
                 cursor,
-                query,
-                progress.reported_count,
-                seen,
+                _completed_query(
+                    query,
+                    progress.reported_count,
+                    expanded.references,
+                    progress.initial_evidence,
+                    expanded_capture.digest,
+                ),
             )
             yield DiscoveryBatch(
                 references=fresh,
                 next_checkpoint=ArunCheckpointV1(cursor=cursor),
                 complete=isinstance(cursor.progress, ArunComplete),
+                evidence=(*query_evidence, expanded_capture),
             )
 
     async def fetch(
@@ -629,9 +683,12 @@ class ArunAdapter:
             documents=documents,
             site_address=_optional_field(fields, "location", "address"),
             application_type=_optional_field(fields, "application type", "type"),
-            received_date=_optional_date(fields, "received date"),
-            validated_date=_optional_date(fields, "validated date"),
-            decision_date=_optional_date(fields, "decision date"),
+            received_date=_optional_date(fields, "received", "received date"),
+            validated_date=_optional_date(fields, "validated", "validated date"),
+            decision_by_date=_optional_date(fields, "decision by"),
+            comment_by_date=_optional_date(fields, "comment by"),
+            target_committee_date=_optional_date(fields, "target cmte"),
+            decision_date=_optional_date(fields, "decided", "decision date"),
             case_officer=_optional_field(fields, "case officer"),
             applicant=_optional_field(fields, "applicant"),
             agent=_optional_field(fields, "agent"),
@@ -672,9 +729,14 @@ class ArunAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="arun-v2",
+            normaliser_version="arun-v3",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
+                decision=(
+                    payload.decision_status
+                    if payload.decision_date is not None
+                    else None
+                ),
                 address=payload.site_address,
                 received_date=payload.received_date,
                 validated_date=payload.validated_date,
@@ -684,6 +746,21 @@ class ArunAdapter:
                 ),
                 officer_name=payload.case_officer,
                 source_url=snapshot.evidence[0].url,
+                events=tuple(
+                    event
+                    for event in (
+                        _application_event("decision-due", payload.decision_by_date),
+                        _application_event(
+                            "comment-deadline",
+                            payload.comment_by_date,
+                        ),
+                        _application_event(
+                            "target-committee",
+                            payload.target_committee_date,
+                        ),
+                    )
+                    if event is not None
+                ),
             ),
         )
 
@@ -829,13 +906,17 @@ def _show_all_request(
     )
 
 
-def _parse_search_results(body: bytes) -> _SearchResults:
+def _parse_search_results(
+    body: bytes,
+    *,
+    expected_reported: int | None = None,
+) -> _SearchResults:
     soup = BeautifulSoup(body, "html.parser")
     if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
         _raise_parse("result pagination")
     found = _parse_result_references(soup)
     text = soup.get_text(" ", strip=True)
-    reported = _parse_reported_count(soup, text)
+    reported = _parse_reported_count(soup, text, expected_reported)
     return _SearchResults(
         references=found,
         reported=reported,
@@ -892,6 +973,7 @@ def _validated_detail_locator(locator: str, expected_reference: str) -> str:
 def _parse_reported_count(
     soup: BeautifulSoup,
     text: str,
+    expected_reported: int | None,
 ) -> int:
     if "retrieve more than 200 results" in text.casefold():
         raise ArunResultCapError
@@ -914,6 +996,8 @@ def _parse_reported_count(
         or "no results" in text.casefold()
     ):
         reported = 0
+    elif expected_reported is not None:
+        reported = expected_reported
     else:
         _raise_parse("reported result count")
     if reported >= _RESULT_CAP:
@@ -1092,21 +1176,16 @@ def _is_complete(progress: ArunProgress) -> bool:
 
 def _complete_query(
     cursor: ArunLiveCursor,
-    query: ArunQuery,
-    reported_count: int,
-    seen_references: tuple[str, ...],
+    summary: ArunCompletedQuery,
 ) -> ArunLiveCursor:
     progress = cursor.progress
     if isinstance(progress, ArunComplete):
         raise ArunCheckpointError
     completed = (
         *progress.completed,
-        ArunCompletedQuery(
-            key=query.key,
-            reported_count=reported_count,
-            enumerated_count=reported_count,
-        ),
+        summary,
     )
+    seen_references = _completed_references(completed)
     next_query = progress.next_query + 1
     next_progress: ArunProgress
     if next_query == len(cursor.plan):
@@ -1124,6 +1203,49 @@ def _complete_query(
         scope=cursor.scope,
         plan=cursor.plan,
         progress=next_progress,
+        search_form_evidence=cursor.search_form_evidence,
+    )
+
+
+def _completed_query(
+    query: ArunQuery,
+    reported_count: int,
+    references: tuple[SourceReference, ...],
+    initial_evidence: EvidenceDigest,
+    expanded_evidence: EvidenceDigest | None,
+) -> ArunCompletedQuery:
+    return ArunCompletedQuery(
+        key=query.key,
+        reported_count=reported_count,
+        enumerated_count=len(references),
+        references=tuple(reference.reference for reference in references),
+        initial_evidence=initial_evidence,
+        expanded_evidence=expanded_evidence,
+    )
+
+
+def _completed_references(
+    completed: tuple[ArunCompletedQuery, ...],
+) -> tuple[str, ...]:
+    seen = set()
+    ordered = []
+    for item in completed:
+        for reference in item.references:
+            if reference not in seen:
+                seen.add(reference)
+                ordered.append(reference)
+    return tuple(ordered)
+
+
+def _application_event(
+    event_type: str,
+    event_date: date | None,
+) -> ApplicationEvent | None:
+    if event_date is None:
+        return None
+    return ApplicationEvent(
+        event_type=event_type,
+        event_at=datetime.combine(event_date, datetime.min.time(), tzinfo=UTC),
     )
 
 

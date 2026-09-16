@@ -33,6 +33,7 @@ from yimby.domain import (
     DiscoveryState,
     DocumentRecord,
     DurableDiscoveryBatch,
+    EvidenceCapture,
     EvidenceDigest,
     FrozenModel,
     NormalisedObservation,
@@ -191,7 +192,24 @@ class SqliteStore:
         batch: DurableDiscoveryBatch,
     ) -> None:
         """Queue references and advance their checkpoint atomically."""
+        evidence_paths = [
+            (capture, self._evidence.put(capture)) for capture in batch.evidence
+        ]
         with self._connection:
+            for capture, path in evidence_paths:
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO evidence(
+                        digest, path, source_url, media_type
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        capture.digest,
+                        self._evidence.relative_path(path),
+                        str(capture.url),
+                        capture.media_type,
+                    ),
+                )
             for reference in batch.references:
                 self._connection.execute(
                     """
@@ -229,6 +247,24 @@ class SqliteStore:
                     run_id,
                 ),
             )
+
+    def evidence_capture(self, digest: EvidenceDigest) -> EvidenceCapture | None:
+        """Rehydrate one retained capture by its content digest."""
+        row = self._connection.execute(
+            """
+            SELECT path, source_url, media_type FROM evidence
+            WHERE digest = ?
+            """,
+            (digest,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._evidence.read_capture(
+            digest,
+            row["path"],
+            row["source_url"],
+            row["media_type"],
+        )
 
     def commit_observation(
         self,

@@ -36,6 +36,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
+_SEARCH_DIGEST = EvidenceDigest("0" * 64)
+
 
 class _Session:
     def __init__(
@@ -487,7 +489,23 @@ def test_arun_public_collector_resumes_and_is_idempotent(tmp_path: Path) -> None
     assert stored.proposal == "Build & landscape one home"
     assert stored.completeness.documents.kind == "complete"
     assert [document.title for document in stored.documents] == ["Decision notice"]
-    assert store.discovery_state(AuthorityId("arun")).queued[0].locator is not None
+    discovery = store.discovery_state(AuthorityId("arun"))
+    assert discovery.queued[0].locator is not None
+    assert discovery.checkpoint is not None
+    checkpoint = arun.ArunCheckpointV1.model_validate_json(
+        discovery.checkpoint.payload_json
+    )
+    assert isinstance(checkpoint.cursor, arun.ArunLiveCursor)
+    assert checkpoint.cursor.search_form_evidence is not None
+    form_evidence = store.evidence_capture(checkpoint.cursor.search_form_evidence)
+    assert form_evidence is not None
+    assert form_evidence.body == _arun_form()
+    assert store.evidence_capture(EvidenceDigest("f" * 64)) is None
+    assert isinstance(checkpoint.cursor.progress, arun.ArunComplete)
+    for completed in checkpoint.cursor.progress.completed:
+        assert store.evidence_capture(completed.initial_evidence) is not None
+        if completed.expanded_evidence is not None:
+            assert store.evidence_capture(completed.expanded_evidence) is not None
     repeat = asyncio.run(
         collector.collect(AuthorityId("arun"), window, _Session(_ArunMock()))
     )
@@ -606,7 +624,8 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
         _batches(adapter, resumed_session, window, first.next_checkpoint)
     )
     assert [item.reference for batch in resumed for item in batch.references] == [
-        "BR/157/25/PL"
+        "BR/156/25/PL",
+        "BR/157/25/PL",
     ]
     assert resumed[-1].complete
     assert (
@@ -830,6 +849,8 @@ def test_arun_terminal_and_parser_boundaries() -> None:
             key=query.key,
             reported_count=0,
             enumerated_count=0,
+            references=(),
+            initial_evidence=_SEARCH_DIGEST,
         )
         for query in plan
     )
@@ -872,7 +893,8 @@ def test_arun_terminal_and_parser_boundaries() -> None:
                 next_query=0,
                 reported_count=2,
                 initial_references=("BR/156/25/PL",),
-                seen_references=("BR/156/25/PL",),
+                initial_evidence=_SEARCH_DIGEST,
+                seen_references=(),
             ),
         )
     )

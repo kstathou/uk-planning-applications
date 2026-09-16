@@ -32,6 +32,8 @@ if TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
 
+_SEARCH_DIGEST = EvidenceDigest("0" * 64)
+
 
 def _search_form() -> bytes:
     return b"""
@@ -306,6 +308,16 @@ def test_arun_open_plan_stops_at_a_pre_2024_scope_end() -> None:
     )
     assert all(query.end <= scope.end for query in open_queries)
 
+    assert len(
+        arun._canonical_query_plan(
+            scope.model_copy(update={"end": date(1947, 12, 31)})
+        )
+    ) == 2
+    historical = arun._canonical_query_plan(
+        scope.model_copy(update={"end": date(1990, 9, 16)})
+    )
+    assert historical[-1].end == date(1990, 9, 16)
+
 
 def test_arun_search_requests_replay_the_exact_portal_controls() -> None:
     form = arun._parse_search_form(_search_form())
@@ -419,6 +431,11 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         arun._parse_search_results(
             b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>'
         )
+    expected = arun._parse_search_results(
+        b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>',
+        expected_reported=1,
+    )
+    assert expected.reported == 1
     with pytest.raises(arun.ArunParseError, match="result pagination"):
         arun._parse_search_results(
             b'<strong>1 record</strong><a rel="next" href="?page=2">Next</a>'
@@ -428,11 +445,11 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
 
 @pytest.mark.parametrize(
     "href",
-    (
+    [
         "https://elsewhere.invalid/planningDetails?reference=BR/1/26/PL",
         f"{arun.BASE_URL}/other/planningDetails?reference=BR/1/26/PL",
         f"{arun.BASE_URL}/planningDetails?reference=BR/1/26/PL&extra=1",
-    ),
+    ],
 )
 def test_arun_result_links_stay_on_the_exact_official_route(href: str) -> None:
     with pytest.raises(arun.ArunParseError, match="result reference"):
@@ -496,7 +513,10 @@ def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
     assert len(terminal.cursor.progress.completed) == 60
     assert terminal.cursor.progress.seen_references == _DiscoveryResponder.references
     assert terminal.cursor.search_form_evidence is not None
-    assert all(item.initial_evidence is not None for item in terminal.cursor.progress.completed)
+    assert all(
+        item.initial_evidence is not None
+        for item in terminal.cursor.progress.completed
+    )
     assert terminal.cursor.progress.completed[0].references == (
         "BR/1/26/PL",
         "BR/2/26/PL",
@@ -557,7 +577,7 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
 
     assert [
         reference.reference for batch in resumed for reference in batch.references
-    ] == ["NEW/1", "BR/2/26/PL"]
+    ] == ["NEW/1", "BR/1/26/PL", "BR/2/26/PL"]
     terminal = resumed[-1].next_checkpoint.cursor
     assert isinstance(terminal, arun.ArunLiveCursor)
     assert isinstance(terminal.progress, arun.ArunComplete)
@@ -688,6 +708,8 @@ def test_arun_checkpoint_invariants_reject_contradictory_progress() -> None:
         key=plan[0].key,
         reported_count=0,
         enumerated_count=0,
+        references=(),
+        initial_evidence=_SEARCH_DIGEST,
     )
 
     with pytest.raises(ValueError, match="counts disagree"):
@@ -695,6 +717,8 @@ def test_arun_checkpoint_invariants_reject_contradictory_progress() -> None:
             key=plan[0].key,
             reported_count=1,
             enumerated_count=0,
+            references=("A",),
+            initial_evidence=_SEARCH_DIGEST,
         )
     with pytest.raises(ValueError, match="not a plan prefix"):
         arun.ArunLiveCursor(
@@ -726,14 +750,15 @@ def test_arun_checkpoint_invariants_reject_contradictory_progress() -> None:
             plan=plan,
             progress=arun.ArunReady(next_query=1),
         )
-    with pytest.raises(ValueError, match="absent from the seen set"):
+    with pytest.raises(ValueError, match="not unique"):
         arun.ArunLiveCursor(
             scope=scope,
             plan=plan,
             progress=arun.ArunAwaitingShowAll(
                 next_query=0,
                 reported_count=2,
-                initial_references=("A",),
+                initial_references=("A", "A"),
+                initial_evidence=_SEARCH_DIGEST,
             ),
         )
 
@@ -857,13 +882,24 @@ def test_arun_active_query_replay_and_ambiguous_exact_results_fail_closed() -> N
                     key=query.key,
                     reported_count=0,
                     enumerated_count=0,
+                    references=(),
+                    initial_evidence=_SEARCH_DIGEST,
                 )
                 for query in plan
             )
         ),
     )
     with pytest.raises(arun.ArunCheckpointError):
-        arun._complete_query(terminal, plan[0], 0, ())
+        arun._complete_query(
+            terminal,
+            arun.ArunCompletedQuery(
+                key=plan[0].key,
+                reported_count=0,
+                enumerated_count=0,
+                references=(),
+                initial_evidence=_SEARCH_DIGEST,
+            ),
+        )
 
 
 def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -> None:
@@ -925,6 +961,37 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
         "comment-deadline",
         "target-committee",
     ]
+
+    without_locator = asyncio.run(
+        arun.ArunAdapter().fetch(
+            _Session(responder),
+            reference.model_copy(update={"locator": None}),
+        )
+    )
+    assert without_locator.payload.ocella_reference == reference.reference
+
+
+def test_arun_reference_unions_drop_duplicates_in_stable_order() -> None:
+    one = SourceReference(source_id=arun.SOURCE, reference="ONE")
+    two = SourceReference(source_id=arun.SOURCE, reference="TWO")
+    assert arun._fresh((one, two), ("ONE",)) == ((two,), ("ONE", "TWO"))
+    completed = (
+        arun.ArunCompletedQuery(
+            key="one",
+            reported_count=2,
+            enumerated_count=2,
+            references=("ONE", "TWO"),
+            initial_evidence=_SEARCH_DIGEST,
+        ),
+        arun.ArunCompletedQuery(
+            key="two",
+            reported_count=1,
+            enumerated_count=1,
+            references=("ONE",),
+            initial_evidence=_SEARCH_DIGEST,
+        ),
+    )
+    assert arun._completed_references(completed) == ("ONE", "TWO")
 
 
 def test_arun_fetch_accepts_an_application_without_a_parish_label() -> None:

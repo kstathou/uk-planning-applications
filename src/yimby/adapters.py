@@ -132,6 +132,7 @@ class AuthorityPackage[NativeT: BaseModel, CheckpointT: BaseModel]:
                     payload_json=batch.next_checkpoint.model_dump_json(),
                 ),
                 complete=batch.complete,
+                evidence=batch.evidence,
             )
 
     async def collect(
