@@ -139,7 +139,10 @@ uv run python scripts/qualify_cheshire_east.py \
 The command's receipt schema can represent only a blocked outcome. A first run
 retains the official source evidence and atomically writes the receipt. A
 subsequent `--resume` validates that receipt and its compressed evidence
-without constructing a portal session. The command exits with status 1 for the
+without constructing a portal session. Validation reparses the retained source
+bodies and binds the reconstructed forms, result boundaries, detail, and
+document metadata to the recorded contract. A missing receipt makes
+`--resume` fail before source I/O. The command exits with status 1 for the
 recorded blocker and does not create an operational SQLite store. The authority
 must remain blocked until both enumeration gaps and automated source access are
 resolved, followed by a complete bootstrap and two real weekly cycles.

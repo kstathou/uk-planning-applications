@@ -41,6 +41,11 @@ detail `26/3335/PRIOR-1A`, whose application status is `Pending Consideration`
 and whose valid date is 14 September 2026. Neither form is therefore a proven
 enumeration of the requested recent or active records.
 
+The parser treats the exact no-results marker as terminal only for that zero
+response. A positive result table publishes no result total, pagination
+boundary, or all-results-loaded marker, so a non-empty page remains explicitly
+unproved rather than being treated as the complete 30-day inventory.
+
 The register states that appeals are not visible and points users to the
 Planning Inspectorate.
 
@@ -93,7 +98,10 @@ attempted GET URL independently of the transport-sanitised evidence URL. Its
 immediate `--resume` rerun read only the receipt and evidence. The intended
 recent, weekly-form, historical-week, and direct-detail requests are recorded
 as pending rather than falsely reported as run. Any later parser drift also
-retains every completed response in an offline-resumable typed blocker.
+retains every completed response in an offline-resumable typed blocker. Resume
+reparses each retained form, result, detail, and document-metadata body and
+requires the reconstructed contract to equal the receipt. `--resume` without
+its receipt fails during configuration before a portal session is constructed.
 
 ## Verification status
 
