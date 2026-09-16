@@ -104,6 +104,14 @@ def _weekly_form() -> bytes:
     """.encode()
 
 
+def _live_weekly_form() -> bytes:
+    """Render the week values exactly as the live Leeds portal does."""
+    return _weekly_form().replace(b"/08/2026", b" Aug 2026").replace(
+        b"/09/2026",
+        b" Sep 2026",
+    )
+
+
 def _options(values: tuple[tuple[str, str], ...]) -> str:
     return '<option value="">All</option>' + "".join(
         f'<option value="{value}">{label}</option>' for value, label in values
@@ -625,6 +633,18 @@ class _LeedsQualificationMock(_LeedsSearchMock):
         return response
 
 
+class _LeedsLiveWeekQualificationMock(_LeedsQualificationMock):
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if (
+            request.url.path.endswith("/search.do")
+            and request.url.params.get("action") == "weeklyList"
+        ):
+            fields = tuple(parse_qsl(request.content.decode(), keep_blank_values=True))
+            self.requests.append((request.method, request.url.path, fields))
+            return httpx.Response(200, content=_live_weekly_form())
+        return super().__call__(request)
+
+
 def _qualification_module() -> ModuleType:
     path = Path(__file__).parents[1] / "scripts" / "qualify_leeds.py"
     name = "_test_qualify_leeds"
@@ -710,6 +730,27 @@ def test_leeds_qualification_writes_typed_receipt_and_zero_io_rerun(
     raw = json.loads(receipt_path.read_text(encoding="utf-8"))
     assert raw["schema_version"] == 1
     assert raw["weekly_cycles"][0]["status"] == "pending"
+
+
+def test_leeds_qualification_accepts_live_week_rendering(tmp_path: Path) -> None:
+    """The receipt accepts the canonical textual week keys emitted by Leeds."""
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+
+    def session_factory() -> HttpxPortalSession:
+        return _session(_LeedsLiveWeekQualificationMock())
+
+    assert (
+        module.main(_qualification_args(data_dir), session_factory=session_factory) == 0
+    )
+    receipt = module.LeedsQualificationReceiptV1.model_validate_json(
+        (data_dir / "leeds-qualification-v1.json").read_text(encoding="utf-8")
+    )
+    assert receipt.query_inventory[:2] == (
+        "17 Aug 2026|DC_Validated",
+        "17 Aug 2026|DC_Decided",
+    )
+    assert all(check.ok for check in receipt.checks)
 
 
 def test_leeds_qualification_rejects_failed_current_sections(tmp_path: Path) -> None:
