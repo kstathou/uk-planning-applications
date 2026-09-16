@@ -132,7 +132,7 @@ class DorsetDocumentV1(FrozenModel):
     """One published document row without attachment content."""
 
     published_date: date
-    title: str
+    title: str | None
     size: str
     url: HttpUrl
 
@@ -410,8 +410,9 @@ class DorsetAdapter:
                 documents=tuple(
                     DocumentRecord(
                         title=(
-                            f"{document.published_date.strftime('%d/%m/%Y')} - "
-                            f"{document.title} ({document.size})"
+                            f"{document.published_date.strftime('%d/%m/%Y')}"
+                            f"{' - ' + document.title if document.title else ''} "
+                            f"({document.size})"
                         ),
                         url=document.url,
                     )
@@ -847,14 +848,15 @@ def _parse_documents_grid(
         if onclick_match is None or int(onclick_match.group(1)) != index:
             _raise_parse("document grid")
         rendered = link.get_text(" ", strip=True)
-        published, separator, title = rendered.partition(" - ")
+        rendered_match = re.fullmatch(r"(\d{2}/\d{2}/\d{4})\s+-\s*(.*)", rendered)
         size_match = re.search(r"\(([^()]+)\)\s*$", row.get_text(" ", strip=True))
-        if not separator or not title or size_match is None:
+        if rendered_match is None or size_match is None:
             _raise_parse("document grid")
+        published, title = rendered_match.groups()
         documents.append(
             DorsetDocumentV1(
                 published_date=_parse_dorset_date(published),
-                title=" ".join(title.split()),
+                title=" ".join(title.split()) or None,
                 size=size_match.group(1),
                 url=HttpUrl(f"{source_url}#document-{index}"),
             )
