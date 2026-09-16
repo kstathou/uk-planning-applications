@@ -690,6 +690,7 @@ def test_playwright_production_boundary_lifecycle(
     context = MagicMock()
     context.new_page = AsyncMock(return_value=page)
     context.route = AsyncMock()
+    context.storage_state = AsyncMock()
     context.close = AsyncMock()
     browser = MagicMock()
     browser.new_context = AsyncMock(return_value=context)
@@ -751,6 +752,9 @@ def test_playwright_production_boundary_lifecycle(
         "storage_state": None,
     }
     assert context.route.await_count == 2
+    context.storage_state.assert_awaited_once_with(
+        path=str(tmp_path / "browser-state.json")
+    )
     assert context.close.await_count == 2
     assert browser.close.await_count == 2
     assert playwright.stop.await_count == 2
