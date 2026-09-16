@@ -317,6 +317,11 @@ class _DorsetMock:
                     b'<span class="applabel">Northing</span><p class="appdata">100386</p>',
                     b'<span class="applabel">Northing</span><p class="appdata"></p>',
                 )
+            if self.fault == "blank-proposal":
+                body = body.replace(
+                    b'<span class="applabel">Proposal</span><p class="appdata">Build two homes &amp; plant four trees</p>',
+                    b'<span class="applabel">Proposal</span><p class="appdata"></p>',
+                )
             if self.fault == "document-count":
                 body = body.replace(
                     b'\\"VirtualItemCount\\":1',
@@ -698,6 +703,26 @@ def test_dorset_live_detail_rejects_partial_coordinate_pair() -> None:
             reference,
             HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={reference.locator}"),
         )
+
+
+def test_dorset_live_detail_preserves_blank_legacy_proposal() -> None:
+    """An explicitly blank legacy proposal is not replaced with invented text."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    session = _session(_DorsetMock(fault="blank-proposal"))
+
+    async def collect_detail() -> Any:
+        collected = await package.collect(session, _live_reference())
+        await session.aclose()
+        return collected
+
+    collected = asyncio.run(collect_detail())
+    native = dorset_adapter.DorsetApplicationV1.model_validate_json(
+        collected.native_json
+    ).root
+
+    assert isinstance(native, dorset_adapter.DorsetLiveApplicationV1)
+    assert native.proposal == ""
+    assert collected.normalised.proposal == ""
 
 
 def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> None:
