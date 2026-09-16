@@ -51,6 +51,7 @@ from yimby.transport import (
 
 _AUTHORITY_ID = AuthorityId("barnet")
 _RECEIPT_NAME = "barnet-qualification-v1.json"
+_ANCHOR_NAME = ".barnet-qualification-anchor-v1.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -112,6 +113,13 @@ class BarnetQualificationReceiptV1(FrozenModel):
     run_statuses: tuple[RunStatus, ...]
     checks: tuple[QualificationCheck, ...]
     weekly_refreshes: tuple[PendingWeeklyRefresh, PendingWeeklyRefresh]
+
+
+class BarnetQualificationAnchorV1(FrozenModel):
+    schema_version: Literal[1] = 1
+    authority_id: Literal["barnet"] = "barnet"
+    created_at: datetime
+    scope: BarnetDiscoveryScope
 
 
 class _Config(FrozenModel):
@@ -395,12 +403,37 @@ def _receipt_anchor(
     return created_at
 
 
+def _stored_anchor(
+    anchor: BarnetQualificationAnchorV1 | None,
+    scope: BarnetDiscoveryScope,
+    current_time: datetime,
+) -> datetime | None:
+    if anchor is None or anchor.scope != scope:
+        return None
+    if anchor.created_at.tzinfo is None or anchor.created_at > current_time:
+        return None
+    return anchor.created_at
+
+
+def _resolve_anchor(
+    anchor: BarnetQualificationAnchorV1 | None,
+    receipt: BarnetQualificationReceiptV1 | None,
+    scope: BarnetDiscoveryScope,
+    current_time: datetime,
+) -> datetime | None:
+    stored = _stored_anchor(anchor, scope, current_time)
+    receipted = _receipt_anchor(receipt, scope, current_time)
+    if stored is not None and receipted is not None and stored != receipted:
+        raise QualificationAnchorError
+    return stored if stored is not None else receipted
+
+
 async def _qualify(
     store: SqliteStore,
     config: _Config,
     session_factory: SessionFactory,
-    now: Clock,
-    prior_receipt: BarnetQualificationReceiptV1 | None,
+    current_time: datetime,
+    anchor: datetime | None,
 ) -> BarnetQualificationReceiptV1:
     registry = AuthorityRegistry((BARNET_PACKAGE,))
     collector = Collector(registry, store)
@@ -427,8 +460,6 @@ async def _qualify(
         initial,
     )
     _require(initial_checks)
-    current_time = now()
-    anchor = _receipt_anchor(prior_receipt, config.scope, current_time)
     if anchor is None and receipt_anchor_required:
         raise QualificationAnchorError
     created_at = current_time if anchor is None else anchor
@@ -481,7 +512,17 @@ def _write_receipt(
     path: Path,
     receipt: BarnetQualificationReceiptV1,
 ) -> None:
-    payload = f"{receipt.model_dump_json(indent=2)}\n"
+    _write_payload(path, f"{receipt.model_dump_json(indent=2)}\n")
+
+
+def _write_anchor(
+    path: Path,
+    anchor: BarnetQualificationAnchorV1,
+) -> None:
+    _write_payload(path, f"{anchor.model_dump_json(indent=2)}\n")
+
+
+def _write_payload(path: Path, payload: str) -> None:
     temporary: Path | None = None
     replaced = False
     try:
@@ -522,6 +563,15 @@ def _read_receipt(path: Path) -> BarnetQualificationReceiptV1 | None:
         return None
 
 
+def _read_anchor(path: Path) -> BarnetQualificationAnchorV1 | None:
+    try:
+        return BarnetQualificationAnchorV1.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+
+
 def _default_session() -> HttpxPortalSession:
     return HttpxPortalSession(
         limiter=HostRateLimiter(_BARNET_MINIMUM_GAP_SECONDS),
@@ -549,9 +599,25 @@ def main(
     except QualificationConfigError as error:
         return _error(str(error), 2)
     receipt_path = config.data_dir / _RECEIPT_NAME
+    anchor_path = config.data_dir / _ANCHOR_NAME
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
+            current_time = now()
             prior_receipt = _read_receipt(receipt_path)
+            anchor = _resolve_anchor(
+                _read_anchor(anchor_path),
+                prior_receipt,
+                config.scope,
+                current_time,
+            )
+            if anchor is not None:
+                _write_anchor(
+                    anchor_path,
+                    BarnetQualificationAnchorV1(
+                        created_at=anchor,
+                        scope=config.scope,
+                    ),
+                )
             receipt_path.unlink(missing_ok=True)
             store = SqliteStore(
                 config.data_dir / "yimby.sqlite3",
@@ -559,7 +625,14 @@ def main(
             )
             try:
                 receipt = asyncio.run(
-                    _qualify(store, config, session_factory, now, prior_receipt)
+                    _qualify(store, config, session_factory, current_time, anchor)
+                )
+                _write_anchor(
+                    anchor_path,
+                    BarnetQualificationAnchorV1(
+                        created_at=receipt.created_at,
+                        scope=receipt.scope,
+                    ),
                 )
                 _write_receipt(receipt_path, receipt)
             finally:

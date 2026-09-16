@@ -99,14 +99,8 @@ def _result(reference: str, locator: str) -> bytes:
 
 
 class _BarnetQualificationMock:
-    def __init__(
-        self,
-        *,
-        failed_documents: bool = False,
-        rate_limited_summary: bool = False,
-    ) -> None:
+    def __init__(self, *, failed_documents: bool = False) -> None:
         self.failed_documents = failed_documents
-        self.rate_limited_summary = rate_limited_summary
         self.references: dict[str, str] = {}
         self.attachment_paths: list[str] = []
 
@@ -143,8 +137,6 @@ class _BarnetQualificationMock:
             reference = self.references[locator]
             active_tab = request.url.params["activeTab"]
             if active_tab == "summary":
-                if self.rate_limited_summary:
-                    return httpx.Response(429)
                 return httpx.Response(
                     200,
                     content=(
@@ -188,6 +180,21 @@ class _BarnetQualificationMock:
         locator = f"{prefix}-{index}"
         self.references[locator] = reference
         return httpx.Response(200, content=_result(reference, locator))
+
+
+class _RateLimitedSummaryMock(_BarnetQualificationMock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rate_limited_summary = False
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if (
+            self.rate_limited_summary
+            and request.url.path.endswith("/applicationDetails.do")
+            and request.url.params["activeTab"] == "summary"
+        ):
+            return httpx.Response(429)
+        return super().__call__(request)
 
 
 class _QualificationSession(HttpxPortalSession):
@@ -379,7 +386,14 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         "unmapped-records": True,
     }
     receipt_path = data_dir / "barnet-qualification-v1.json"
+    anchor_path = data_dir / ".barnet-qualification-anchor-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+    assert json.loads(anchor_path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "authority_id": "barnet",
+        "created_at": "2026-09-16T12:00:00Z",
+        "scope": receipt["scope"],
+    }
     assert not (data_dir / ".barnet-qualification-v1.json.tmp").exists()
 
     victim = tmp_path / "victim"
@@ -394,6 +408,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert predictable_temporary.is_symlink()
     predictable_temporary.unlink()
 
+    anchor_path.unlink()
     sessions.clear()
     mocks.clear()
     assert (
@@ -411,6 +426,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert resumed["costs"]["rerun"]["request_count"] == 0
     assert resumed["created_at"] == "2026-09-16T12:00:00Z"
     assert resumed["weekly_refreshes"] == receipt["weekly_refreshes"]
+    assert anchor_path.exists()
 
     store = SqliteStore(
         data_dir / "yimby.sqlite3",
@@ -419,7 +435,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     refresh_reference = store.discovery_state(AuthorityId("barnet")).queued[0]
     store.enqueue_retry(AuthorityId("barnet"), refresh_reference, "scheduled-refresh")
     store.close()
-    refresh_mock = _BarnetQualificationMock()
+    refresh_mock = _RateLimitedSummaryMock()
     assert refresh_reference.locator is not None
     refresh_mock.references[refresh_reference.locator] = refresh_reference.reference
     refresh_sessions: list[_QualificationSession] = []
@@ -526,6 +542,63 @@ def test_barnet_qualification_persists_complete_typed_receipt(
                 session_factory=session_factory,
                 now=lambda: now + timedelta(days=6),
             )
+            == 0
+        )
+        captured = capsys.readouterr()
+        assert captured.err == ""
+        repaired = json.loads(captured.out)
+        assert repaired["created_at"] == "2026-09-16T12:00:00Z"
+        assert repaired["weekly_refreshes"] == receipt["weekly_refreshes"]
+        assert len(sessions) == 2
+        assert all(session.requested_urls == () for session in sessions)
+        assert receipt_path.exists()
+
+    receipt_path.unlink()
+    invalid_anchors = (
+        None,
+        "{invalid",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "authority_id": "barnet",
+                "created_at": "2026-10-16T12:00:00Z",
+                "scope": receipt["scope"],
+            }
+        ),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "authority_id": "barnet",
+                "created_at": "2026-09-16T12:00:00Z",
+                "scope": {
+                    "start": "2026-08-17",
+                    "end": END,
+                    "include_open": True,
+                },
+            }
+        ),
+        json.dumps(
+            {
+                "schema_version": 1,
+                "authority_id": "barnet",
+                "created_at": "2026-09-16T12:00:00",
+                "scope": receipt["scope"],
+            }
+        ),
+    )
+    for invalid_anchor in invalid_anchors:
+        if invalid_anchor is None:
+            anchor_path.unlink(missing_ok=True)
+        else:
+            anchor_path.write_text(invalid_anchor, encoding="utf-8")
+        sessions.clear()
+        mocks.clear()
+        assert (
+            module.main(
+                _args(data_dir, "--resume"),
+                session_factory=session_factory,
+                now=lambda: now + timedelta(days=10),
+            )
             == 1
         )
         captured = capsys.readouterr()
@@ -534,6 +607,40 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         assert len(sessions) == 1
         assert sessions[0].requested_urls == ()
         assert not receipt_path.exists()
+
+    anchor_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "authority_id": "barnet",
+                "created_at": "2026-09-16T12:00:00Z",
+                "scope": receipt["scope"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    conflicting_receipt = {
+        **receipt,
+        "created_at": "2026-09-15T12:00:00Z",
+        "weekly_refreshes": [
+            {"ordinal": 1, "due_on": "2026-09-22", "status": "pending"},
+            {"ordinal": 2, "due_on": "2026-09-29", "status": "pending"},
+        ],
+    }
+    receipt_path.write_text(json.dumps(conflicting_receipt), encoding="utf-8")
+    sessions.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=session_factory,
+            now=lambda: now + timedelta(days=10),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"error": "receipt-anchor-required"}
+    assert sessions == []
 
 
 def test_barnet_qualification_rejects_failed_current_sections(

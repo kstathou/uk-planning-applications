@@ -114,11 +114,13 @@ not run parallel Barnet collectors or rotate clients to evade the source limit.
 Requalifying an already terminal target with zero live requests preserves the
 original receipt timestamp and the two follow-up due dates. The same anchor is
 preserved when a terminal target performs due detail refreshes, so a refresh
-cannot postpone either cycle. A previously healthy terminal target whose
-receipt is missing, malformed, internally inconsistent, or future-dated fails
-with `receipt-anchor-required` instead of minting a later schedule. A terminal
-but incomplete bootstrap may still establish its first anchor after queued
-failed sections are repaired.
+cannot postpone either cycle. The command stores that date in a separate hidden
+anchor file before removing a stale receipt, so a 429 or crash during refresh
+cannot erase it. A missing or malformed receipt is regenerated from a valid
+anchor. A previously healthy terminal target with neither a valid anchor nor a
+valid same-scope receipt fails with `receipt-anchor-required` instead of minting
+a later schedule. A terminal but incomplete bootstrap may still establish its
+first anchor after queued failed sections are repaired.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 

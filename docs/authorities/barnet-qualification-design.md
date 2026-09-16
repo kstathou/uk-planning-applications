@@ -47,6 +47,12 @@ Each query becomes complete only when its parsed rows reconcile with the portal'
 
 `BarnetQualificationReceiptV1` records the exact scope and query inventory, durable counts, first-pass and rerun costs, named checks, and two pending future refresh cycles. The command writes the receipt only after SQLite integrity, every append-only evidence row rehashes successfully, exact durable reference agreement, section completeness, retry state, attachment policy, and an immediate zero-network rerun all pass.
 
+The original successful qualification timestamp is also retained in a small
+independent anchor file. Before a requalification removes its stale receipt,
+it validates and persists that anchor. A rate limit, interruption, or failed
+check can therefore invalidate the receipt without losing the two weekly due
+dates, and a later successful resume regenerates the receipt from the anchor.
+
 ## Synthesis decision
 
 The direct adapter design won the architecture comparison. It follows the existing West Suffolk boundary and keeps Barnet portal knowledge in one file. The alternative split query inventory and qualification logic across extra modules. That split increased reader work without adding another consumer.
