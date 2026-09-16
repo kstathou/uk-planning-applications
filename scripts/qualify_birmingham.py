@@ -48,14 +48,20 @@ _OBSERVED_NULL_DECISIONS = 3276
 _OBSERVED_UNRESOLVED_CANDIDATES = 1419
 _QUALIFICATION_START = date(2026, 8, 18)
 _QUALIFICATION_END = date(2026, 9, 16)
-_EXPECTED_FIELDS = (
+_OBSERVED_FIELDS = (
     "OBJECTID",
+    "SHAPE",
     "REFERENCE",
+    "application_type_code",
     "TYPE",
+    "Stat_Return_Code",
+    "Sub_Cat",
     "Received",
     "LOCATION",
     "Dev",
     "Date_Accepted",
+    "AGENT",
+    "Decision_Level",
     "APPLICATION_DECISION",
     "Decision_Date",
     "Date_Issued",
@@ -64,6 +70,10 @@ _EXPECTED_FIELDS = (
     "Officer",
     "PGP_PK",
     "PA_NO",
+    "Number",
+    "TypeOfObj",
+    "SHAPE_Length",
+    "SHAPE_Area",
 )
 _RECENT_WHERE = (
     "Received >= DATE '2026-08-18 00:00:00' AND Received < DATE '2026-09-17 00:00:00'"
@@ -576,7 +586,7 @@ def _validate_schema(metadata: dict[str, Any]) -> None:
         or metadata.get("maxRecordCount") != _LAYER_MAX_RECORD_COUNT
         or metadata.get("hasAttachments") is not False
         or metadata.get("relationships") != []
-        or not set(_EXPECTED_FIELDS).issubset(names)
+        or names != _OBSERVED_FIELDS
         or not isinstance(capabilities, dict)
         or any(capabilities.get(name) is not True for name in required_capabilities)
     ):
@@ -613,6 +623,62 @@ def _epoch_date(value: object) -> date:
     if isinstance(value, bool) or not isinstance(value, int | float):
         _fail_invariant("invalid-arcgis-date")
     return datetime.fromtimestamp(value / 1000, tz=UTC).date()
+
+
+def _statistics_date_range(
+    attributes: dict[str, Any],
+    latest_received: date,
+) -> tuple[date, date]:
+    earliest = _epoch_date(attributes.get("earliest_received"))
+    latest = _epoch_date(attributes.get("latest_received"))
+    if earliest > latest or latest > latest_received:
+        _fail_invariant("historical-date-range-mismatch")
+    return earliest, latest
+
+
+def _historical_sample_dates(
+    sample: Sequence[dict[str, Any]],
+    latest_received: date,
+    *,
+    unresolved: bool,
+) -> tuple[date, ...]:
+    if not sample:
+        _fail_invariant("missing-historical-sample")
+    received_dates: list[date] = []
+    for attributes in sample:
+        reference = attributes.get("REFERENCE")
+        application_type = attributes.get("TYPE")
+        appeal_decision = attributes.get("APPEAL_DECISION")
+        if (
+            not isinstance(reference, str)
+            or not reference.strip()
+            or not isinstance(application_type, str)
+            or not application_type.strip()
+            or attributes.get("APPLICATION_DECISION") is not None
+            or (
+                appeal_decision is not None
+                and (
+                    not isinstance(appeal_decision, str) or not appeal_decision.strip()
+                )
+            )
+        ):
+            _fail_invariant("historical-sample-predicate-mismatch")
+        received = _epoch_date(attributes.get("Received"))
+        if received >= _QUALIFICATION_START or received > latest_received:
+            _fail_invariant("historical-sample-date-mismatch")
+        for field in ("Decision_Date", "Date_Issued"):
+            value = attributes.get(field)
+            if value is not None:
+                _epoch_date(value)
+        if unresolved and (
+            attributes.get("Decision_Date") is not None
+            or attributes.get("Date_Issued") is not None
+        ):
+            _fail_invariant("historical-sample-predicate-mismatch")
+        received_dates.append(received)
+    if received_dates != sorted(received_dates):
+        _fail_invariant("historical-sample-order-mismatch")
+    return tuple(received_dates)
 
 
 def _verify_evidence(
@@ -807,6 +873,7 @@ def _page_is_terminal(
 
 
 async def _older_open_facts(
+    latest_received: date,
     session: PortalSession,
     evidence_store: EvidenceStore,
     inventory: list[QueryObservationV1],
@@ -820,16 +887,28 @@ async def _older_open_facts(
             inventory,
         )
     )
-    null_group = next(
-        (
-            group
-            for group in decision_groups
-            if group.get("APPLICATION_DECISION") is None
-        ),
-        None,
-    )
+    null_group: dict[str, Any] | None = None
+    for group in decision_groups:
+        decision = group.get("APPLICATION_DECISION")
+        if decision is not None and (
+            not isinstance(decision, str) or not decision.strip()
+        ):
+            _fail_invariant("invalid-application-decision-group")
+        if _integer(group, "record_count") <= 0:
+            _fail_invariant("invalid-application-decision-group")
+        _statistics_date_range(group, latest_received)
+        if decision is None:
+            if null_group is not None:
+                _fail_invariant("multiple-null-decision-groups")
+            null_group = group
     if null_group is None:
         _fail_invariant("missing-null-decision-group")
+    null_earliest, null_latest = _statistics_date_range(
+        null_group,
+        latest_received,
+    )
+    if null_latest != latest_received:
+        _fail_invariant("null-decision-date-range-mismatch")
     null_count = _integer(null_group, "record_count")
     mismatch_count = _integer(
         await _observe(
@@ -860,6 +939,15 @@ async def _older_open_facts(
         )
     )
     unresolved_count = _integer(unresolved_profile, "record_count")
+    unresolved_earliest, unresolved_latest = _statistics_date_range(
+        unresolved_profile,
+        latest_received,
+    )
+    if (
+        unresolved_earliest >= _QUALIFICATION_START
+        or unresolved_latest != latest_received
+    ):
+        _fail_invariant("unresolved-date-range-mismatch")
     unresolved_sample = _features(
         await _observe(
             "unresolved-oldest-sample",
@@ -869,12 +957,28 @@ async def _older_open_facts(
             inventory,
         )
     )
+    issued_dates = _historical_sample_dates(
+        issued_sample,
+        latest_received,
+        unresolved=False,
+    )
+    unresolved_dates = _historical_sample_dates(
+        unresolved_sample,
+        latest_received,
+        unresolved=True,
+    )
     contradictory = (
         null_count == _OBSERVED_NULL_DECISIONS
         and mismatch_count == 0
         and unresolved_count == _OBSERVED_UNRESOLVED_CANDIDATES
+        and issued_dates[0] == null_earliest
+        and unresolved_dates[0] == unresolved_earliest
         and any(item.get("Date_Issued") is not None for item in issued_sample)
-        and any(item.get("APPEAL_DECISION") is not None for item in unresolved_sample)
+        and any(
+            isinstance(item.get("APPEAL_DECISION"), str)
+            and bool(item["APPEAL_DECISION"].strip())
+            for item in unresolved_sample
+        )
         and any(
             item.get("TYPE") in {"Enforcement", "Master Plan"}
             for item in unresolved_sample
@@ -910,7 +1014,12 @@ async def _qualify(
             inventory,
         )
 
-        older_open = await _older_open_facts(session, evidence_store, inventory)
+        older_open = await _older_open_facts(
+            source.latest_received,
+            session,
+            evidence_store,
+            inventory,
+        )
     finally:
         await session.aclose()
 
