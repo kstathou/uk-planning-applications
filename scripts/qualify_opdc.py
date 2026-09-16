@@ -24,13 +24,19 @@ from yimby.authorities.opdc.adapter import (
     API_BASE_URL,
     SOURCE,
     OpdcCheckpointV1,
+    OpdcCompletedQuery,
     OpdcDiscoveryQuery,
     OpdcDiscoveryScope,
+    OpdcParseError,
+    _parse_search,
+    _search_request,
 )
 from yimby.collection import Collector
 from yimby.domain import (
     AuthorityId,
     DiscoveryWindow,
+    EvidenceCapture,
+    EvidenceDigest,
     FrozenModel,
     LiveReadiness,
     LiveTransportKind,
@@ -43,7 +49,7 @@ from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
-from yimby.store import SqliteStore
+from yimby.store import RetainedDiscoveryEvidenceRegistration, SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("opdc")
@@ -54,12 +60,13 @@ _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
-_SCOPE_MISMATCH = "scope-mismatch"
 _LIVE_PAGE = "live"
 _ATTACHMENT_PATH = "/api/application/document/opdc/"
-_APPLICATION_EVIDENCE_COUNT = 3
+_APPLICATION_EVIDENCE_COUNT: Literal[3] = 3
 _MINIMUM_QUALIFICATION_RUNS = 2
-_COMMITMENT_CANONICALIZATION = "sha256-canonical-json-v1"
+_COMMITMENT_CANONICALIZATION: Literal["sha256-canonical-json-v1"] = (
+    "sha256-canonical-json-v1"
+)
 _CHECK_NAMES = (
     "terminal-checkpoint",
     "reference-application-agreement",
@@ -68,6 +75,7 @@ _CHECK_NAMES = (
     "attachment-policy",
     "database-integrity",
     "authority-readiness",
+    "discovery-evidence",
     "evidence-paths",
     "evidence-integrity",
     "application-evidence",
@@ -346,22 +354,13 @@ def _terminal_checkpoint(
         and completed == _expected_queries()
         and bool(checkpoint_identities)
         and len(checkpoint_identities) == len(set(checkpoint_identities))
-        and set(checkpoint_identities) == set(durable) == set(retained)
+        and set(checkpoint_identities).issubset(durable)
+        and set(durable) == set(retained)
         and len(durable) == len(set(durable))
         and len(retained) == len(set(retained))
     ):
         return None
     return checkpoint
-
-
-def _scope_compatible(store: SqliteStore, scope: QualificationScope) -> bool:
-    state = store.discovery_state(_AUTHORITY_ID)
-    if state.checkpoint is None:
-        return True
-    checkpoint = _checkpoint(store)
-    if checkpoint is None or checkpoint.live_scope is None:
-        return True
-    return checkpoint.live_scope == _expected_scope(scope)
 
 
 def _qualified_records(
@@ -379,7 +378,9 @@ def _qualified_records(
         )
     except (EvidenceIntegrityError, KeyError):
         return None
-    if {_identity(record.reference) for record in records} != expected_identities:
+    if not expected_identities.issubset(
+        {_identity(record.reference) for record in records}
+    ):
         return None
     for record in records:
         locator = record.reference.locator
@@ -400,6 +401,91 @@ def _application_evidence(
     checkpoint: OpdcCheckpointV1 | None,
 ) -> bool:
     return _qualified_records(store, checkpoint) is not None
+
+
+def _registered_query_agrees(
+    registration: RetainedDiscoveryEvidenceRegistration | None,
+    captures: dict[EvidenceDigest, EvidenceCapture],
+    completed: OpdcCompletedQuery,
+    scope: OpdcDiscoveryScope,
+) -> bool:
+    if registration is None:
+        return False
+    capture = captures.get(registration.digest)
+    if capture is None:
+        return False
+    query = completed.query
+    request = _search_request(query, scope)
+    expected_url = str(request.url)
+    expected_form = tuple((field.name, field.value) for field in request.form)
+    try:
+        identities = _parse_search(capture.body)
+    except OpdcParseError:
+        return False
+    return (
+        registration.response_url == expected_url
+        and registration.request_url == expected_url
+        and registration.request_method == request.method.value
+        and registration.request_form == expected_form
+        and identities == completed.identities
+    )
+
+
+def _discovery_run_agrees(
+    registrations: tuple[RetainedDiscoveryEvidenceRegistration, ...],
+    captures: dict[EvidenceDigest, EvidenceCapture],
+    checkpoint: OpdcCheckpointV1,
+    scope: QualificationScope,
+) -> bool:
+    by_query = {
+        (registration.query_key, registration.page): registration
+        for registration in registrations
+    }
+    expected_scope = _expected_scope(scope)
+    return (
+        len(registrations) == len(checkpoint.completed_queries)
+        and len(by_query) == len(registrations)
+        and all(
+            _registered_query_agrees(
+                by_query.get((completed.query.value, 1)),
+                captures,
+                completed,
+                expected_scope,
+            )
+            for completed in checkpoint.completed_queries
+        )
+    )
+
+
+def _discovery_evidence(
+    store: SqliteStore,
+    checkpoint: OpdcCheckpointV1 | None,
+    scope: QualificationScope,
+) -> bool:
+    if checkpoint is None:
+        return False
+    audit = store.evidence_registration_audit(_AUTHORITY_ID)
+    if audit.missing_digests:
+        return False
+    by_run: dict[str, list[RetainedDiscoveryEvidenceRegistration]] = {}
+    for registration in audit.discovery_registrations:
+        by_run.setdefault(registration.run_id, []).append(registration)
+    try:
+        captures = {
+            capture.digest: capture
+            for capture in store.discovery_evidence_captures(_AUTHORITY_ID)
+        }
+    except (EvidenceIntegrityError, OSError):
+        return False
+    return any(
+        _discovery_run_agrees(
+            tuple(registrations),
+            captures,
+            checkpoint,
+            scope,
+        )
+        for registrations in by_run.values()
+    )
 
 
 def _sha256_commitment(value: object) -> str:
@@ -510,6 +596,7 @@ def _base_checks(
     initial: QualificationCost,
 ) -> tuple[QualificationCheck, ...]:
     checkpoint = _terminal_checkpoint(store, scope)
+    references = store.authority_reference_sets(_AUTHORITY_ID)
     authority = next(
         (
             state
@@ -527,7 +614,9 @@ def _base_checks(
             name="reference-application-agreement",
             ok=(
                 checkpoint is not None
-                and snapshot.applications == len(checkpoint.seen_references)
+                and references.discovery == references.applications
+                and references.discovery == references.rebuild_inputs
+                and snapshot.applications == len(references.discovery)
             ),
         ),
         QualificationCheck(
@@ -553,6 +642,10 @@ def _base_checks(
                 and authority.manifest.live_status.readiness == LiveReadiness.LIVE_READY
                 and authority.manifest.live_status.transport == LiveTransportKind.HTTP
             ),
+        ),
+        QualificationCheck(
+            name="discovery-evidence",
+            ok=_discovery_evidence(store, checkpoint, scope),
         ),
         QualificationCheck(
             name="evidence-paths",
@@ -740,6 +833,19 @@ def _read_receipt(
     return receipt
 
 
+def _receipt_scope(path: Path) -> QualificationScope:
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise QualificationFailedError(("bootstrap-provenance",)) from error
+    if not isinstance(payload, dict):
+        raise QualificationFailedError(("bootstrap-provenance",))
+    try:
+        return QualificationScope.model_validate(payload.get("scope"))
+    except ValueError as error:
+        raise QualificationFailedError(("bootstrap-provenance",)) from error
+
+
 async def _qualify_or_recover(
     store: SqliteStore,
     config: _Config,
@@ -756,6 +862,8 @@ async def _qualify_or_recover(
     )
     for candidate in candidates:
         if not candidate.is_file():
+            continue
+        if _receipt_scope(candidate) != config.scope:
             continue
         receipt = _read_receipt(candidate, store, config)
         if candidate != proof_path:
@@ -819,8 +927,6 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                if not _scope_compatible(store, config.scope):
-                    raise QualificationConfigError(_SCOPE_MISMATCH)
                 receipt = asyncio.run(
                     _qualify_or_recover(store, config, session_factory, now)
                 )
