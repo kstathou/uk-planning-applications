@@ -88,9 +88,12 @@ collector as a stable transport.
 
 The qualification command made one official source request, retained its
 content-addressed body, requested no attachment bodies, created no SQLite
-store, and wrote a typed blocked receipt. Its immediate `--resume` rerun read
-only the receipt and evidence. The intended recent, historical-week, and direct
-detail queries are recorded as pending rather than falsely reported as run.
+store, and wrote a typed v2 blocked receipt. The receipt preserves the exact
+attempted GET URL independently of the transport-sanitised evidence URL. Its
+immediate `--resume` rerun read only the receipt and evidence. The intended
+recent, weekly-form, historical-week, and direct-detail requests are recorded
+as pending rather than falsely reported as run. Any later parser drift also
+retains every completed response in an offline-resumable typed blocker.
 
 ## Verification status
 
