@@ -279,8 +279,7 @@ def test_http_session_sends_only_typed_public_routing_headers() -> None:
 
     asyncio.run(exercise())
     assert {
-        name: received[0][name]
-        for name in ("x-client", "x-product", "x-service")
+        name: received[0][name] for name in ("x-client", "x-product", "x-service")
     } == {
         "x-client": "OPDC",
         "x-product": "CITIZENPORTAL",
