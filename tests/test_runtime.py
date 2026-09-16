@@ -788,6 +788,7 @@ def test_browser_worker_serialises_and_failed_time_is_measured() -> None:
 
 def test_playwright_production_boundary_lifecycle(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The narrow production boundary launches, routes, renders, and closes."""
     response = MagicMock()
@@ -816,7 +817,8 @@ def test_playwright_production_boundary_lifecycle(
     )
 
     async def exercise() -> None:
-        boundary = await PlaywrightBoundary.create()
+        state_path = tmp_path / "browser-state.json"
+        boundary = await PlaywrightBoundary.create(storage_state=state_path)
         route_handler = context.route.await_args.args[1]
         blocked_route = MagicMock()
         blocked_route.request.url = "https://browser.test/file.pdf"
@@ -847,6 +849,10 @@ def test_playwright_production_boundary_lifecycle(
         await boundary.aclose()
 
     asyncio.run(exercise())
+    browser.new_context.assert_awaited_once_with(
+        accept_downloads=False,
+        storage_state=str(tmp_path / "browser-state.json"),
+    )
     context.route.assert_awaited_once()
     context.close.assert_awaited_once()
     browser.close.assert_awaited_once()

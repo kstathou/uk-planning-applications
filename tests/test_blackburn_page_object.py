@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
@@ -388,13 +389,18 @@ def test_blackburn_page_object_factory_and_default_pause(
     )
 
     async def exercise() -> None:
-        session = await BlackburnPlaywrightSession.create()
+        session = await BlackburnPlaywrightSession.create(
+            storage_state=Path("browser-state.json")
+        )
         await session.search(_query(BlackburnQueryKind.RECEIVED))
         await session.aclose()
 
     asyncio.run(exercise())
 
-    create.assert_awaited_once_with(headless=False)
+    create.assert_awaited_once_with(
+        headless=False,
+        storage_state=Path("browser-state.json"),
+    )
     assert sleep.await_count == 2
     sleep.assert_awaited_with(2.0)
     assert boundary.closed
