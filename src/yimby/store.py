@@ -47,6 +47,7 @@ from yimby.domain import (
     RunCostSnapshot,
     RunMetrics,
     RunOutcome,
+    RunRecord,
     RunStatus,
     SourceId,
     SourceReference,
@@ -76,6 +77,10 @@ class _RetainedEvidenceCapture(FrozenModel):
 
 
 _RETAINED_EVIDENCE = TypeAdapter(tuple[_RetainedEvidenceCapture, ...])
+
+
+class MissingEvidenceRecordError(KeyError):
+    """A durable native input names an evidence digest absent from SQLite."""
 
 
 class _ApplicationSection(FrozenModel):
@@ -219,7 +224,8 @@ class SqliteStore:
                 UPDATE run_details SET
                     status = ?, finished_at = ?, request_count = ?,
                     transferred_bytes = ?, duration_ms = ?,
-                    browser_time_ms = ?, storage_growth_bytes = ?,
+                    browser_time_ms = ?, attachment_body_requests = ?,
+                    storage_growth_bytes = ?,
                     failure_message = ?
                 WHERE run_id = ?
                 """,
@@ -230,6 +236,7 @@ class SqliteStore:
                     outcome.metrics.transferred_bytes,
                     outcome.metrics.duration_ms,
                     outcome.metrics.browser_time_ms,
+                    outcome.metrics.attachment_body_requests,
                     outcome.metrics.storage_growth_bytes,
                     outcome.failure_message,
                     run_id,
@@ -242,7 +249,10 @@ class SqliteStore:
                 """,
                 (outcome.transport_mode, now, authority_id),
             )
-            if outcome.status == RunStatus.SUCCEEDED:
+            if (
+                outcome.status == RunStatus.SUCCEEDED
+                and outcome.metrics.request_count > 0
+            ):
                 self._connection.execute(
                     """
                     UPDATE authorities SET last_success_at = ?
@@ -340,6 +350,41 @@ class SqliteStore:
                     run_id,
                 ),
             )
+
+    def evidence_capture(self, digest: EvidenceDigest) -> EvidenceCapture | None:
+        """Rehydrate one retained capture by its content digest."""
+        row = self._connection.execute(
+            """
+            SELECT path, source_url, media_type FROM evidence
+            WHERE digest = ?
+            """,
+            (digest,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._evidence.read_capture(
+            digest,
+            row["path"],
+            row["source_url"],
+            row["media_type"],
+        )
+
+    def evidence_captures(self) -> tuple[EvidenceCapture, ...]:
+        """Rehydrate every registered evidence capture in digest order."""
+        return tuple(
+            self._evidence.read_capture(
+                EvidenceDigest(row["digest"]),
+                row["path"],
+                row["source_url"],
+                row["media_type"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT digest, path, source_url, media_type
+                FROM evidence ORDER BY digest
+                """
+            )
+        )
 
     def commit_observation(
         self,
@@ -535,7 +580,7 @@ class SqliteStore:
                     (digest,),
                 ).fetchone()
                 if evidence is None:
-                    raise KeyError(digest)
+                    raise MissingEvidenceRecordError(digest)
                 source_url = (
                     captured_url if captured_url is not None else evidence["source_url"]
                 )
@@ -573,7 +618,10 @@ class SqliteStore:
     def get_application(self, application_id: ApplicationId) -> StoredApplication:
         """Return current successful content plus latest completeness."""
         row = self._connection.execute(
-            "SELECT authority_id, reference FROM applications WHERE id = ?",
+            """
+            SELECT authority_id, source_id, reference, locator
+            FROM applications WHERE id = ?
+            """,
             (application_id,),
         ).fetchone()
         if row is None:
@@ -599,7 +647,9 @@ class SqliteStore:
         return StoredApplication(
             id=application_id,
             authority_id=AuthorityId(row["authority_id"]),
+            source_id=SourceId(row["source_id"]),
             reference=row["reference"],
+            locator=row["locator"],
             proposal=application.proposal,
             status=application.status,
             documents=documents,
@@ -1110,12 +1160,62 @@ class SqliteStore:
             )
         return tuple(states)
 
-    def run_statuses(self) -> tuple[RunStatus, ...]:
-        """Return durable run states in creation order."""
-        return tuple(
-            RunStatus(row["status"])
-            for row in self._connection.execute(
+    def run_statuses(
+        self,
+        authority_id: AuthorityId | None = None,
+    ) -> tuple[RunStatus, ...]:
+        """Return durable run states in creation order, optionally scoped."""
+        if authority_id is None:
+            rows = self._connection.execute(
                 "SELECT status FROM run_details ORDER BY rowid"
+            )
+        else:
+            rows = self._connection.execute(
+                """
+                SELECT details.status
+                FROM run_details AS details
+                JOIN runs AS run ON run.id = details.run_id
+                WHERE run.authority_id = ?
+                ORDER BY details.rowid
+                """,
+                (authority_id,),
+            )
+        return tuple(RunStatus(row["status"]) for row in rows)
+
+    def run_records(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[RunRecord, ...]:
+        """Return durable runs for one authority in creation order."""
+        return tuple(
+            RunRecord(
+                run_id=row["run_id"],
+                authority_id=authority_id,
+                started_at=datetime.fromisoformat(row["started_at"]),
+                finished_at=(
+                    None
+                    if row["finished_at"] is None
+                    else datetime.fromisoformat(row["finished_at"])
+                ),
+                status=RunStatus(row["status"]),
+                metrics=RunMetrics(
+                    request_count=row["request_count"],
+                    transferred_bytes=row["transferred_bytes"],
+                    duration_ms=row["duration_ms"],
+                    browser_time_ms=row["browser_time_ms"],
+                    attachment_body_requests=row["attachment_body_requests"],
+                    storage_growth_bytes=row["storage_growth_bytes"],
+                ),
+            )
+            for row in self._connection.execute(
+                """
+                SELECT run.id AS run_id, run.started_at, details.*
+                FROM runs AS run
+                JOIN run_details AS details ON details.run_id = run.id
+                WHERE run.authority_id = ?
+                ORDER BY run.rowid
+                """,
+                (authority_id,),
             )
         )
 
@@ -1440,8 +1540,11 @@ class SqliteStore:
             for row in rows
         )
 
-    def metrics_totals(self) -> RunMetrics:
-        """Aggregate completed collection costs for dashboard display."""
+    def metrics_totals(
+        self,
+        authority_id: AuthorityId | None = None,
+    ) -> RunMetrics:
+        """Aggregate collection costs, optionally scoped to one authority."""
         row = next(
             self._connection.execute(
                 """
@@ -1450,9 +1553,14 @@ class SqliteStore:
                     COALESCE(SUM(transferred_bytes), 0) AS transferred_bytes,
                     COALESCE(SUM(duration_ms), 0) AS duration_ms,
                     COALESCE(SUM(browser_time_ms), 0) AS browser_time_ms,
+                    COALESCE(SUM(attachment_body_requests), 0)
+                        AS attachment_body_requests,
                     COALESCE(SUM(storage_growth_bytes), 0) AS storage_growth_bytes
-                FROM run_details
-                """
+                FROM run_details AS details
+                JOIN runs AS run ON run.id = details.run_id
+                WHERE ? IS NULL OR run.authority_id = ?
+                """,
+                (authority_id, authority_id),
             )
         )
         return RunMetrics(
@@ -1460,6 +1568,7 @@ class SqliteStore:
             transferred_bytes=row["transferred_bytes"],
             duration_ms=row["duration_ms"],
             browser_time_ms=row["browser_time_ms"],
+            attachment_body_requests=row["attachment_body_requests"],
             storage_growth_bytes=row["storage_growth_bytes"],
         )
 

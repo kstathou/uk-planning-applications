@@ -76,7 +76,7 @@ from yimby.exporting import (
 )
 from yimby.geo import bng_to_wgs84
 from yimby.normalise import rebuild_normalised
-from yimby.store import SqliteStore
+from yimby.store import MissingEvidenceRecordError, SqliteStore
 from yimby.transport import (
     FixtureResponse,
     FixtureSession,
@@ -212,6 +212,43 @@ def _commit_rich(store: SqliteStore) -> ApplicationId:
     return application_id
 
 
+def test_zero_request_success_does_not_advance_source_freshness(  # noqa: D103
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    _commit_rich(store)
+    before = next(
+        state.last_success_at
+        for state in store.authority_states()
+        if state.manifest.id == AuthorityId("barnet")
+    )
+    run_id = store.begin_run(AuthorityId("barnet"))
+    store.finish_run(
+        run_id,
+        AuthorityId("barnet"),
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=1,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.FIXTURE,
+        ),
+    )
+
+    after = next(
+        state.last_success_at
+        for state in store.authority_states()
+        if state.manifest.id == AuthorityId("barnet")
+    )
+
+    assert before is not None
+    assert after == before
+    store.close()
+
+
 def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> None:
     """Rich fields, schedules, metrics, search, and corrections remain typed."""
     store = _store(tmp_path)
@@ -261,6 +298,7 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
         "transferred_bytes": 21,
         "duration_ms": 3,
         "browser_time_ms": 0,
+        "attachment_body_requests": 0,
         "storage_growth_bytes": 5,
     }
     states = store.authority_states(datetime(2020, 1, 1, tzinfo=UTC))
@@ -665,7 +703,7 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
         connection.execute("DELETE FROM evidence")
         connection.commit()
     reopened = _store(tmp_path)
-    with pytest.raises(KeyError):
+    with pytest.raises(MissingEvidenceRecordError):
         reopened.retained_native_records()
     missing = reopened.evidence_registration_audit(AuthorityId("barnet"))
     assert missing.registrations == ()
@@ -1139,7 +1177,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -1175,7 +1213,20 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    assert reopened.migration_versions() == (
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+    )
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()
@@ -1233,7 +1284,7 @@ def test_migrations_upgrade_existing_discovery_evidence_schema(
         connection.commit()
 
     store = _store(tmp_path)
-    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
     store.close()
     with closing(sqlite3.connect(database)) as connection:
         row = connection.execute(

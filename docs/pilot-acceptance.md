@@ -27,7 +27,7 @@ requirement.
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Advanced form; planning and appeal date windows; six-page planning and two-page appeal outstanding searches; both detail routes; complete published fields; categorized document metadata | Exact six-query adapter with disclaimer handling, canonical pager validation, replay-safe weekly checkpoints, planning and appeal native records, and metadata-only documents | Verified: 67 applications and appeals on 16 September 2026 | Pending: due 23 and 30 September 2026 |
 | Peak District National Park Authority | Verified | AssureLive form, five-query discovery, detail, and windowed search and document pagination recorded | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED; complete detail and document metadata; public comments unavailable | Verified on 16 September 2026 with 377 references and applications | Pending for 23 and 30 September 2026 |
-| Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
+| Arun | Verified | Exact received, decided, and older-open searches, Show All, detail, document index, and empty documents recorded | Resumable 60-query adapter with exact counts, metadata-only documents, retained request-bound evidence, and completeness checks | Verified on 16 September 2026 with 648 portal records, including three source test/dummy records | Pending: due 23 and 30 September 2026 |
 | Old Oak and Park Royal Development Corporation | Verified | Official Registered/Determined searches, client-side pagination, detail, 643-row sampled document index, and public responses recorded | Exact three-query HTTP adapter with complete detail, document-metadata, and response collection | Verified on 16 September 2026: 55 applications, zero failed sections/retries/attachment bodies, and zero-network rerun | Open; approximately 23 and 30 September 2026 |
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
@@ -40,7 +40,8 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, West Suffolk, OPDC, Peak District, Camden, and Devon
+As of 16 September 2026, West Suffolk, OPDC, Peak District, Camden, Devon, and
+Arun
 have completed verified live bootstraps. West Suffolk's versioned receipt
 proves 730 discovered references and 730 persisted applications, terminal
 checkpoint coherence, no pending retries, no failed current sections, database
@@ -64,7 +65,12 @@ evidence, not portal or child-page agreement; the feed does not publish the
 broader document and comment data. Devon's version 5 receipt proves 67
 applications, 86 requests, 8,235,128 transferred bytes, zero attachment-body
 requests, SQLite and evidence integrity, and an immediate zero-request rerun.
-The other ten authorities still require verified live bootstraps. All fifteen
+Arun's schema-version-3 receipt reconciles 648 unique portal references and
+persisted records, including three source-published test/dummy records, 73
+search captures, 1,296 application captures, zero pending retries, zero failed
+current sections, zero unmapped records, and an immediate zero-network terminal
+rerun. Arun remains discovery-only until its later weekly cycles pass. The
+other nine authorities still require verified live bootstraps. All fifteen
 still require two successful later weekly cycles, so operational qualification
 remains zero of fifteen.
 

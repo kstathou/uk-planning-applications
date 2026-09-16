@@ -386,7 +386,9 @@ class StoredApplication(FrozenModel):
 
     id: ApplicationId
     authority_id: AuthorityId
+    source_id: SourceId
     reference: str
+    locator: str | None
     proposal: str
     status: str
     documents: tuple[DocumentRecord, ...]
@@ -497,6 +499,7 @@ class RunMetrics(FrozenModel):
     transferred_bytes: int = Field(ge=0)
     duration_ms: int = Field(ge=0)
     browser_time_ms: int = Field(default=0, ge=0)
+    attachment_body_requests: int = Field(default=0, ge=0)
     storage_growth_bytes: int = Field(ge=0)
 
 
@@ -515,6 +518,17 @@ class RunOutcome(FrozenModel):
     metrics: RunMetrics
     transport_mode: TransportMode
     failure_message: str | None = None
+
+
+class RunRecord(FrozenModel):
+    """Durable identity, timing, status, and cost of one collection run."""
+
+    run_id: str
+    authority_id: AuthorityId
+    started_at: datetime
+    finished_at: datetime | None
+    status: RunStatus
+    metrics: RunMetrics
 
 
 class RetryItem(FrozenModel):

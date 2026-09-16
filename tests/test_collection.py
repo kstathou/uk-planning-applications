@@ -8,7 +8,7 @@ import asyncio
 import gzip
 import sqlite3
 from contextlib import closing
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -28,9 +28,20 @@ from yimby.domain import (
     ApplicationId,
     AuthorityKind,
     AuthorityManifest,
+    CollectedObservation,
+    Completeness,
+    CompleteSection,
+    DocumentRecord,
+    DurableDiscoveryBatch,
+    EmptySection,
     ExcludedSection,
+    NormalisedObservation,
+    RetainedNativeRecord,
+    RunStatus,
     SourceDefinition,
     SourceId,
+    SourceReference,
+    StoredCheckpoint,
     UnavailableSection,
 )
 from yimby.evidence import EvidenceStore
@@ -41,10 +52,14 @@ from yimby.transport import (
     FixtureSession,
     PortalRequest,
     RequestIntent,
+    SourceUnavailableError,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
+
+    from yimby.transport import PortalSession
 
 WINDOW = DiscoveryWindow(
     start=date(2026, 8, 16),
@@ -52,6 +67,91 @@ WINDOW = DiscoveryWindow(
     include_open=True,
 )
 EXPECTED_SOURCE_COUNT = 2
+ATTACHMENT_METRIC_DOCUMENT_URL = "https://example.test/view"
+EXPECTED_ATTACHMENT_BODY_REQUESTS = 2
+
+
+class _QueryStrippingFixtureSession(FixtureSession):
+    @property
+    def requested_urls(self) -> tuple[str, ...]:
+        return tuple(url.partition("?")[0] for url in super().requested_urls)
+
+
+class _AttachmentThenFailurePackage:
+    manifest = BARNET_PACKAGE.manifest
+    _first = SourceReference(
+        source_id=SourceId("barnet-idox-current"),
+        reference="FIRST/1",
+    )
+    _second = SourceReference(
+        source_id=SourceId("barnet-idox-current"),
+        reference="SECOND/2",
+    )
+    _third = SourceReference(
+        source_id=SourceId("barnet-idox-current"),
+        reference="THIRD/3",
+    )
+
+    async def discover(
+        self,
+        session: PortalSession,
+        window: DiscoveryWindow,
+        checkpoint: StoredCheckpoint | None,
+    ) -> AsyncIterator[DurableDiscoveryBatch]:
+        del session, window, checkpoint
+        yield DurableDiscoveryBatch(
+            references=(self._first, self._second, self._third),
+            next_checkpoint=StoredCheckpoint(schema_version=1, payload_json="{}"),
+            complete=True,
+        )
+
+    async def collect(
+        self,
+        session: PortalSession,
+        reference: SourceReference,
+    ) -> CollectedObservation:
+        if reference == self._third:
+            failure = "later reference failed"
+            raise SourceUnavailableError(failure)
+        document_url = (
+            f"{ATTACHMENT_METRIC_DOCUMENT_URL}?document={reference.reference}"
+        )
+        await session.fetch(
+            PortalRequest(
+                url=HttpUrl(document_url),
+                intent=RequestIntent.SEARCH,
+            )
+        )
+        return CollectedObservation(
+            native_schema="AttachmentMetricNative",
+            native_json="{}",
+            normalised=NormalisedObservation(
+                authority_id=AuthorityId("barnet"),
+                reference=reference,
+                proposal="First application",
+                status="pending",
+                documents=(
+                    DocumentRecord(
+                        title="Retrieved attachment",
+                        url=HttpUrl(document_url),
+                    ),
+                ),
+                comments=(),
+                completeness=Completeness(
+                    application=CompleteSection(item_count=1),
+                    documents=CompleteSection(item_count=1),
+                    comments=EmptySection(),
+                ),
+                provenance=(),
+                normaliser_version="attachment-metric-v1",
+            ),
+            evidence=(),
+            observed_at=datetime(2026, 9, 16, tzinfo=UTC),
+        )
+
+    def rebuild(self, retained: RetainedNativeRecord) -> NormalisedObservation:
+        del retained
+        raise NotImplementedError
 
 
 def _store(tmp_path: Path) -> SqliteStore:
@@ -91,7 +191,9 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
     assert store.get_application(application_id).model_dump(mode="json") == {
         "id": str(application_id),
         "authority_id": "barnet",
+        "source_id": "barnet-idox-current",
         "reference": "23/0001",
+        "locator": None,
         "proposal": "Build two homes & plant four trees",
         "status": "under-consideration",
         "documents": [
@@ -179,6 +281,34 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
         "Build two homes & plant four trees"
     )
     reopened.close()
+
+
+def test_failed_run_counts_attachments_retrieved_before_a_later_failure(  # noqa: D103
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    package = _AttachmentThenFailurePackage()
+    collector = Collector(AuthorityRegistry((package,)), store)
+    session = _QueryStrippingFixtureSession(
+        {
+            f"{ATTACHMENT_METRIC_DOCUMENT_URL}?document=FIRST/1": FixtureResponse(
+                body=b"first attachment"
+            ),
+            f"{ATTACHMENT_METRIC_DOCUMENT_URL}?document=SECOND/2": FixtureResponse(
+                body=b"second attachment"
+            ),
+        }
+    )
+
+    with pytest.raises(SourceUnavailableError, match="later reference failed"):
+        asyncio.run(collector.collect(AuthorityId("barnet"), WINDOW, session))
+
+    assert store.run_statuses(AuthorityId("barnet")) == (RunStatus.FAILED,)
+    assert (
+        store.metrics_totals(AuthorityId("barnet")).attachment_body_requests
+        == EXPECTED_ATTACHMENT_BODY_REQUESTS
+    )
+    store.close()
 
 
 def test_empty_and_initially_failed_comments_are_explicit(tmp_path: Path) -> None:
