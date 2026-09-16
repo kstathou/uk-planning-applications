@@ -1221,8 +1221,8 @@ class SqliteStore:
             for row in self._connection.execute(
                 "SELECT digest, path, source_url, media_type "
                 "FROM evidence ORDER BY digest"
-             )
-         )
+            )
+        )
 
     def migration_versions(self) -> tuple[int, ...]:
         """Return applied migration versions in order."""
