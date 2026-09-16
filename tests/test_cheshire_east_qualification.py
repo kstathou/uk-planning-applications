@@ -570,7 +570,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         ),
         _search_results().replace(
             b"<td>26/3335/PRIOR-1A</td>",
-            b'<td><span hidden>FAKE</span>26/3335/PRIOR-1A</td>',
+            b"<td><span hidden>FAKE</span>26/3335/PRIOR-1A</td>",
         ),
         _search_results().replace(
             b"<td>Single storey rear extension.</td>\n      <td>"
@@ -624,7 +624,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         (
             b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
             b'<div class="push-30-t"><strong class="text-danger">'
-            b'<span hidden>No</span> Results Found.</strong></div></div>'
+            b"<span hidden>No</span> Results Found.</strong></div></div>"
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -776,7 +776,7 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
             b"<td>24/0001D</td>", b'<td class="hidden">24/0001D</td>'
         ),
         _weekly_results().replace(
-            b"<td>24/0001D</td>", b'<td><span hidden>24/0001D</span></td>'
+            b"<td>24/0001D</td>", b"<td><span hidden>24/0001D</span></td>"
         ),
         _weekly_results() + _weekly_results().replace(b"<table>", b"<table hidden>", 1),
         b'<main class="hidden">' + _weekly_results() + b"</main>",

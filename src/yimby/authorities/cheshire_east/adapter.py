@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime
 from html import unescape
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, NoReturn, cast
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
@@ -493,20 +493,19 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
     ):
         _raise_parse("search result boundary")
     marker = zero_markers[0]
-    marker_parent = marker.parent
+    marker_parent = cast("Tag", marker.parent)
     if (
-        not isinstance(marker_parent, Tag)
-        or marker_parent.parent is not container
+        marker_parent.parent is not container
         or set(map(str, marker_parent.get_attribute_list("class"))) != {"push-30-t"}
         or set(map(str, marker.get_attribute_list("class"))) != {"text-danger"}
         or _normalise_label(marker.get_text(" ", strip=True)) != "no results found."
         or container.get_text(" ", strip=True) != marker.get_text(" ", strip=True)
-        or _has_hidden_ancestor(marker)
+        or _direct_tags(container) != (marker_parent,)
+        or _direct_tags(marker_parent) != (marker,)
+        or not _all_rendered([marker])
         or container.select("script, style, template, title, noscript")
     ):
         _raise_parse("search result boundary")
-    if _pagination_links(container) or _has_unverified_total_signal(container):
-        _raise_parse("zero result boundary")
     return CheshireEastSearchBoundaryV1(
         results=(),
         explicit_zero=True,
@@ -545,6 +544,18 @@ def _is_hidden_markup(element: Tag) -> bool:
         or str(element.get("aria-hidden", "")).strip().casefold() == "true"
         or _css_value(style.get("display")) == "none"
         or _css_value(style.get("visibility")) in {"hidden", "collapse"}
+    )
+
+
+def _direct_tags(element: Tag) -> tuple[Tag, ...]:
+    return tuple(child for child in element.children if isinstance(child, Tag))
+
+
+def _has_hidden_descendant(element: Tag) -> bool:
+    return any(
+        _is_hidden_markup(descendant)
+        for descendant in element.descendants
+        if isinstance(descendant, Tag)
     )
 
 
@@ -714,12 +725,7 @@ def _detail_fields(container: Tag) -> dict[str, str]:
             _raise_parse("application detail row")
         label = row.select_one("strong")
         value = row.select_one(".col-md-7")
-        if (
-            label is None
-            or value is None
-            or _has_hidden_ancestor(label)
-            or _has_hidden_ancestor(value)
-        ):
+        if label is None or value is None or not _all_rendered([label, value]):
             _raise_parse("application detail row")
         key = _normalise_label(label.get_text(" ", strip=True))
         if key in fields:
@@ -787,7 +793,9 @@ def _parse_document_metadata(
         or _has_hidden_ancestor(section)
         or _has_hidden_ancestor(tables[0])
         or _has_hidden_ancestor(loaded_controls[0])
+        or _has_hidden_descendant(loaded_controls[0])
         or any(_is_hidden_markup(parent) for parent in show_more_controls[0].parents)
+        or _has_hidden_descendant(show_more_controls[0])
         or _style_declarations(show_more_controls[0]).get("display") != "none"
     ):
         _raise_parse("complete document table")
@@ -945,7 +953,10 @@ def _parse_table_rows(
 
 
 def _all_rendered(elements: list[Tag]) -> bool:
-    return all(not _has_hidden_ancestor(element) for element in elements)
+    return all(
+        not _has_hidden_ancestor(element) and not _has_hidden_descendant(element)
+        for element in elements
+    )
 
 
 def _optional_mapping(values: dict[str, str], *needles: str) -> str | None:
