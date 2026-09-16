@@ -958,9 +958,7 @@ def test_discovery_request_form_decoder_rejects_malformed_values() -> None:
     assert decoder("{") is None
     for malformed in ("{}", '[["name"]]', '[["name", 1]]'):
         assert decoder(malformed) is None
-    assert decoder('[["name", "value"]]') == (
-        ("name", "value"),
-    )
+    assert decoder('[["name", "value"]]') == (("name", "value"),)
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:

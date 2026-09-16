@@ -13,8 +13,9 @@ Walkthrough and qualification date: 16 September 2026.
 
 The official register presents a copyright and data-use disclaimer before a
 protected route when the session has not accepted it. The acceptance form posts
-to `/Disclaimer/Accept`; a disclaimer is never interpreted as an empty search or
-an application record.
+to `/Disclaimer/Accept`; its one `returnUrl` must resolve to the exact protected
+route originally requested. A disclaimer is never interpreted as an empty
+search or an application record.
 
 ## Exact discovery contract
 
@@ -86,14 +87,14 @@ unavailable because the register exposes responses as document attachments.
 ## Live qualification receipt
 
 The durable receipt is
-`.yimby/qualification-devon-2026-09-16/devon-qualification-v4.json` with SHA-256
-`92257631183178fa507504111bcf4b96b265c5b4e76dfe30405247b6ea370e8e`.
+`.yimby/qualification-devon-2026-09-16/devon-qualification-v5.json` with SHA-256
+`7e0cb5f04bf1d0b4dd3751b3783b305cefa5628f558ce7500321e47d669c5b74`.
 It records:
 
 - all six completed query keys with the row and page totals above;
 - 67 unique source-qualified references, applications, native versions,
   observations, and observation-evidence registrations;
-- 19 discovery-evidence registrations covering all 12 search pages, and 84
+- 12 discovery-evidence registrations covering all 12 search pages, and 77
   reconciled compressed evidence objects and files;
 - 67 application versions, 28 complete document-section versions, 39
   explicitly unavailable document sections, and zero comment versions;
@@ -101,8 +102,11 @@ It records:
   attachment body requests;
 - SQLite integrity, exact durable source/reference/application agreement,
   complete discovery and per-observation evidence reconciliation, and a
-  canonical all-file inventory;
-- 86 official requests and 8,234,248 transferred bytes on the first pass;
+  canonical all-file inventory. Each retained search body is rebound to its
+  exact method, URL, form values, query, and page and reparsed through the
+  recorded pager chain; each retained detail body is rebound to its source,
+  reference, locator, response URL, and native payload;
+- 86 official requests and 8,235,128 transferred bytes on the first pass;
 - an immediate terminal rerun with 0 requests, 0 bytes, and 0 attachment
   bodies; and
 - byte-for-byte receipt preservation under a separate `--resume` command.
