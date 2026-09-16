@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import gzip
 import importlib.util
+import json
 import sys
 from datetime import UTC, date, datetime
 from hashlib import sha256
@@ -906,3 +907,45 @@ def test_cheshire_contract_drift_retains_a_resumable_blocker(
         )
         == 1
     )
+
+
+def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(
+        arguments,
+        session_factory=_QualificationSession,
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    ) == 1
+    capsys.readouterr()
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    payload["query_inventory"] = ["detail|406569"]
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "tampered resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert module.main(
+        [*arguments, "--resume"],
+        session_factory=forbidden_factory,
+        now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+    ) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"error": "runtime-failure"' in captured.err
+    assert '"exception": "ValidationError"' in captured.err
