@@ -24,10 +24,13 @@ from yimby.domain import (
     DiscoveryBatch,
     DiscoveryWindow,
     DocumentRecord,
+    EmptySection,
+    FailedSection,
     FrozenModel,
     NativeSnapshot,
     NormalisedObservation,
     Provenance,
+    SectionState,
     SourceDefinition,
     SourceId,
     SourceReference,
@@ -40,11 +43,13 @@ from yimby.transport import (
     PortalRequest,
     RequestIntent,
     RequestMethod,
+    SourceUnavailableError,
 )
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
+    from yimby.domain import EvidenceCapture
     from yimby.transport import PortalSession
 
 SOURCE = SourceId("leeds-idox-public-access")
@@ -59,6 +64,8 @@ _DATE_TYPES: tuple[Literal["DC_Validated", "DC_Decided"], ...] = (
     "DC_Decided",
 )
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
+_MINIMUM_LABELLED_CELLS = 2
+_DOCUMENT_CELL_COUNT = 6
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
 _CASE_TYPES = (
     ("DAG", "Agricultural Determination"),
@@ -182,7 +189,12 @@ class LeedsApplicationV1(FrozenModel):
     proposal_text: str
     case_status: str
     documents: tuple[LeedsDocumentV1, ...]
-    application_type: str
+    application_type: str | None = None
+    address: str | None = None
+    validated_date: date | None = None
+    appeal_status: str | None = None
+    appeal_decision: str | None = None
+    comment_state: SectionState | None = None
 
 
 class LeedsAdapter:
@@ -278,17 +290,21 @@ class LeedsAdapter:
             for query in weekly_queries
             if query.key not in progress.completed_queries
         )
-        for query in pending_weekly:
-            page = progress.next_page if progress.active_query == query.key else 1
-            row_count = (
-                progress.query_row_count if progress.active_query == query.key else 0
+        for weekly_query in pending_weekly:
+            page = (
+                progress.next_page if progress.active_query == weekly_query.key else 1
             )
-            if progress.active_query == query.key and page > 1:
+            row_count = (
+                progress.query_row_count
+                if progress.active_query == weekly_query.key
+                else 0
+            )
+            if progress.active_query == weekly_query.key and page > 1:
                 await session.fetch(
                     _weekly_request(
                         weekly_form,
-                        query.week,
-                        query.date_type,
+                        weekly_query.week,
+                        weekly_query.date_type,
                         1,
                     )
                 )
@@ -296,8 +312,8 @@ class LeedsAdapter:
                 capture = await session.fetch(
                     _weekly_request(
                         weekly_form,
-                        query.week,
-                        query.date_type,
+                        weekly_query.week,
+                        weekly_query.date_type,
                         page,
                     )
                 )
@@ -305,7 +321,7 @@ class LeedsAdapter:
                 next_checkpoint, fresh, last_page = _advance_checkpoint(
                     progress,
                     active_page=_ActivePage(
-                        query_key=query.key,
+                        query_key=weekly_query.key,
                         page=page,
                         row_count=row_count,
                     ),
@@ -340,22 +356,26 @@ class LeedsAdapter:
             for query in advanced_queries
             if query.key not in progress.completed_queries
         )
-        for query in pending_advanced:
-            page = progress.next_page if progress.active_query == query.key else 1
-            row_count = (
-                progress.query_row_count if progress.active_query == query.key else 0
+        for advanced_query in pending_advanced:
+            page = (
+                progress.next_page if progress.active_query == advanced_query.key else 1
             )
-            if progress.active_query == query.key and page > 1:
-                await session.fetch(_advanced_request(advanced_form, query, 1))
+            row_count = (
+                progress.query_row_count
+                if progress.active_query == advanced_query.key
+                else 0
+            )
+            if progress.active_query == advanced_query.key and page > 1:
+                await session.fetch(_advanced_request(advanced_form, advanced_query, 1))
             while True:
                 capture = await session.fetch(
-                    _advanced_request(advanced_form, query, page)
+                    _advanced_request(advanced_form, advanced_query, page)
                 )
                 search_page = _parse_advanced_search_page(capture.body, page=page)
                 next_checkpoint, fresh, last_page = _advance_checkpoint(
                     progress,
                     active_page=_ActivePage(
-                        query_key=query.key,
+                        query_key=advanced_query.key,
                         page=page,
                         row_count=row_count,
                     ),
@@ -448,7 +468,48 @@ class LeedsAdapter:
         message = detail.body.decode(errors="replace").casefold()
         if "unable to perform this task" in message and "remote exception" in message:
             raise LeedsDetailUnavailableError
-        raise LeedsDetailUnverifiedError
+        if not BeautifulSoup(detail.body, "html.parser").select("#simpleDetailsTable"):
+            raise LeedsDetailUnverifiedError
+        fields = _parse_summary(detail.body)
+        published_reference = _required_field(fields, "reference")
+        if published_reference != reference.reference:
+            raise LeedsReferenceMismatchError(
+                reference.reference,
+                published_reference,
+            )
+        evidence: list[EvidenceCapture] = [detail]
+        documents, document_state = await _fetch_documents(
+            session,
+            reference.locator,
+            evidence,
+        )
+        comment_state = UnavailableSection(
+            reason="Leeds City Council does not publish public comment text"
+        )
+        payload = LeedsApplicationV1(
+            idox_key=reference.locator,
+            application_reference=published_reference,
+            proposal_text=_required_field(fields, "proposal", "description"),
+            case_status=_required_field(fields, "status"),
+            documents=documents,
+            application_type=_optional_field(fields, "application type"),
+            address=_optional_field(fields, "address"),
+            validated_date=_optional_date(fields, "application validated"),
+            appeal_status=_optional_field(fields, "appeal status"),
+            appeal_decision=_optional_field(fields, "appeal decision"),
+            comment_state=comment_state,
+        )
+        return NativeSnapshot(
+            reference=reference,
+            observed_at=datetime.now(UTC),
+            payload=payload,
+            completeness=Completeness(
+                application=CompleteSection(item_count=1),
+                documents=document_state,
+                comments=comment_state,
+            ),
+            evidence=tuple(evidence),
+        )
 
     def normalise(
         self,
@@ -472,9 +533,11 @@ class LeedsAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="leeds-v1",
+            normaliser_version="leeds-v2",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
+                address=payload.address,
+                validated_date=payload.validated_date,
                 source_url=snapshot.evidence[0].url,
             ),
         )
@@ -827,6 +890,106 @@ def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
     return _parse_search_page(body)
 
 
+def _parse_summary(body: bytes) -> dict[str, str]:
+    soup = BeautifulSoup(body, "html.parser")
+    tables = soup.select("#simpleDetailsTable")
+    if len(tables) != 1:
+        _raise_parse("#simpleDetailsTable")
+    fields: dict[str, str] = {}
+    for row in tables[0].select("tr"):
+        cells = row.find_all(["th", "td"], recursive=False)
+        if len(cells) < _MINIMUM_LABELLED_CELLS:
+            continue
+        label = _normalise_label(cells[0].get_text(" ", strip=True))
+        if not label or label in fields:
+            _raise_parse("summary labelled values")
+        fields[label] = cells[-1].get_text(" ", strip=True)
+    if not fields:
+        _raise_parse("summary labelled values")
+    return fields
+
+
+async def _fetch_documents(
+    session: PortalSession,
+    locator: str,
+    evidence: list[EvidenceCapture],
+) -> tuple[tuple[LeedsDocumentV1, ...], SectionState]:
+    try:
+        capture = await session.fetch(
+            _detail_request(locator, "documents", RequestIntent.DETAIL)
+        )
+    except SourceUnavailableError:
+        return (), FailedSection(code="source-unavailable")
+    evidence.append(capture)
+    try:
+        return _parse_documents(capture.body)
+    except LeedsParseError as error:
+        return (), FailedSection(code=error.code)
+
+
+def _parse_documents(
+    body: bytes,
+) -> tuple[tuple[LeedsDocumentV1, ...], SectionState]:
+    soup = BeautifulSoup(body, "html.parser")
+    tables = soup.select('table[summary="Documents" i]')
+    if not tables:
+        if "no documents found" in soup.get_text(" ", strip=True).casefold():
+            return (), EmptySection()
+        _raise_parse("documents table")
+    if len(tables) != 1:
+        _raise_parse("documents table")
+    table = tables[0]
+    rows = table.select("tr")
+    if not rows:
+        _raise_parse("documents table header")
+    expected_headers = (
+        "",
+        "date published",
+        "document type",
+        "measure",
+        "description",
+        "view",
+    )
+    header_cells = rows[0].find_all(["th", "td"], recursive=False)
+    headers = tuple(
+        _normalise_label(cell.get_text(" ", strip=True)) for cell in header_cells
+    )
+    if headers != expected_headers:
+        _raise_parse("documents table header")
+    if table.select_one('a[href*="pagedSearchResults.do"]') is not None:
+        _raise_parse("documents pagination")
+    documents = [_parse_document_row(row) for row in rows[1:]]
+    return tuple(documents), collection_state(len(documents))
+
+
+def _parse_document_row(row: Tag) -> LeedsDocumentV1:
+    cells = row.find_all("td", recursive=False)
+    if len(cells) != _DOCUMENT_CELL_COUNT or cells[0].get_text(" ", strip=True):
+        _raise_parse("document metadata row")
+    links = tuple(
+        HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))
+        for link in cells[5].select("a[href]")
+    )
+    if not links:
+        _raise_parse("document metadata link")
+    published = cells[1].get_text(" ", strip=True)
+    published_date = _parse_date(published) if published else None
+    if published and published_date is None:
+        _raise_parse("document published date")
+    document_type = cells[2].get_text(" ", strip=True) or None
+    drawing_number = cells[3].get_text(" ", strip=True) or None
+    description = cells[4].get_text(" ", strip=True) or None
+    return LeedsDocumentV1(
+        title=description or document_type or "Document",
+        url=links[-1],
+        published_date=published_date,
+        document_type=document_type,
+        drawing_number=drawing_number,
+        description=description,
+        source_links=links,
+    )
+
+
 def _reported_count(soup: BeautifulSoup, *, row_count: int) -> int:
     element = soup.select_one("[data-result-count]")
     if isinstance(element, Tag):
@@ -945,6 +1108,35 @@ def _labelled_value_any(container: Tag, *labels: str) -> str:
     return _raise_parse(f"labelled {'/'.join(labels)}")
 
 
+def _normalise_label(value: str) -> str:
+    return " ".join(value.strip().rstrip(":").casefold().split())
+
+
+def _optional_field(fields: dict[str, str], *names: str) -> str | None:
+    for name in names:
+        value = fields.get(_normalise_label(name))
+        if value:
+            return value
+    return None
+
+
+def _required_field(fields: dict[str, str], *names: str) -> str:
+    value = _optional_field(fields, *names)
+    if value is None:
+        _raise_parse(f"summary {'/'.join(names)}")
+    return value
+
+
+def _optional_date(fields: dict[str, str], *names: str) -> date | None:
+    value = _optional_field(fields, *names)
+    if value is None:
+        return None
+    parsed = _parse_date(value)
+    if parsed is None:
+        _raise_parse(f"date {'/'.join(names)}")
+    return parsed
+
+
 def _parse_date(value: str | None) -> date | None:
     if value is None:
         return None
@@ -1024,6 +1216,14 @@ class LeedsRoutingError(ValueError):
     def __init__(self, reference: str) -> None:
         """Name the unroutable human reference."""
         super().__init__(f"Leeds reference has no keyVal locator: {reference}")
+
+
+class LeedsReferenceMismatchError(ValueError):
+    """The routed Leeds record published a different reference."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        """Describe the stable-reference mismatch."""
+        super().__init__(f"Leeds reference mismatch: expected {expected}, got {actual}")
 
 
 class LeedsDetailUnavailableError(RuntimeError):
