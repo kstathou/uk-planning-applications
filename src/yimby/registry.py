@@ -79,10 +79,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         LiveTransportKind.HTTP,
     ),
     AuthorityId("peak-district"): _status(
-        LiveReadiness.DISCOVERY_ONLY,
-        "rolling weekly discovery and visible summary are implemented; "
-        "client-loaded sections and older-open are unresolved",
-        "captured Peak District weekly DataTable and legacy summary contracts",
+        LiveReadiness.LIVE_READY,
+        "complete AssureLive bootstrap and immediate zero-network rerun qualified",
+        "docs/evidence/peak-district-qualification-2026-09-16.json",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("arun"): _status(

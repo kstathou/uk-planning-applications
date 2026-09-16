@@ -80,6 +80,12 @@ _OPDC_APPLICATION_CAPTURE_SHA256 = (
 _OPDC_CONTENT_DIGEST_SET_SHA256 = (
     "sha256:8f2c5eb871927248dc6c53ca8e86853705cecadc1c727315833724f2531cf608"
 )
+_PEAK_DISTRICT_EVIDENCE_PATH = (
+    "docs/evidence/peak-district-qualification-2026-09-16.json"
+)
+_PEAK_DISTRICT_APPLICATION_COUNT = 377
+_PEAK_DISTRICT_CAPTURE_ASSOCIATIONS = 1299
+_PEAK_DISTRICT_EVIDENCE_ROWS = 1560
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,6 +266,18 @@ def _opdc_qualification_module() -> ModuleType:
     return module
 
 
+def _peak_district_qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_peak_district.py"
+    name = "_test_pilot_qualify_peak_district"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
 def test_authority_fixture_contract(case: _PilotCase, tmp_path: Path) -> None:
     """Every package survives an unchanged public-API rerun."""
@@ -398,6 +416,58 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
     assert manifest.live_status.evidence == (
         f"{_OPDC_EVIDENCE_PATH} records 55 complete applications",
     )
+
+
+def test_peak_district_live_status_points_to_sanitised_committed_receipt() -> None:
+    """Peak's live-ready proof is strict, reviewable, and privacy-safe."""
+    receipt_path = Path(__file__).parents[1] / _PEAK_DISTRICT_EVIDENCE_PATH
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    qualification = _peak_district_qualification_module()
+    receipt_model = qualification.PeakDistrictSanitizedQualificationReceiptV1
+    validated = receipt_model.model_validate(receipt)
+    manifest = pilot_registry().manifest(AuthorityId("peak-district"))
+
+    assert "identities" not in receipt
+    assert validated.counts.applications == _PEAK_DISTRICT_APPLICATION_COUNT
+    assert validated.counts.discovered_references == _PEAK_DISTRICT_APPLICATION_COUNT
+    assert validated.costs.initial.request_count > 0
+    assert validated.costs.initial.transferred_bytes > 0
+    assert validated.costs.rerun.request_count == 0
+    assert (
+        validated.evidence_commitment.applications == _PEAK_DISTRICT_APPLICATION_COUNT
+    )
+    assert (
+        validated.evidence_commitment.capture_associations
+        == _PEAK_DISTRICT_CAPTURE_ASSOCIATIONS
+    )
+    assert (
+        validated.evidence_commitment.retained_evidence_rows
+        == _PEAK_DISTRICT_EVIDENCE_ROWS
+    )
+    assert validated.evidence_commitment.missing_paths == 0
+    assert validated.evidence_commitment.invalid_paths == 0
+    assert all(check.ok for check in validated.checks)
+    assert "authority-readiness" in {check.name for check in validated.checks}
+    assert [cycle.status for cycle in validated.weekly_cycles] == [
+        "pending",
+        "pending",
+    ]
+    with pytest.raises(ValidationError):
+        receipt_model.model_validate({**receipt, "identities": ["private"]})
+    with pytest.raises(ValidationError):
+        receipt_model.model_validate(
+            {
+                **receipt,
+                "evidence_commitment": {
+                    **receipt["evidence_commitment"],
+                    "identities": ["private"],
+                },
+            }
+        )
+    assert manifest.live_status.readiness.value == "live-ready"
+    assert manifest.live_status.transport is not None
+    assert manifest.live_status.transport.value == "http"
+    assert manifest.live_status.evidence == (_PEAK_DISTRICT_EVIDENCE_PATH,)
 
 
 def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:

@@ -7,8 +7,9 @@ All 15 authority packages have typed native schemas and deterministic fixtures.
 Live portal readiness is tracked separately and remains partial while real
 adapters and the required two weekly validation cycles are completed. See the
 [pilot acceptance ledger](docs/pilot-acceptance.md) for the current boundary.
-No authority is described as live-collection verified until a complete real
-bootstrap has been persisted and compared with its dated walkthrough.
+Peak District has completed a receipt-backed live bootstrap and is `LIVE_READY`
+for its verified HTTP contract. It remains operationally unqualified until its
+two later weekly cycles complete.
 
 ## Requirements
 
