@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -295,7 +296,7 @@ def _response_is_forbidden(response: httpx.Response) -> bool:
     disposition = response.headers.get("content-disposition", "").casefold()
     return (
         "attachment" in disposition
-        or "filename=" in disposition
+        or re.search(r"(?:^|;)\s*filename\*?\s*=", disposition) is not None
         or not is_source_document_media_type(response.headers.get("content-type", ""))
     )
 

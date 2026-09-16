@@ -263,13 +263,15 @@ def parse_search_form(body: bytes) -> Tag:
         name: _enabled_named_control(form, name)
         for name in ("fa", "submitted", "valid_date_from", "valid_date_to")
     }
+    _require_input_type(controls["fa"], {"hidden"})
+    _require_input_type(controls["submitted"], {"hidden"})
+    _require_input_type(controls["valid_date_from"], {"", "text"})
+    _require_input_type(controls["valid_date_to"], {"", "text"})
     if controls["fa"].get("value") != "search":
         _raise_parse("search form discriminator")
     successful_names = _successful_field_names(form)
     if len(successful_names) != len(set(successful_names)):
         _raise_parse("duplicate successful search control")
-    if any(name not in successful_names for name in controls):
-        _raise_parse("required successful search control")
     return form
 
 
@@ -285,6 +287,13 @@ def _enabled_named_control(form: Tag, name: str) -> Tag:
     if _is_effectively_disabled(control):
         _raise_parse(name)
     return control
+
+
+def _require_input_type(control: Tag, allowed_types: set[str]) -> None:
+    if control.name != "input" or str(control.get("type", "")).casefold() not in (
+        allowed_types
+    ):
+        _raise_parse(f"{control.get('name', '')} input type")
 
 
 def _is_effectively_disabled(control: Tag) -> bool:
@@ -406,8 +415,10 @@ def parse_weekly_form(body: bytes) -> Tag:
         or urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _WEEKLY_RECEIVED_URL
     ):
         _raise_parse("weekly received form")
-    _enabled_named_control(form, "week")
+    week = _enabled_named_control(form, "week")
+    _require_input_type(week, {"text"})
     discriminator = _enabled_named_control(form, "fa")
+    _require_input_type(discriminator, {"hidden"})
     if discriminator.get("value") != "":
         _raise_parse("weekly received discriminator")
     if _successful_field_names(form) != ("week", "fa"):
@@ -464,13 +475,12 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         ):
             _raise_parse("search result boundary")
         results = _parse_result_table(tables[0])
-        total = _reported_total(container)
-        if total is not None and total < len(results):
-            _raise_parse("reported result total")
+        if _has_unverified_total_signal(container):
+            _raise_parse("unverified result total")
         return CheshireEastSearchBoundaryV1(
             results=results,
             explicit_zero=False,
-            reported_total=total,
+            reported_total=None,
             pagination_links=_pagination_links(container),
             terminal_marker=False,
         )
@@ -495,6 +505,8 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         or container.select("script, style, template, title, noscript")
     ):
         _raise_parse("search result boundary")
+    if _pagination_links(container) or _has_unverified_total_signal(container):
+        _raise_parse("zero result boundary")
     return CheshireEastSearchBoundaryV1(
         results=(),
         explicit_zero=True,
@@ -512,6 +524,9 @@ def _has_hidden_ancestor(element: Tag) -> bool:
 
 def _is_hidden_markup(element: Tag) -> bool:
     style = _style_declarations(element)
+    classes = {
+        str(value).strip().casefold() for value in element.get_attribute_list("class")
+    }
     return (
         element.name
         in {
@@ -526,9 +541,10 @@ def _is_hidden_markup(element: Tag) -> bool:
             "title",
         }
         or element.has_attr("hidden")
+        or bool(classes & {"d-none", "hidden", "invisible"})
         or str(element.get("aria-hidden", "")).strip().casefold() == "true"
-        or style.get("display") == "none"
-        or style.get("visibility") in {"hidden", "collapse"}
+        or _css_value(style.get("display")) == "none"
+        or _css_value(style.get("visibility")) in {"hidden", "collapse"}
     )
 
 
@@ -539,6 +555,12 @@ def _style_declarations(element: Tag) -> dict[str, str]:
         if separator:
             declarations[name.strip().casefold()] = value.strip().casefold()
     return declarations
+
+
+def _css_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return re.sub(r"\s*!important\s*$", "", value).strip()
 
 
 def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
@@ -560,15 +582,20 @@ def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
         first_row = table.select_one("tr")
         if first_row is None:
             continue
+        header_cells = first_row.find_all(("th", "td"), recursive=False)
         headers = tuple(
-            _normalise_label(cell.get_text(" ", strip=True))
-            for cell in first_row.find_all(("th", "td"), recursive=False)
+            _normalise_label(cell.get_text(" ", strip=True)) for cell in header_cells
         )
         if headers == expected_headers:
             matches.append(table)
     if len(matches) != 1:
         _raise_parse("weekly received table")
-    if _has_hidden_ancestor(matches[0]):
+    matched_header = matches[0].select_one("tr")
+    if (
+        _has_hidden_ancestor(matches[0])
+        or matched_header is None
+        or not _all_rendered(matched_header.find_all(("th", "td"), recursive=False))
+    ):
         _raise_parse("weekly received table")
     rows = _parse_weekly_rows(matches[0], len(expected_headers))
     table = matches[0]
@@ -598,7 +625,7 @@ def _parse_weekly_rows(
         if _has_hidden_ancestor(row):
             _raise_parse("weekly received row")
         cells = row.find_all("td", recursive=False)
-        if len(cells) != expected_column_count:
+        if len(cells) != expected_column_count or not _all_rendered(cells):
             _raise_parse("weekly received row columns")
         links = cells[-1].select("a[href]")
         if len(links) != 1 or _has_hidden_ancestor(links[0]):
@@ -633,19 +660,10 @@ def _detail_locator(href: str) -> str:
     return values["id"][0]
 
 
-def _reported_total(boundary: Tag | BeautifulSoup) -> int | None:
-    nodes = boundary.select("[data-result-count]")
-    if boundary.has_attr("data-result-count"):
-        nodes.insert(0, boundary)
-    if not nodes:
-        return None
-    if (
-        len(nodes) != 1
-        or _has_hidden_ancestor(nodes[0])
-        or not str(nodes[0].get("data-result-count", "")).isdigit()
-    ):
-        _raise_parse("reported result total")
-    return int(str(nodes[0]["data-result-count"]))
+def _has_unverified_total_signal(boundary: Tag | BeautifulSoup) -> bool:
+    return boundary.has_attr("data-result-count") or bool(
+        boundary.select("[data-result-count]")
+    )
 
 
 def _pagination_links(boundary: Tag | BeautifulSoup) -> tuple[str, ...]:
@@ -756,10 +774,12 @@ def _parse_document_metadata(
         or len(loaded_controls) != 1
         or len(section_loaded_controls) != 1
         or loaded_controls[0] is not section_loaded_controls[0]
+        or loaded_controls[0].name != "button"
         or not loaded_controls[0].has_attr("disabled")
         or len(show_more_controls) != 1
         or len(section_show_more_controls) != 1
         or show_more_controls[0] is not section_show_more_controls[0]
+        or show_more_controls[0].name != "button"
         or _normalise_label(loaded_controls[0].get_text(" ", strip=True))
         != "all documents loaded"
         or _normalise_label(show_more_controls[0].get_text(" ", strip=True))
@@ -780,19 +800,14 @@ def _parse_document_metadata(
         "download/view",
     )
     rows = table.select("tr")
-    if not rows:
-        _raise_parse("document table headers")
-    headers = tuple(
-        _normalise_label(cell.get_text(" ", strip=True))
-        for cell in rows[0].find_all(("th", "td"), recursive=False)
-    )
-    if headers != expected_headers:
-        _raise_parse("document table headers")
+    _validate_document_headers(rows, expected_headers)
     documents = []
     for row in rows[1:]:
         if _has_hidden_ancestor(row):
             _raise_parse("document row")
         cells = row.find_all("td", recursive=False)
+        if not _all_rendered(cells):
+            _raise_parse("document row")
         fields = tuple(str(cell.get("data-field-name", "")) for cell in cells)
         if fields != (
             "document_type",
@@ -816,6 +831,20 @@ def _parse_document_metadata(
             )
         )
     return tuple(documents)
+
+
+def _validate_document_headers(
+    rows: list[Tag],
+    expected_headers: tuple[str, ...],
+) -> None:
+    if not rows:
+        _raise_parse("document table headers")
+    header_cells = rows[0].find_all(("th", "td"), recursive=False)
+    headers = tuple(
+        _normalise_label(cell.get_text(" ", strip=True)) for cell in header_cells
+    )
+    if not _all_rendered(header_cells) or headers != expected_headers:
+        _raise_parse("document table headers")
 
 
 def _assert_document_url(url: str, expected_locator: str) -> None:
@@ -846,9 +875,11 @@ def _parse_result_table(
     rows = table.select("tr")
     if not rows or _has_hidden_ancestor(rows[0]):
         return _raise_parse("valid-date result table")
+    header_cells = rows[0].find_all(("th", "td"), recursive=False)
+    if not _all_rendered(header_cells):
+        return _raise_parse("valid-date result table headers")
     headers = tuple(
-        _normalise_label(cell.get_text(" ", strip=True))
-        for cell in rows[0].find_all(("th", "td"), recursive=False)
+        _normalise_label(cell.get_text(" ", strip=True)) for cell in header_cells
     )
     expected_headers = (
         "reference",
@@ -875,15 +906,18 @@ def _parse_table_rows(
         if _has_hidden_ancestor(row):
             _raise_parse("result row")
         cells = row.find_all("td", recursive=False)
-        if len(cells) != len(headers):
+        if len(cells) != len(headers) or not _all_rendered(cells):
             _raise_parse("result row columns")
         values = {
             header: cell.get_text(" ", strip=True)
             for header, cell in zip(headers, cells, strict=True)
         }
-        views = row.select("button.view_application")
+        row_views = row.select("button.view_application")
+        views = cells[-1].select("button.view_application")
         if (
-            len(views) != 1
+            len(row_views) != 1
+            or row_views != views
+            or len(views) != 1
             or _has_hidden_ancestor(views[0])
             or not str(views[0].get("data-id", "")).isdigit()
         ):
@@ -908,6 +942,10 @@ def _parse_table_rows(
             )
         )
     return tuple(results)
+
+
+def _all_rendered(elements: list[Tag]) -> bool:
+    return all(not _has_hidden_ancestor(element) for element in elements)
 
 
 def _optional_mapping(values: dict[str, str], *needles: str) -> str | None:

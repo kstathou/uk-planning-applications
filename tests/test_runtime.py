@@ -356,7 +356,7 @@ def test_http_session_default_client_identifies_the_collector() -> None:
         ("https://example.test/view", {"content-disposition": "filename=x.txt"}, 1),
         (
             "https://example.test/view",
-            {"content-disposition": "inline; filename = \"file.pdf\""},
+            {"content-disposition": 'inline; filename = "file.pdf"'},
             1,
         ),
         (

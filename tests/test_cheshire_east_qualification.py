@@ -461,8 +461,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
     paged = cheshire.parse_search_boundary(
         _search_results().replace(
             b"</table>",
-            b'</table><nav class="pagination">'
-            b'<a href="?page=2">Next</a></nav>',
+            b'</table><nav class="pagination"><a href="?page=2">Next</a></nav>',
         )
     )
     assert paged.reported_total is None
@@ -761,12 +760,9 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_results().replace(
             b"<td>24/0001D</td>", b'<td class="hidden">24/0001D</td>'
         ),
-        _weekly_results()
-        + _weekly_results().replace(b"<table>", b'<table hidden>', 1),
+        _weekly_results() + _weekly_results().replace(b"<table>", b"<table hidden>", 1),
         b'<main class="hidden">' + _weekly_results() + b"</main>",
-        b'<main style="visibility:hidden!important">'
-        + _weekly_results()
-        + b"</main>",
+        b'<main style="visibility:hidden!important">' + _weekly_results() + b"</main>",
     )
     for body in invalid_pages:
         with pytest.raises(cheshire.CheshireEastParseError):
