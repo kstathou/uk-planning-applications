@@ -711,6 +711,7 @@ def _assert_pagination_inventory(
     *,
     pages: int,
     page_index: int,
+    field: str = "result pagination inventory",
 ) -> None:
     observed_pages = {
         int(match.group(1))
@@ -725,7 +726,7 @@ def _assert_pagination_inventory(
     if not required_pages.issubset(observed_pages) or any(
         observed < 0 or observed >= pages for observed in observed_pages
     ):
-        _raise_parse("result pagination inventory")
+        _raise_parse(field)
 
 
 def _required_control_int(soup: BeautifulSoup, name: str) -> int:
@@ -1021,13 +1022,12 @@ def _parse_document_page(
     if len(documents) != expected_rows:
         raise PeakDistrictCountMismatchError(expected_rows, len(documents))
     pages = max(1, (reported + page_size - 1) // page_size)
-    observed_pages = {
-        int(match.group(1))
-        for link in container.select(".pagination a[onclick]")
-        if (match := _PAGE_PATTERN.search(str(link.get("onclick", "")))) is not None
-    }
-    if observed_pages != set(range(pages)):
-        _raise_parse("document pagination inventory")
+    _assert_pagination_inventory(
+        soup,
+        pages=pages,
+        page_index=page_index,
+        field="document pagination inventory",
+    )
     return _DocumentPage(
         documents=documents,
         reported=reported,
