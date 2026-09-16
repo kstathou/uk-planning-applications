@@ -938,14 +938,27 @@ class SqliteStore:
             )
         return tuple(states)
 
-    def run_statuses(self) -> tuple[RunStatus, ...]:
-        """Return durable run states in creation order."""
-        return tuple(
-            RunStatus(row["status"])
-            for row in self._connection.execute(
+    def run_statuses(
+        self,
+        authority_id: AuthorityId | None = None,
+    ) -> tuple[RunStatus, ...]:
+        """Return durable run states in creation order, optionally scoped."""
+        if authority_id is None:
+            rows = self._connection.execute(
                 "SELECT status FROM run_details ORDER BY rowid"
             )
-        )
+        else:
+            rows = self._connection.execute(
+                """
+                SELECT details.status
+                FROM run_details AS details
+                JOIN runs AS run ON run.id = details.run_id
+                WHERE run.authority_id = ?
+                ORDER BY details.rowid
+                """,
+                (authority_id,),
+            )
+        return tuple(RunStatus(row["status"]) for row in rows)
 
     def qualification_snapshot(
         self,
@@ -1036,11 +1049,16 @@ class SqliteStore:
             unmapped_records=counts["unmapped_records"],
         )
 
-    def metrics_totals(self) -> RunMetrics:
-        """Aggregate completed collection costs for dashboard display."""
+    def metrics_totals(
+        self,
+        authority_id: AuthorityId | None = None,
+    ) -> RunMetrics:
+        """Aggregate collection costs, optionally scoped to one authority."""
+        where = "" if authority_id is None else "WHERE run.authority_id = ?"
+        parameters = () if authority_id is None else (authority_id,)
         row = next(
             self._connection.execute(
-                """
+                f"""
                 SELECT
                     COALESCE(SUM(request_count), 0) AS request_count,
                     COALESCE(SUM(transferred_bytes), 0) AS transferred_bytes,
@@ -1049,8 +1067,11 @@ class SqliteStore:
                     COALESCE(SUM(attachment_body_requests), 0)
                         AS attachment_body_requests,
                     COALESCE(SUM(storage_growth_bytes), 0) AS storage_growth_bytes
-                FROM run_details
-                """
+                FROM run_details AS details
+                JOIN runs AS run ON run.id = details.run_id
+                {where}
+                """,  # noqa: S608 -- only the fixed WHERE clause above is interpolated
+                parameters,
             )
         )
         return RunMetrics(

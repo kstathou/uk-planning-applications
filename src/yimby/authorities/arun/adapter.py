@@ -51,6 +51,7 @@ _SEARCH_URL = f"{BASE_URL}/planningSearch"
 _DATE_FORMATS = ("%d-%m-%y", "%d/%m/%Y", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_COLUMNS = 5
+_RESULT_COLUMNS = 4
 _OPEN_HISTORY_START = date(1948, 1, 1)
 _OPEN_ANNUAL_END = date(2023, 12, 31)
 _DECEMBER = 12
@@ -173,7 +174,7 @@ class ArunCompletedQuery(FrozenModel):
     """One fully enumerated query in plan order."""
 
     key: str
-    reported_count: int = Field(ge=0, lt=_RESULT_CAP)
+    reported_count: int | None = Field(default=None, ge=0, lt=_RESULT_CAP)
     enumerated_count: int = Field(ge=0, lt=_RESULT_CAP)
     references: tuple[str, ...]
     initial_evidence: EvidenceDigest
@@ -183,7 +184,10 @@ class ArunCompletedQuery(FrozenModel):
     def counts_agree(self) -> Self:
         """Reject summaries that conceal incomplete enumeration."""
         if (
-            self.reported_count != self.enumerated_count
+            (
+                self.reported_count is not None
+                and self.reported_count != self.enumerated_count
+            )
             or self.enumerated_count != len(self.references)
             or len(self.references) != len(set(self.references))
         ):
@@ -433,7 +437,10 @@ class ArunAdapter:
                 initial_capture,
             )
             pending_evidence = ()
-            if len(initial.references) > initial.reported:
+            if (
+                initial.reported is not None
+                and len(initial.references) > initial.reported
+            ):
                 raise ArunCountMismatchError(initial.reported, len(initial.references))
             if isinstance(progress, ArunAwaitingShowAll):
                 replay_changed = (
@@ -442,7 +449,10 @@ class ArunAdapter:
                     != progress.initial_references
                 )
                 if replay_changed:
-                    if len(initial.references) == initial.reported:
+                    if (
+                        initial.reported is None
+                        or len(initial.references) == initial.reported
+                    ):
                         if initial.has_show_all:
                             raise ArunQueryReplayError
                         fresh, _ = _fresh(
@@ -481,11 +491,7 @@ class ArunAdapter:
                         initial_evidence=initial_capture.digest,
                         seen_references=progress.seen_references,
                     )
-                    cursor = ArunLiveCursor(
-                        scope=cursor.scope,
-                        plan=cursor.plan,
-                        progress=progress,
-                    )
+                    cursor = cursor.model_copy(update={"progress": progress})
                     yield DiscoveryBatch(
                         references=(),
                         next_checkpoint=ArunCheckpointV1(cursor=cursor),
@@ -499,7 +505,10 @@ class ArunAdapter:
                     )
                     cursor = cursor.model_copy(update={"progress": progress})
             else:
-                if len(initial.references) == initial.reported:
+                if (
+                    initial.reported is None
+                    or len(initial.references) == initial.reported
+                ):
                     if initial.has_show_all:
                         raise ArunQueryReplayError
                     fresh, _ = _fresh(
@@ -549,13 +558,10 @@ class ArunAdapter:
             expanded_capture = await session.fetch(
                 _show_all_request(initial.show_all_form, query)
             )
-            expanded = _parse_search_results(
-                expanded_capture.body,
-                expected_reported=progress.reported_count,
-            )
+            expanded = _parse_search_results(expanded_capture.body)
             if (
                 expanded.has_show_all
-                or expanded.reported != progress.reported_count
+                or expanded.reported not in (None, progress.reported_count)
                 or len(expanded.references) != progress.reported_count
             ):
                 raise ArunCountMismatchError(
@@ -716,7 +722,7 @@ class ArunAdapter:
             authority_id=self.manifest.id,
             reference=snapshot.reference,
             proposal=payload.proposal_text,
-            status=payload.decision_status.casefold().replace(" ", "-"),
+            status="-".join(payload.decision_status.casefold().split()),
             documents=tuple(
                 DocumentRecord(title=item.title, url=item.url)
                 for item in payload.documents
@@ -727,7 +733,7 @@ class ArunAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="arun-v3",
+            normaliser_version="arun-v4",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
                 decision=(
@@ -765,7 +771,7 @@ class ArunAdapter:
 
 class _SearchResults(FrozenModel):
     references: tuple[SourceReference, ...]
-    reported: int
+    reported: int | None
     show_all_form: ArunShowAllForm | None = None
 
     @property
@@ -906,8 +912,6 @@ def _show_all_request(
 
 def _parse_search_results(
     body: bytes,
-    *,
-    expected_reported: int | None = None,
 ) -> _SearchResults:
     soup = BeautifulSoup(body, "html.parser")
     if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
@@ -917,7 +921,6 @@ def _parse_search_results(
     reported = _parse_reported_count(
         soup,
         text,
-        expected_reported,
         len(found),
     )
     return _SearchResults(
@@ -934,7 +937,7 @@ def _parse_result_references(soup: BeautifulSoup) -> tuple[SourceReference, ...]
         href = str(link.get("href", ""))
         resolved = urljoin(f"{BASE_URL}/", href)
         parts = urlsplit(resolved)
-        values = parse_qs(parts.query)
+        values = parse_qs(parts.query, keep_blank_values=True)
         references = values.get("reference", [])
         if len(references) != 1 or not references[0]:
             _raise_parse("result reference")
@@ -957,7 +960,7 @@ def _validated_detail_locator(locator: str, expected_reference: str) -> str:
     resolved = urljoin(f"{BASE_URL}/", locator)
     parts = urlsplit(resolved)
     base = urlsplit(BASE_URL)
-    query = parse_qs(parts.query)
+    query = parse_qs(parts.query, keep_blank_values=True)
     allowed_queries = (
         {"reference": [expected_reference]},
         {"reference": [expected_reference], "from": ["planningSearch"]},
@@ -973,49 +976,72 @@ def _validated_detail_locator(locator: str, expected_reference: str) -> str:
     return resolved
 
 
-def _parse_reported_count(
+def _parse_reported_count(  # noqa: RET503
     soup: BeautifulSoup,
     text: str,
-    expected_reported: int | None,
     reference_count: int,
-) -> int:
+) -> int | None:
     if "retrieve more than 200 results" in text.casefold():
         raise ArunResultCapError
-    count_element = soup.select_one("[data-result-count]")
-    partial_match = re.search(
-        r"First\s+\d+\s+results\s+shown,\s+there\s+are\s+(\d+)\s+in\s+total",
-        text,
-        re.IGNORECASE,
+    partial_counts = tuple(
+        match
+        for element in soup.select("strong")
+        if (
+            match := re.fullmatch(
+                r"First\s+\d+\s+results\s+shown,\s+there\s+are\s+(\d+)\s+in\s+total",
+                element.get_text(" ", strip=True),
+                re.IGNORECASE,
+            )
+        )
     )
-    match = re.search(r"\b(\d+)\s+(?:records?|results?)\b", text, re.IGNORECASE)
-    if isinstance(count_element, Tag):
-        reported = int(str(count_element.get("data-result-count")))
-    elif partial_match is not None:
-        reported = int(partial_match.group(1))
-    elif match is not None:
-        reported = int(match.group(1))
-    elif (
-        "no applications found for entered search criteria" in text.casefold()
-        or "no records" in text.casefold()
-        or "no results" in text.casefold()
-    ):
-        reported = 0
-    elif expected_reported is not None:
-        reported = expected_reported
-    elif _is_explicit_complete_result_page(soup, reference_count):
-        reported = reference_count
-    else:
+    if len(partial_counts) > 1:
         _raise_parse("reported result count")
-    if reported >= _RESULT_CAP:
-        raise ArunResultCapError
-    return reported
+    if partial_counts:
+        reported = int(partial_counts[0].group(1))
+        if reported >= _RESULT_CAP:
+            raise ArunResultCapError
+        return reported
+    if _is_explicit_empty_result_page(soup, reference_count):
+        return 0
+    if _is_explicit_complete_result_page(soup, reference_count):
+        if reference_count >= _RESULT_CAP:
+            raise ArunResultCapError
+        return None
+    _raise_parse("reported result count")
+
+
+def _is_explicit_empty_result_page(
+    soup: BeautifulSoup,
+    reference_count: int,
+) -> bool:
+    forms = tuple(
+        form
+        for form in soup.select(
+            'form[name="OcellaPlanningSearch"][action="planningSearch"]'
+        )
+        if isinstance(form, Tag) and str(form.get("method", "")).casefold() == "post"
+    )
+    if len(forms) != 1 or reference_count != 0:
+        return False
+    try:
+        _parse_search_form(soup.encode())
+    except ArunParseError:
+        return False
+    messages = tuple(
+        message
+        for message in forms[0].select("span")
+        if _normalise_label(message.get_text(" ", strip=True))
+        == "no applications found for entered search criteria"
+        and str(message.get("style", "")).replace(" ", "").casefold() == "color:maroon"
+    )
+    return len(messages) == 1
 
 
 def _is_explicit_complete_result_page(
     soup: BeautifulSoup,
     reference_count: int,
 ) -> bool:
-    forms = tuple(soup.select('form[action="planningSearch"]'))
+    forms = tuple(soup.select('form[name="search"][action="planningSearch"]'))
     if len(forms) != 1 or not isinstance(forms[0], Tag):
         return False
     form = forms[0]
@@ -1034,12 +1060,16 @@ def _is_explicit_complete_result_page(
         )
         == ("reference", "location", "proposal", "status")
     )
+    rows = result_tables[0].select("tr:has(td)") if result_tables else ()
     return (
         reference_count > 0
         and str(form.get("method", "")).casefold() == "post"
         and len(back_controls) == 1
         and len(result_tables) == 1
-        and len(result_tables[0].select("tr:has(td)")) == reference_count
+        and len(rows) == reference_count
+        and all(
+            len(row.find_all("td", recursive=False)) == _RESULT_COLUMNS for row in rows
+        )
     )
 
 
@@ -1079,7 +1109,7 @@ def _document_request(body: bytes, expected_reference: str) -> PortalRequest:
     action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
     parts = urlsplit(action)
     base = urlsplit(BASE_URL)
-    query = parse_qs(parts.query)
+    query = parse_qs(parts.query, keep_blank_values=True)
     if (
         str(form.get("method", "")).casefold() != "post"
         or parts.scheme != "https"
@@ -1147,18 +1177,23 @@ def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
 
 
 def _parse_document_row(cells: list[Tag]) -> ArunDocumentV1:
-    if len(cells) < _DOCUMENT_COLUMNS:
+    if len(cells) != _DOCUMENT_COLUMNS:
         _raise_parse("document row")
     link = cells[0].select_one('a[href*="viewDocument"]')
     if not isinstance(link, Tag):
         _raise_parse("document link")
     url = HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))
     parts = urlsplit(str(url))
-    query = parse_qs(parts.query)
+    base = urlsplit(BASE_URL)
+    query = parse_qs(parts.query, keep_blank_values=True)
     if (
-        parts.netloc != urlsplit(BASE_URL).netloc
-        or not parts.path.endswith("/viewDocument")
+        parts.scheme != "https"
+        or parts.netloc != base.netloc
+        or parts.path != f"{base.path}/viewDocument"
+        or parts.fragment
+        or set(query) != {"file", "module"}
         or len(query.get("file", [])) != 1
+        or not query["file"][0]
         or query.get("module") != ["pl"]
     ):
         _raise_parse("document link")
@@ -1247,7 +1282,7 @@ def _complete_query(
 
 def _completed_query(
     query: ArunQuery,
-    reported_count: int,
+    reported_count: int | None,
     references: tuple[SourceReference, ...],
     initial_evidence: EvidenceDigest,
     expanded_evidence: EvidenceDigest | None,

@@ -51,7 +51,7 @@ from yimby.store import SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("arun")
-_RECEIPT_NAME = "arun-qualification-v2.json"
+_RECEIPT_NAME = "arun-qualification-v3.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -79,8 +79,9 @@ class QualificationQuery(FrozenModel):
     """One canonical query and its reconciled result count."""
 
     query: ArunQuery
-    reported_count: int = Field(ge=0, lt=200)
+    source_reported_count: int | None = Field(default=None, ge=0, lt=200)
     enumerated_count: int = Field(ge=0, lt=200)
+    references: tuple[str, ...]
     initial_evidence_digest: EvidenceDigest
     expanded_evidence_digest: EvidenceDigest | None = None
 
@@ -146,10 +147,10 @@ class WeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class ArunQualificationReceiptV2(FrozenModel):
+class ArunQualificationReceiptV3(FrozenModel):
     """Versioned result of a complete local Arun bootstrap qualification."""
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     authority_id: Literal["arun"] = "arun"
     created_at: datetime
     scope: QualificationScope
@@ -340,8 +341,8 @@ def _validate_query_evidence(  # noqa: PLR0911
         return None
     parsed_initial = _parse_search_results(initial.body)
     if (
-        parsed_initial.reported != completed.reported_count
-        or len(parsed_initial.references) > completed.reported_count
+        parsed_initial.reported is not None
+        and parsed_initial.reported != completed.reported_count
     ):
         return None
     digests = [completed.initial_evidence]
@@ -355,26 +356,28 @@ def _validate_query_evidence(  # noqa: PLR0911
         expanded = store.evidence_capture(completed.expanded_evidence)
         if expanded is None or not _capture_is_valid(expanded):
             return None
-        parsed_final = _parse_search_results(
-            expanded.body,
-            expected_reported=completed.reported_count,
-        )
+        parsed_final = _parse_search_results(expanded.body)
         digests.append(completed.expanded_evidence)
-        if parsed_final.has_show_all:
+        if (
+            parsed_initial.reported is None
+            or parsed_final.has_show_all
+            or parsed_final.reported not in (None, parsed_initial.reported)
+        ):
             return None
     final_references = tuple(
         reference.reference for reference in parsed_final.references
     )
     if (
-        parsed_final.reported != completed.reported_count
-        or final_references != completed.references
+        final_references != completed.references
+        or len(final_references) != completed.enumerated_count
     ):
         return None
     return _ValidatedQueryEvidence(
         inventory=QualificationQuery(
             query=query,
-            reported_count=completed.reported_count,
-            enumerated_count=completed.enumerated_count,
+            source_reported_count=parsed_initial.reported,
+            enumerated_count=len(final_references),
+            references=final_references,
             initial_evidence_digest=completed.initial_evidence,
             expanded_evidence_digest=completed.expanded_evidence,
         ),
@@ -600,7 +603,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> ArunQualificationReceiptV2:
+) -> ArunQualificationReceiptV3:
     registry = AuthorityRegistry((ARUN_PACKAGE,), PILOT_LIVE_STATUS)
     collector = Collector(registry, store)
     window = DiscoveryWindow(
@@ -609,7 +612,7 @@ async def _qualify(
         include_open=True,
     )
     initial_cost = await _collect_once(collector, window, session_factory)
-    totals = store.metrics_totals()
+    totals = store.metrics_totals(_AUTHORITY_ID)
     bootstrap_cost = QualificationCost(
         request_count=totals.request_count,
         transferred_bytes=totals.transferred_bytes,
@@ -627,7 +630,7 @@ async def _qualify(
 
     rerun_cost = await _collect_once(collector, window, session_factory)
     final_state = _state(store, config.scope)
-    run_statuses = store.run_statuses()
+    run_statuses = store.run_statuses(_AUTHORITY_ID)
     final_checks = (
         *_base_checks(
             store,
@@ -659,14 +662,13 @@ async def _qualify(
                 and run_statuses[-_REQUIRED_SUCCESSFUL_RUNS:]
                 == (RunStatus.SUCCEEDED, RunStatus.SUCCEEDED)
                 and RunStatus.RUNNING not in run_statuses
-                and RunStatus.INTERRUPTED not in run_statuses
             ),
         ),
     )
     _require(final_checks)
     if final_state.search_form_evidence_digest is None:
         raise QualificationFailedError(("search-form-evidence",))
-    return ArunQualificationReceiptV2(
+    return ArunQualificationReceiptV3(
         created_at=now(),
         scope=config.scope,
         search_form_evidence_digest=final_state.search_form_evidence_digest,
@@ -689,7 +691,7 @@ async def _qualify(
     )
 
 
-def _write_receipt(path: Path, receipt: ArunQualificationReceiptV2) -> None:
+def _write_receipt(path: Path, receipt: ArunQualificationReceiptV3) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:

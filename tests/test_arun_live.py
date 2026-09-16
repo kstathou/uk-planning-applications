@@ -96,11 +96,15 @@ def _complete_results(references: tuple[str, ...]) -> bytes:
 
 
 def _empty_results() -> bytes:
-    return (
-        b'<form method="post" name="OcellaPlanningSearch" action="planningSearch">'
-        b'<span style="color:maroon">'
-        b"No applications found for entered search criteria"
-        b"</span></form>"
+    return _search_form().replace(
+        b"</form>",
+        (
+            b"<strong>"
+            b'<span style="color:maroon">'
+            b"No applications found for entered search criteria"
+            b"</span></strong></form>"
+        ),
+        1,
     )
 
 
@@ -449,7 +453,8 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         arun._parse_search_results(b"The archive contains 7 records")
     with pytest.raises(arun.ArunParseError, match="reported result count"):
         arun._parse_search_results(
-            b'<div>No records are deleted</div><a href="planningDetails?reference=A">A</a>'
+            b"<div>No records are deleted</div>"
+            b'<a href="planningDetails?reference=A">A</a>'
         )
 
     with pytest.raises(arun.ArunParseError, match="reported result count"):
@@ -868,8 +873,10 @@ def test_arun_form_and_show_all_structure_fail_closed() -> None:
     with pytest.raises(arun.ArunQueryReplayError):
         arun._show_all_request(wrong_action, query)
     with pytest.raises(arun.ArunResultCapError):
-        arun._parse_search_results(b'<p data-result-count="200">200 records</p>')
-    with pytest.raises(arun.ArunParseError, match="show all form"):
+        arun._parse_search_results(
+            b"<strong>First 20 results shown, there are 200 in total</strong>"
+        )
+    with pytest.raises(arun.ArunParseError):
         arun._parse_search_results(
             _partial_results(fields)
             + _partial_results(fields).replace(b"BR/1/26/PL", b"BR/2/26/PL")
@@ -1417,10 +1424,15 @@ def test_arun_qualification_scopes_costs_and_allows_interrupted_history(
         "2026-09-16",
         "--include-open",
     ]
-    assert module.main(args, session_factory=lambda: _Session(_QualificationResponder())) == 0
+    assert (
+        module.main(args, session_factory=lambda: _Session(_QualificationResponder()))
+        == 0
+    )
     first = json.loads(capsys.readouterr().out)
 
-    store = SqliteStore(data_dir / "yimby.sqlite3", EvidenceStore(data_dir / "evidence"))
+    store = SqliteStore(
+        data_dir / "yimby.sqlite3", EvidenceStore(data_dir / "evidence")
+    )
     foreign_run = store.begin_run(AuthorityId("foreign"))
     store.finish_run(
         foreign_run,
@@ -1506,5 +1518,7 @@ def test_arun_qualification_does_not_publish_over_corrupt_evidence(
     evidence_path.write_bytes(b"tampered")
 
     assert module.main([*args, "--resume"], session_factory=factory) == 1
-    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert json.loads(capsys.readouterr().err)["error"] == (
+        "runtime-failure" if evidence_kind == "application" else "qualification-failed"
+    )
     assert receipt_path.read_text(encoding="utf-8") == original
