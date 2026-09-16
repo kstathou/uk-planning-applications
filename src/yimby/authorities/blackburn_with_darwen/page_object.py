@@ -26,6 +26,7 @@ from .adapter import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
     from playwright.async_api import Page
 
@@ -65,9 +66,16 @@ class BlackburnPlaywrightSession(PlaywrightPortalSession):
         cls,
         *,
         worker: BrowserWorker | None = None,
+        storage_state: Path | None = None,
     ) -> BlackburnPlaywrightSession:
         """Launch the shared guarded Playwright boundary."""
-        return cls(await PlaywrightBoundary.create(headless=False), worker=worker)
+        return cls(
+            await PlaywrightBoundary.create(
+                headless=False,
+                storage_state=storage_state,
+            ),
+            worker=worker,
+        )
 
     async def search(self, query: BlackburnQueryV1) -> EvidenceCapture:
         """Submit one exact inclusive date query."""

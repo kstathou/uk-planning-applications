@@ -195,7 +195,12 @@ class BlackburnWithDarwenAdapter:
         name="Blackburn with Darwen Borough Council",
         kind=AuthorityKind.UNITARY,
         sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),),
-        capabilities=AuthorityCapabilities(discovery=CapabilityState.UNKNOWN),
+        capabilities=AuthorityCapabilities(
+            discovery=CapabilityState.SUPPORTED,
+            documents=CapabilityState.SUPPORTED,
+            comments=CapabilityState.UNSUPPORTED,
+            coordinates=CapabilityState.SUPPORTED,
+        ),
     )
 
     async def discover(
