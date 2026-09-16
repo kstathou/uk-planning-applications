@@ -1598,6 +1598,49 @@ def test_cheshire_nonzero_recent_results_remain_unproved(tmp_path: Path) -> None
     assert checks["recent-window-fidelity"] == "failed"
 
 
+def test_cheshire_current_live_search_contract_is_journalled_end_to_end(
+    tmp_path: Path,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=lambda: _QualificationSession(
+            search_form=_live_search_form(),
+            search_results=_live_search_results(),
+        ),
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    receipt = module.CheshireEastQualificationBlockerReceiptV2.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    recent_fields = {
+        field.name: field.value for field in receipt.attempted_requests[1].form
+    }
+    assert recent_fields["fa"] == ""
+    assert receipt.source_contract.recent.row_count == 1
+    assert receipt.source_contract.recent.references == ("26/3335/PRIOR-1A",)
+    assert tuple(blocker.code for blocker in receipt.blockers) == (
+        "recent-window-terminality-unproven",
+        "weekly-list-terminality-unproven",
+        "older-open-inventory-unproven",
+    )
+
+
 def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
     tmp_path: Path,
 ) -> None:
