@@ -524,6 +524,18 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b"</div></main>"
         ),
         (
+            b'<main class="hidden"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
+        (
+            b'<main style="display:none!important"><div class="col-sm-12 col-md-12 '
+            b'animation-fadeIn application-list"><div class="push-30-t">'
+            b'<strong class="text-danger">No Results Found.</strong></div>'
+            b"</div></main>"
+        ),
+        (
             b'<head><div class="col-sm-12 col-md-12 animation-fadeIn '
             b'application-list"><div class="push-30-t"><strong '
             b'class="text-danger">No Results Found.</strong></div></div></head>'
@@ -569,6 +581,22 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b"<tr><td>26/3335/PRIOR-1A</td><td>Full</td>"
             b"<td>Elsewhere</td><td>Other</td><td><button "
             b'class="view_application" data-id="9">View</button></td></tr></table>',
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b'No Results Found.</strong></div><nav class="pagination">'
+            b'<a href="?page=2" aria-label="Next"></a></nav></div>'
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b'No Results Found.</strong></div><a rel="next" href="?page=2"></a></div>'
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b'No Results Found.</strong></div><span data-result-count="1"></span></div>'
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -703,6 +731,10 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_results().replace(b"<td>24/0001D</td>", b"<td></td>"),
         _weekly_results().replace(b"24/0002D", b"24/0001D"),
         _weekly_results().replace(b"id=400002", b"id=400001"),
+        b'<main class="hidden">' + _weekly_results() + b"</main>",
+        b'<main style="visibility:hidden!important">'
+        + _weekly_results()
+        + b"</main>",
     )
     for body in invalid_pages:
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -818,6 +850,14 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
         ),
         (
             _detail().replace(b'style="display:none"', b'style="display:none-block"'),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            b'<main class="hidden">' + _detail() + b"</main>",
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            b'<main style="display:none !important">' + _detail() + b"</main>",
             cheshire.CheshireEastParseError,
         ),
     )
