@@ -40,7 +40,9 @@ Each authority owns a versioned Pydantic model for its native payload and checkp
 `NormalisedObservation` holds the common application, document, comment, event,
 relationship, consultation, condition, and location records. The complete
 authority-native JSON is retained separately. Mapped core fields carry the
-evidence digest that supports them.
+evidence digest that supports them. Common document records retain their
+source title and URL plus optional source category and published date; the
+store persists those fields without opening the attachment body.
 
 ## Boundaries
 
@@ -51,7 +53,10 @@ Raw HTML, JSON, browser objects, and SQLite rows stay behind their adapters. Int
 The transport accepts search, detail, and comment requests. It has no
 attachment-body request type. The live client blocks known attachment paths and
 download endpoints, rejects attachment media types or content dispositions
-before it consumes the response body, and aborts image and media browser
+before it consumes the response body, validates every redirect destination
+against an optional request-owned origin and path boundary before following it,
+rate-limits every physical request in a redirect chain while retaining the host
+slot through response consumption, and aborts image and media browser
 subresources. The collector also compares retrieved request URLs with emitted
 document links.
 
@@ -64,6 +69,8 @@ store calls serialize on the same event-loop thread and writer connection.
 The store enforces these invariants:
 
 - Queue insertion and checkpoint advancement share one transaction.
+- A completed authority checkpoint may roll to a new explicit discovery scope;
+  a partial checkpoint remains bound to its original scope and rejects drift.
 - Application identity uses authority and portal identifiers, never an address alone.
 - A semantic hash excludes transport timestamps, tokens, and irrelevant ordering.
 - An unchanged observation updates freshness without adding a version.
@@ -79,7 +86,13 @@ The store enforces these invariants:
   than 90 days are next due after 90 days.
 - A normaliser rebuild reads retained native payloads and never contacts a portal.
 
-Evidence uses gzip-compressed, content-addressed files. The store writes the file before it commits its digest. A crash can leave an unreferenced file, but it cannot leave a database row that points to a missing file.
+Evidence uses gzip-compressed, content-addressed files. The store writes the
+file before it commits its digest, and every observation links to each evidence
+digest that produced it. Qualification reconciles those historical links, the
+complete evidence registry, canonical digest paths, decompressed body hashes,
+and every file in the filesystem inventory. A crash can leave an unreferenced
+or partial file, but qualification rejects it; it cannot leave a database row
+that points to a missing file.
 
 ## Module ownership
 

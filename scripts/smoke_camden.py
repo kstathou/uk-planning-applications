@@ -10,13 +10,10 @@ import asyncio
 import json
 from typing import TYPE_CHECKING
 
-from yimby.adapters import AuthorityPackage
-from yimby.authorities.camden.adapter import (
-    CamdenAdapter,
-    CamdenApplicationV1,
-    CamdenCheckpointV1,
-)
-from yimby.http_transport import HttpxPortalSession
+from yimby.authorities.camden import CamdenPackage
+from yimby.authorities.camden.discovery import CAMDEN_SOURCE
+from yimby.authorities.camden.open_data import create_session
+from yimby.domain import SourceReference
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -31,11 +28,10 @@ class SmokeAttachmentPolicyError(RuntimeError):
 
 
 async def _smoke(reference: str) -> dict[str, object]:
-    adapter = CamdenAdapter()
-    package = AuthorityPackage(adapter, CamdenApplicationV1, CamdenCheckpointV1)
-    session = HttpxPortalSession()
+    package = CamdenPackage()
+    session = create_session()
     try:
-        resolved = await adapter.resolve_exact(session, reference)
+        resolved = SourceReference(source_id=CAMDEN_SOURCE, reference=reference)
         observation = await package.collect(session, resolved)
         if session.attachment_body_requests:
             raise SmokeAttachmentPolicyError

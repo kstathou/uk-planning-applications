@@ -46,6 +46,10 @@ class AttachmentBodyBlockedError(RuntimeError):
     """A request attempted to retrieve attachment content."""
 
 
+class RedirectBoundaryError(RuntimeError):
+    """A redirect target fell outside the request's explicit live boundary."""
+
+
 class RequestIntent(StrEnum):
     """Permitted reasons for retrieving portal content."""
 
@@ -75,6 +79,48 @@ class RequestHeader(FrozenModel):
     value: str = Field(min_length=1)
 
 
+class RedirectBoundary(FrozenModel):
+    """Origin and paths a live request may follow through redirects."""
+
+    origin: HttpUrl
+    exact_paths: tuple[str, ...] = ()
+    path_prefixes: tuple[str, ...] = ()
+    query_paths: tuple[str, ...] | None = None
+    exact_urls: tuple[HttpUrl, ...] = ()
+
+    def allows(self, url: str) -> bool:
+        """Return whether a destination remains inside the declared boundary."""
+        expected = urlsplit(str(self.origin))
+        candidate = urlsplit(url)
+        same_origin = (
+            candidate.scheme,
+            candidate.hostname,
+            candidate.port,
+            candidate.username,
+            candidate.password,
+        ) == (
+            expected.scheme,
+            expected.hostname,
+            expected.port,
+            None,
+            None,
+        )
+        allowed_path = candidate.path in self.exact_paths or any(
+            candidate.path.startswith(prefix) for prefix in self.path_prefixes
+        )
+        query_allowed = (
+            not candidate.query
+            or self.query_paths is None
+            or candidate.path in self.query_paths
+        )
+        exact_url = url in {str(item) for item in self.exact_urls}
+        return (
+            same_origin
+            and not candidate.fragment
+            and ((allowed_path and query_allowed) or exact_url)
+        )
+
+
 class PortalRequest(FrozenModel):
     """One allowlisted portal request."""
 
@@ -83,6 +129,7 @@ class PortalRequest(FrozenModel):
     method: RequestMethod = RequestMethod.GET
     form: tuple[FormField, ...] = ()
     headers: tuple[RequestHeader, ...] = ()
+    redirect_boundary: RedirectBoundary | None = None
 
     @model_validator(mode="after")
     def form_requires_post(self) -> Self:

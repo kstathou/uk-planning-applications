@@ -5,9 +5,9 @@ This reference records the browser census taken on 15–16 September 2026. A suc
 | Authority | Observed sources | Portal shape | Browser result |
 |---|---|---|---|
 | Barnet | `publicaccess.barnet.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery and one detail record verified. See `authorities/barnet.md`. |
-| Camden | Current JSF search, Northgate record pages, and CMWebDrawer documents | Three linked services | An exact-reference search and one decided record were verified. See `authorities/camden.md`. |
+| Camden | Official Socrata Planning Applications dataset `2eiu-s2cw` | HTTP JSON API; historical portal sources retained offline | Primary metadata feed verified live; documents and comment text unsupported. See `authorities/camden.md`. |
 | Haringey | `londonboroughofharingey.my.site.com/pr/s/` | Salesforce public register | Seven-day discovery, one detail record, one explicit empty comment section, and its six-row file index were verified. See `authorities/haringey.md`. |
-| Devon County Council | `planning.devon.gov.uk/` | Custom register | A 90-day discovery query, explicit zero-result query, and one detail record were verified. See `authorities/devon.md`. |
+| Devon County Council | `planning.devon.gov.uk/` | Custom register | The exact advanced form, dated planning and appeal searches, six-page outstanding planning and two-page outstanding appeal searches, both detail routes, and metadata-only documents were verified. A persisted bootstrap produced 67 unique records. See `authorities/devon.md`. |
 | Peak District National Park Authority | AssureLive current portal plus legacy information portal | Two linked services | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED were exhausted. All 377 unique details and document-metadata indexes were persisted without attachment bodies. See `authorities/peak-district.md`. |
 | Arun | `www1.arun.gov.uk/aplanning/OcellaWeb/` | Ocella | One decided detail record and its document index were verified without opening attachment bodies. See `authorities/arun.md`. |
 | Old Oak and Park Royal Development Corporation | Citizen Portal plus `planningapi.agileapplications.co.uk` | Agile Applications | Exact bounded Registered and Determined searches, the complete current Registered set, detail, document metadata, and public responses were verified and qualified. See `authorities/opdc.md`. |
@@ -37,8 +37,10 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, OPDC, Peak District,
 and West Suffolk have recorded detail paths. OPDC, Peak District, and West
 Suffolk have completed receipt-backed persisted live bootstraps and are
-live-ready for their verified HTTP contracts. Cheshire East and Leeds have
-recorded discovery paths but inconclusive detail retrieval. Dorset has a
-verified map-client boundary without bounded application discovery. Blackburn
-and Birmingham remain blocked at their entry points. Every authority has a
-dated walkthrough, while unresolved paths remain explicit.
+live-ready for their verified HTTP contracts. Camden and Devon have also
+completed verified bootstraps, with their later weekly cycles still pending.
+Cheshire East and Leeds have recorded discovery paths but inconclusive detail
+retrieval. Dorset has a verified map-client boundary without bounded
+application discovery. Blackburn and Birmingham remain blocked at their entry
+points. Every authority has a dated walkthrough, while unresolved paths remain
+explicit.

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import sqlite3
 from contextlib import closing
@@ -26,6 +27,7 @@ from yimby.domain import (
     AuthorityId,
     AuthorityManifest,
     AuthorityOperationalState,
+    AuthorityReferenceSets,
     CapabilityState,
     CollectedObservation,
     CommentRecord,
@@ -35,6 +37,8 @@ from yimby.domain import (
     DurableDiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
+    EvidenceIntegrityIssue,
+    EvidenceIntegrityReport,
     FrozenModel,
     NormalisedObservation,
     QualificationSnapshot,
@@ -62,6 +66,7 @@ if TYPE_CHECKING:
 _DOCUMENTS = TypeAdapter(tuple[DocumentRecord, ...])
 _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
+_REQUEST_FORM_PARTS = 2
 
 
 class _RetainedEvidenceCapture(FrozenModel):
@@ -76,6 +81,56 @@ _RETAINED_EVIDENCE = TypeAdapter(tuple[_RetainedEvidenceCapture, ...])
 class _ApplicationSection(FrozenModel):
     proposal: str
     status: str
+
+
+class RetainedEvidenceRegistration(FrozenModel):
+    """One application's durable link to a registered evidence object."""
+
+    application_id: ApplicationId
+    observation_id: int
+    digest: EvidenceDigest
+    path: str
+    source_id: SourceId
+    reference: str
+    locator: str | None
+    response_url: str | None
+    native_json: str
+
+
+class RetainedDiscoveryEvidenceRegistration(FrozenModel):
+    """One discovery response linked to its exact query page."""
+
+    run_id: str
+    query_key: str
+    page: int
+    digest: EvidenceDigest
+    path: str
+    response_url: str | None
+    request_url: str | None
+    request_method: str | None
+    request_form: tuple[tuple[str, str], ...] | None
+
+
+class RegisteredEvidenceObject(FrozenModel):
+    """One digest and storage path present in the evidence registry."""
+
+    digest: EvidenceDigest
+    path: str
+
+
+class EvidenceRegistrationAudit(FrozenModel):
+    """Authority-scoped reconciliation facts for retained native evidence."""
+
+    application_count: int
+    observation_count: int
+    applications_with_evidence: int
+    observations_with_evidence: int
+    registrations: tuple[RetainedEvidenceRegistration, ...]
+    discovery_registrations: tuple[RetainedDiscoveryEvidenceRegistration, ...]
+    database_objects: tuple[RegisteredEvidenceObject, ...]
+    missing_digests: tuple[EvidenceDigest, ...]
+    unlinked_digests: tuple[EvidenceDigest, ...]
+    current_rebuild_coherent: bool
 
 
 class SqliteStore:
@@ -202,7 +257,16 @@ class SqliteStore:
         authority_id: AuthorityId,
         batch: DurableDiscoveryBatch,
     ) -> None:
-        """Queue references and advance their checkpoint atomically."""
+        """Retain evidence, queue references, and advance the checkpoint atomically."""
+        if bool(batch.evidence) != bool(
+            batch.evidence_key is not None and batch.evidence_page is not None
+        ):
+            msg = "discovery evidence requires a query key and page"
+            raise ValueError(msg)
+        evidence_paths = [
+            (retained, self._evidence.put(retained.capture))
+            for retained in batch.evidence
+        ]
         with self._connection:
             for reference in batch.references:
                 self._connection.execute(
@@ -222,6 +286,41 @@ class SqliteStore:
                         reference.locator,
                         run_id,
                         run_id,
+                    ),
+                )
+            for retained, path in evidence_paths:
+                capture = retained.capture
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO evidence(
+                        digest, path, source_url, media_type
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        capture.digest,
+                        self._evidence.relative_path(path),
+                        str(capture.url),
+                        capture.media_type,
+                    ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO discovery_evidence(
+                        authority_id, run_id, query_key, page, digest,
+                        response_url, request_url, request_method,
+                        request_form_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        authority_id,
+                        run_id,
+                        batch.evidence_key,
+                        batch.evidence_page,
+                        capture.digest,
+                        str(capture.url),
+                        str(retained.request_url),
+                        retained.request_method,
+                        json.dumps(retained.request_form, separators=(",", ":")),
                     ),
                 )
             self._connection.execute(
@@ -320,6 +419,14 @@ class SqliteStore:
                         str(capture.url),
                         capture.media_type,
                     ),
+                )
+                self._connection.execute(
+                    """
+                    INSERT OR IGNORE INTO observation_evidence(
+                        observation_id, digest, response_url
+                    ) VALUES (?, ?, ?)
+                    """,
+                    (observation_id, capture.digest, str(capture.url)),
                 )
             self._connection.execute(
                 """
@@ -601,6 +708,59 @@ class SqliteStore:
             )
         )
         return tuple(view for view in views if not view.suppressed)
+
+    def authority_application_ids(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[ApplicationId, ...]:
+        """Return every authority application, including suppressed records."""
+        return tuple(
+            ApplicationId(row["id"])
+            for row in self._connection.execute(
+                """
+                SELECT id FROM applications
+                WHERE authority_id = ? ORDER BY id
+                """,
+                (authority_id,),
+            )
+        )
+
+    def authority_semantic_state(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[tuple[str, str, str], ...]:
+        """Return current section hashes and completeness for idempotence proof."""
+        rows = self._connection.execute(
+            """
+            SELECT application.id AS application_id,
+                section_current.section AS state_kind,
+                semantic_versions.semantic_hash AS state_value
+            FROM applications AS application
+            JOIN section_current
+                ON section_current.application_id = application.id
+            JOIN semantic_versions
+                ON semantic_versions.id = section_current.version_id
+            WHERE application.authority_id = ?
+            UNION ALL
+            SELECT application.id AS application_id,
+                'completeness' AS state_kind,
+                observation.completeness_json AS state_value
+            FROM applications AS application
+            JOIN observations AS observation
+                ON observation.application_id = application.id
+            WHERE application.authority_id = ?
+                AND observation.id = (
+                    SELECT MAX(latest.id) FROM observations AS latest
+                    WHERE latest.application_id = application.id
+                )
+            ORDER BY application_id, state_kind
+            """,
+            (authority_id, authority_id),
+        )
+        return tuple(
+            (row["application_id"], row["state_kind"], row["state_value"])
+            for row in rows
+        )
 
     def search_applications(self, query: str) -> tuple[ApplicationView, ...]:
         """Search current local applications without exposing native payloads."""
@@ -1068,6 +1228,218 @@ class SqliteStore:
             unmapped_records=counts["unmapped_records"],
         )
 
+    def authority_completeness(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[Completeness, ...]:
+        """Return each authority application's latest section states."""
+        rows = self._connection.execute(
+            """
+            SELECT observation.completeness_json
+            FROM observations AS observation
+            JOIN applications AS application
+                ON application.id = observation.application_id
+            WHERE application.authority_id = ?
+                AND observation.id = (
+                    SELECT MAX(latest.id) FROM observations AS latest
+                    WHERE latest.application_id = observation.application_id
+                )
+            ORDER BY observation.application_id
+            """,
+            (authority_id,),
+        )
+        return tuple(
+            _COMPLETENESS.validate_json(row["completeness_json"]) for row in rows
+        )
+
+    def authority_reference_sets(
+        self,
+        authority_id: AuthorityId,
+    ) -> AuthorityReferenceSets:
+        """Return independent discovery, application, and rebuild identities."""
+
+        def references(table: str) -> tuple[SourceReference, ...]:
+            rows = self._connection.execute(
+                f"""
+                SELECT source_id, reference, locator FROM {table}
+                WHERE authority_id = ? ORDER BY source_id, reference
+                """,  # noqa: S608 - Table names are fixed below, never caller supplied.
+                (authority_id,),
+            )
+            return tuple(
+                SourceReference(
+                    source_id=SourceId(row["source_id"]),
+                    reference=row["reference"],
+                    locator=row["locator"],
+                )
+                for row in rows
+            )
+
+        return AuthorityReferenceSets(
+            discovery=references("discovery_queue"),
+            applications=references("applications"),
+            rebuild_inputs=references("native_rebuild_inputs"),
+        )
+
+    def evidence_integrity(
+        self,
+        authority_id: AuthorityId,
+    ) -> EvidenceIntegrityReport:
+        """Verify authority-linked evidence registration, gzip bodies, and digests."""
+        issues: list[EvidenceIntegrityIssue] = []
+        application_ids = tuple(
+            row["id"]
+            for row in self._connection.execute(
+                """
+                SELECT id FROM applications
+                WHERE authority_id = ? ORDER BY id
+                """,
+                (authority_id,),
+            )
+        )
+        rebuild_rows = {
+            row["application_id"]: row
+            for row in self._connection.execute(
+                """
+                SELECT application_id, evidence_digests_json
+                FROM native_rebuild_inputs
+                WHERE authority_id = ? ORDER BY application_id
+                """,
+                (authority_id,),
+            )
+        }
+        linked_digests: set[str] = set()
+        for application_id in application_ids:
+            row = rebuild_rows.get(application_id)
+            if row is None:
+                issues.append(
+                    EvidenceIntegrityIssue(
+                        digest=None,
+                        code="application-without-rebuild-input",
+                    )
+                )
+                continue
+            digests = tuple(
+                str(value) for value in json.loads(row["evidence_digests_json"])
+            )
+            if not digests:
+                issues.append(
+                    EvidenceIntegrityIssue(
+                        digest=None,
+                        code="application-without-evidence",
+                    )
+                )
+            linked_digests.update(digests)
+        linked_digests.update(
+            row["digest"]
+            for row in self._connection.execute(
+                """
+                SELECT DISTINCT digest FROM discovery_evidence
+                WHERE authority_id = ?
+                """,
+                (authority_id,),
+            )
+        )
+
+        manifest: list[tuple[str, str, int, int]] = []
+        captures_checked = 0
+        compressed_bytes = 0
+        uncompressed_bytes = 0
+        for digest in sorted(linked_digests):
+            captures_checked += 1
+            row = self._connection.execute(
+                "SELECT path FROM evidence WHERE digest = ?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                issues.append(
+                    EvidenceIntegrityIssue(
+                        digest=digest,
+                        code="unregistered-digest",
+                    )
+                )
+                continue
+            stored_path = str(row["path"])
+            expected_path = f"{digest[:2]}/{digest}.gz"
+            if stored_path != expected_path:
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="path-mismatch")
+                )
+                continue
+            path = self.evidence_root / stored_path
+            if not path.is_file():
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="missing-path")
+                )
+                continue
+            compressed = path.read_bytes()
+            compressed_bytes += len(compressed)
+            try:
+                body = gzip.decompress(compressed)
+            except (gzip.BadGzipFile, EOFError, OSError):
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="invalid-gzip")
+                )
+                continue
+            uncompressed_bytes += len(body)
+            manifest.append((digest, stored_path, len(compressed), len(body)))
+            if sha256(body).hexdigest() != digest:
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="digest-mismatch")
+                )
+        manifest_payload = json.dumps(
+            manifest,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        return EvidenceIntegrityReport(
+            captures_checked=captures_checked,
+            compressed_bytes=compressed_bytes,
+            uncompressed_bytes=uncompressed_bytes,
+            manifest_sha256=sha256(manifest_payload).hexdigest(),
+            issues=tuple(issues),
+        )
+
+    def discovery_evidence_count(self, authority_id: AuthorityId) -> int:
+        """Count distinct discovery captures retained for one authority."""
+        row = next(
+            self._connection.execute(
+                """
+                SELECT COUNT(DISTINCT digest) AS count
+                FROM discovery_evidence
+                WHERE authority_id = ?
+                """,
+                (authority_id,),
+            )
+        )
+        return int(row["count"])
+
+    def discovery_evidence_captures(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[EvidenceCapture, ...]:
+        """Rehydrate distinct discovery captures linked to one authority."""
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT evidence.digest, evidence.path, evidence.source_url,
+                evidence.media_type
+            FROM discovery_evidence
+            JOIN evidence ON evidence.digest = discovery_evidence.digest
+            WHERE discovery_evidence.authority_id = ?
+            ORDER BY evidence.digest
+            """,
+            (authority_id,),
+        )
+        return tuple(
+            self._evidence.read_capture(
+                EvidenceDigest(row["digest"]),
+                row["path"],
+                row["source_url"],
+                row["media_type"],
+            )
+            for row in rows
+        )
+
     def metrics_totals(self) -> RunMetrics:
         """Aggregate completed collection costs for dashboard display."""
         row = next(
@@ -1097,6 +1469,25 @@ class SqliteStore:
             self._connection.execute("SELECT COUNT(*) AS count FROM applications")
         )
         return int(row["count"])
+
+    def application_identities(
+        self, authority_id: AuthorityId
+    ) -> tuple[SourceReference, ...]:
+        """Return persisted source-qualified application identities."""
+        return tuple(
+            SourceReference(
+                source_id=SourceId(row["source_id"]),
+                reference=row["reference"],
+                locator=row["locator"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT source_id, reference, locator FROM applications
+                WHERE authority_id = ? ORDER BY source_id, reference
+                """,
+                (authority_id,),
+            )
+        )
 
     def observed_change_count(self) -> int:
         """Count source-observed section transitions, including reversions."""
@@ -1185,6 +1576,197 @@ class SqliteStore:
                 "SELECT digest, path, source_url, media_type "
                 "FROM evidence ORDER BY digest"
             )
+        )
+
+    def evidence_registration_audit(
+        self, authority_id: AuthorityId
+    ) -> EvidenceRegistrationAudit:
+        """Reconcile authority applications, native links, and evidence rows."""
+        registrations: list[RetainedEvidenceRegistration] = []
+        missing: list[EvidenceDigest] = []
+        rows = tuple(
+            self._connection.execute(
+                """
+                SELECT application.id AS application_id,
+                    observation.id AS observation_id,
+                    linked.digest,
+                    evidence.path,
+                    application.source_id,
+                    application.reference,
+                    application.locator,
+                    linked.response_url,
+                    native.payload_json AS native_json
+                FROM applications AS application
+                JOIN observations AS observation
+                    ON observation.application_id = application.id
+                JOIN observation_evidence AS linked
+                    ON linked.observation_id = observation.id
+                JOIN observation_native_versions AS observed_native
+                    ON observed_native.observation_id = observation.id
+                JOIN native_versions AS native
+                    ON native.application_id = observed_native.application_id
+                    AND native.payload_hash = observed_native.payload_hash
+                LEFT JOIN evidence ON evidence.digest = linked.digest
+                WHERE application.authority_id = ?
+                ORDER BY application.id, observation.id, linked.digest
+                """,
+                (authority_id,),
+            )
+        )
+        for row in rows:
+            digest = EvidenceDigest(row["digest"])
+            if row["path"] is None:
+                missing.append(digest)
+                continue
+            registrations.append(
+                RetainedEvidenceRegistration(
+                    application_id=ApplicationId(row["application_id"]),
+                    observation_id=row["observation_id"],
+                    digest=digest,
+                    path=row["path"],
+                    source_id=SourceId(row["source_id"]),
+                    reference=row["reference"],
+                    locator=row["locator"],
+                    response_url=row["response_url"],
+                    native_json=row["native_json"],
+                )
+            )
+        discovery_registrations: list[RetainedDiscoveryEvidenceRegistration] = []
+        for row in self._connection.execute(
+            """
+            SELECT linked.run_id, linked.query_key, linked.page,
+                linked.digest, evidence.path, linked.response_url,
+                linked.request_url, linked.request_method,
+                linked.request_form_json
+            FROM discovery_evidence AS linked
+            LEFT JOIN evidence ON evidence.digest = linked.digest
+            WHERE linked.authority_id = ?
+            ORDER BY linked.run_id, linked.query_key, linked.page, linked.digest
+            """,
+            (authority_id,),
+        ):
+            digest = EvidenceDigest(row["digest"])
+            if row["path"] is None:
+                missing.append(digest)
+                continue
+            discovery_registrations.append(
+                RetainedDiscoveryEvidenceRegistration(
+                    run_id=row["run_id"],
+                    query_key=row["query_key"],
+                    page=row["page"],
+                    digest=digest,
+                    path=row["path"],
+                    response_url=row["response_url"],
+                    request_url=row["request_url"],
+                    request_method=row["request_method"],
+                    request_form=self._decode_request_form(row["request_form_json"]),
+                )
+            )
+        database_objects = tuple(
+            RegisteredEvidenceObject(
+                digest=EvidenceDigest(row["digest"]),
+                path=row["path"],
+            )
+            for row in self._connection.execute(
+                "SELECT digest, path FROM evidence ORDER BY digest"
+            )
+        )
+        linked_digests = {
+            EvidenceDigest(row["digest"])
+            for row in self._connection.execute(
+                "SELECT DISTINCT digest FROM observation_evidence"
+            )
+        }
+        linked_digests.update(
+            EvidenceDigest(row["digest"])
+            for row in self._connection.execute(
+                "SELECT DISTINCT digest FROM discovery_evidence"
+            )
+        )
+        application_count = int(
+            next(
+                self._connection.execute(
+                    "SELECT COUNT(*) FROM applications WHERE authority_id = ?",
+                    (authority_id,),
+                )
+            )[0]
+        )
+        observation_count = int(
+            next(
+                self._connection.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM observations AS observation
+                    JOIN applications AS application
+                        ON application.id = observation.application_id
+                    WHERE application.authority_id = ?
+                    """,
+                    (authority_id,),
+                )
+            )[0]
+        )
+        current_rebuild_coherent = True
+        for row in self._connection.execute(
+            """
+            SELECT application.id AS application_id,
+                rebuild.evidence_digests_json,
+                MAX(observation.id) AS latest_observation_id
+            FROM applications AS application
+            LEFT JOIN native_rebuild_inputs AS rebuild
+                ON rebuild.application_id = application.id
+            LEFT JOIN observations AS observation
+                ON observation.application_id = application.id
+            WHERE application.authority_id = ?
+            GROUP BY application.id, rebuild.evidence_digests_json
+            ORDER BY application.id
+            """,
+            (authority_id,),
+        ):
+            try:
+                decoded = json.loads(row["evidence_digests_json"])
+            except (TypeError, json.JSONDecodeError):
+                current_rebuild_coherent = False
+                continue
+            if (
+                not isinstance(decoded, list)
+                or not decoded
+                or not all(isinstance(value, str) for value in decoded)
+                or len(decoded) != len(set(decoded))
+                or row["latest_observation_id"] is None
+            ):
+                current_rebuild_coherent = False
+                continue
+            latest_digests = {
+                linked["digest"]
+                for linked in self._connection.execute(
+                    """
+                    SELECT digest FROM observation_evidence
+                    WHERE observation_id = ?
+                    """,
+                    (row["latest_observation_id"],),
+                )
+            }
+            if set(decoded) != latest_digests:
+                current_rebuild_coherent = False
+        return EvidenceRegistrationAudit(
+            application_count=application_count,
+            observation_count=observation_count,
+            applications_with_evidence=len(
+                {item.application_id for item in registrations}
+            ),
+            observations_with_evidence=len(
+                {item.observation_id for item in registrations}
+            ),
+            registrations=tuple(registrations),
+            discovery_registrations=tuple(discovery_registrations),
+            database_objects=database_objects,
+            missing_digests=tuple(missing),
+            unlinked_digests=tuple(
+                item.digest
+                for item in database_objects
+                if item.digest not in linked_digests
+            ),
+            current_rebuild_coherent=current_rebuild_coherent,
         )
 
     def migration_versions(self) -> tuple[int, ...]:
@@ -1502,7 +2084,7 @@ class SqliteStore:
             self._replace_documents(application_id, normalised.documents)
         if comments_complete:
             self._replace_comments(application_id, normalised.comments)
-        self._insert_events(application_id, metadata)
+        self._replace_events(application_id, metadata)
         self._replace_relationships(application_id, metadata)
 
     def _replace_location(
@@ -1587,10 +2169,18 @@ class SqliteStore:
             self._connection.execute(
                 """
                 INSERT INTO document_metadata(
-                    application_id, document_key, title, url
-                ) VALUES (?, ?, ?, ?)
+                    application_id, document_key, title, url,
+                    category, published_date
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (application_id, key, document.title, str(document.url)),
+                (
+                    application_id,
+                    key,
+                    document.title,
+                    str(document.url),
+                    document.category,
+                    self._date_value(document.published_date),
+                ),
             )
 
     def _replace_comments(
@@ -1611,11 +2201,15 @@ class SqliteStore:
                 (application_id, comment.comment_id, comment.text),
             )
 
-    def _insert_events(
+    def _replace_events(
         self,
         application_id: ApplicationId,
         metadata: ApplicationMetadata,
     ) -> None:
+        self._connection.execute(
+            "DELETE FROM application_events WHERE application_id = ?",
+            (application_id,),
+        )
         for event in metadata.events:
             digest = sha256(event.model_dump_json().encode()).hexdigest()
             self._connection.execute(
@@ -1714,11 +2308,13 @@ class SqliteStore:
         )
         updated = capabilities.model_copy(
             update={
-                "documents": self._capability_state(
-                    normalised.completeness.documents.kind
+                "documents": self._merge_capability_state(
+                    capabilities.documents,
+                    normalised.completeness.documents.kind,
                 ),
-                "comments": self._capability_state(
-                    normalised.completeness.comments.kind
+                "comments": self._merge_capability_state(
+                    capabilities.comments,
+                    normalised.completeness.comments.kind,
                 ),
                 "coordinates": (
                     CapabilityState.SUPPORTED
@@ -1800,12 +2396,42 @@ class SqliteStore:
         return None if value is None else date.fromisoformat(value)
 
     @staticmethod
+    def _decode_request_form(
+        value: str | None,
+    ) -> tuple[tuple[str, str], ...] | None:
+        if value is None:
+            return None
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(decoded, list) or any(
+            not isinstance(item, list)
+            or len(item) != _REQUEST_FORM_PARTS
+            or not all(isinstance(part, str) for part in item)
+            for item in decoded
+        ):
+            return None
+        return tuple((item[0], item[1]) for item in decoded)
+
+    @staticmethod
     def _capability_state(kind: str) -> CapabilityState:
         if kind in {"complete", "empty"}:
             return CapabilityState.SUPPORTED
         if kind == "unavailable":
             return CapabilityState.UNSUPPORTED
         return CapabilityState.UNKNOWN
+
+    @classmethod
+    def _merge_capability_state(
+        cls,
+        current: CapabilityState,
+        section_kind: str,
+    ) -> CapabilityState:
+        observed = cls._capability_state(section_kind)
+        if current == CapabilityState.SUPPORTED or observed == CapabilityState.UNKNOWN:
+            return current
+        return observed
 
     def _section_payload(self, application_id: ApplicationId, section: str) -> str:
         row = self._connection.execute(

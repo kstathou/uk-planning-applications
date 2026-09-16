@@ -23,9 +23,9 @@ requirement.
 | Authority | Fixture package | Recorded source evidence | Real adapter boundary | Live bootstrap | Two weekly cycles |
 |---|---|---|---|---|---|
 | Barnet | Verified | Weekly, detail, and child routes recorded; older-open result cap recorded | Bounded weekly adapter; smoke reached paged discovery before HTTP 429 | Open | Open |
-| Camden | Verified | Detail and 16-row document index recorded; comments open | Exact-reference JSF, Northgate detail, and document-index adapter; bounded discovery explicitly unavailable | Open | Open |
+| Camden | Verified | Official Socrata dataset 2eiu-s2cw; source counts and evidence reconciled | API metadata feed, 1,499 scoped applications in four requests, unchanged full immediate refresh; documents/comment text unsupported | Verified for published metadata | Open |
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
-| Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
+| Devon County Council | Verified | Advanced form; planning and appeal date windows; six-page planning and two-page appeal outstanding searches; both detail routes; complete published fields; categorized document metadata | Exact six-query adapter with disclaimer handling, canonical pager validation, replay-safe weekly checkpoints, planning and appeal native records, and metadata-only documents | Verified: 67 applications and appeals on 16 September 2026 | Pending: due 23 and 30 September 2026 |
 | Peak District National Park Authority | Verified | AssureLive form, five-query discovery, detail, and windowed search and document pagination recorded | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED; complete detail and document metadata; public comments unavailable | Verified on 16 September 2026 with 377 references and applications | Pending for 23 and 30 September 2026 |
 | Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
 | Old Oak and Park Royal Development Corporation | Verified | Official Registered/Determined searches, client-side pagination, detail, 643-row sampled document index, and public responses recorded | Exact three-query HTTP adapter with complete detail, document-metadata, and response collection | Verified on 16 September 2026: 55 applications, zero failed sections/retries/attachment bodies, and zero-network rerun | Open; approximately 23 and 30 September 2026 |
@@ -40,26 +40,31 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed
-verified live bootstraps. West Suffolk's versioned receipt proves 730
-discovered references, 730 persisted applications, terminal checkpoint
-coherence, no pending retries,
-no failed current sections, database integrity, retained evidence-path
-presence, no unmapped records, no attachment-body requests, and an immediate
-zero-request rerun. OPDC's sanitized
-[committed receipt](evidence/opdc-qualification-2026-09-16.json) proves 55
-persisted applications, exact terminal discovery, complete implemented
-sections, local database and evidence integrity, 103 distinct retained content
-digests, 165 ordered application-to-capture associations, and an immediate
-zero-network rerun. Its SHA-256 commitment covers each application's source
-identity and ordered capture URL, media type, and content digest without
-publishing the identity inventory. Peak District's privacy-safe
+As of 16 September 2026, West Suffolk, OPDC, Peak District, Camden, and Devon
+have completed verified live bootstraps. West Suffolk's versioned receipt
+proves 730 discovered references and 730 persisted applications, terminal
+checkpoint coherence, no pending retries, no failed current sections, database
+integrity, retained evidence-path presence, no unmapped records, no
+attachment-body requests, and an immediate zero-request rerun. OPDC's
+sanitized [committed receipt](evidence/opdc-qualification-2026-09-16.json)
+proves 55 persisted applications, exact terminal discovery, complete
+implemented sections, local database and evidence integrity, 103 distinct
+retained content digests, 165 ordered application-to-capture associations, and
+an immediate zero-network rerun. Its SHA-256 commitment covers each
+application's source identity and ordered capture URL, media type, and content
+digest without publishing the identity inventory. Peak District's privacy-safe
 [committed receipt](evidence/peak-district-qualification-2026-09-16.json)
 records 377 applications, 95 decision dates, zero retry entries, 1,696
 cumulative durable acquisition requests, 1,299 ordered current capture
 associations, integrity commitments for all 1,560 retained evidence rows, a
-persisted live-ready HTTP manifest, and an immediate zero-network rerun. The
-other twelve authorities still require verified live bootstraps. All fifteen
+persisted live-ready HTTP manifest, and an immediate zero-network rerun.
+Camden completed an official Socrata API metadata bootstrap and unchanged
+immediate refresh for 1,499 applications in four requests per pass. This is API
+evidence, not portal or child-page agreement; the feed does not publish the
+broader document and comment data. Devon's version 5 receipt proves 67
+applications, 86 requests, 8,235,128 transferred bytes, zero attachment-body
+requests, SQLite and evidence integrity, and an immediate zero-request rerun.
+The other ten authorities still require verified live bootstraps. All fifteen
 still require two successful later weekly cycles, so operational qualification
 remains zero of fifteen.
 
@@ -67,6 +72,13 @@ The Barnet smoke is incomplete because the source returned HTTP 429 during
 pagination; its saved checkpoint permits a later bounded resume without
 repeating completed pages. Blocked and partial authorities remain in coverage
 denominators and failure reporting until their checks succeed.
+
+Camden's superseded portal attempt was incomplete. Visible Chrome persisted
+four applications before the next ordinary detail navigation remained on the
+source's managed challenge for 60 seconds. Its non-terminal checkpoint is at
+offset 10 of 331 on the first query. The eight retained application captures
+are valid, but that historical run predates discovery-evidence persistence, so
+its first-page total and membership are not promoted to source-evidence proof.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds

@@ -67,6 +67,8 @@ from yimby.transport import (
     FixtureResponse,
     FixtureSession,
     PortalRequest,
+    RedirectBoundary,
+    RedirectBoundaryError,
     RequestHeader,
     RequestIntent,
     SourceUnavailableError,
@@ -131,7 +133,7 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     }
     assert readiness_by_authority == {
         AuthorityId("barnet"): LiveReadiness.DISCOVERY_ONLY,
-        AuthorityId("camden"): LiveReadiness.DISCOVERY_ONLY,
+        AuthorityId("camden"): LiveReadiness.LIVE_READY,
         AuthorityId("haringey"): LiveReadiness.BROWSER_ONLY,
         AuthorityId("devon"): LiveReadiness.DISCOVERY_ONLY,
         AuthorityId("peak-district"): LiveReadiness.LIVE_READY,
@@ -163,11 +165,39 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         ),
         transport=LiveTransportKind.HTTP,
     )
+    camden = registry.manifest(AuthorityId("camden")).live_status
+    assert camden == LiveStatus(
+        readiness=LiveReadiness.LIVE_READY,
+        reason=(
+            "Official Socrata application metadata feed; documents and "
+            "comment text unsupported; weekly qualification pending"
+        ),
+        evidence=(
+            (
+                "2026-09-16: 1,499 applications, four requests per pass, "
+                "unchanged immediate refresh and verified evidence"
+            ),
+        ),
+        transport=LiveTransportKind.HTTP,
+    )
+    devon_status = registry.manifest(AuthorityId("devon")).live_status
+    assert devon_status.readiness == LiveReadiness.DISCOVERY_ONLY
+    assert devon_status.reason == (
+        "exact planning and appeal discovery is live-qualified; "
+        "two later weekly cycles remain pending"
+    )
+    assert devon_status.evidence == (
+        (
+            "live-qualified Devon disclaimer, advanced search, canonical pager, "
+            "detail, and document-metadata contracts; typed qualification receipt "
+            "records a zero-network terminal rerun"
+        ),
+    )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
     assert snapshot.coverage_implemented == 15
-    assert snapshot.live_ready == 3
+    assert snapshot.live_ready == 4
     assert snapshot.live_readiness_denominator == 15
     assert snapshot.browser_time_ms == 0
     assert all(row.live_reason and row.live_evidence for row in snapshot.authorities)
@@ -526,6 +556,200 @@ def test_http_session_blocks_redirect_to_attachment_path() -> None:
     assert body_reads == 0
     assert session.transferred_bytes == 0
     assert session.attachment_body_requests == 1
+
+
+@pytest.mark.parametrize(
+    "destination",
+    ["https://evil.test/allowed", "https://example.test/unobserved"],
+)
+def test_http_session_rejects_redirects_outside_request_boundary(
+    destination: str,
+) -> None:
+    """Redirect destinations are approved before any request is sent to them."""
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return httpx.Response(302, headers={"location": destination})
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/start", "/allowed"),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(RedirectBoundaryError):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl("https://example.test/start"),
+                    intent=RequestIntent.SEARCH,
+                    redirect_boundary=boundary,
+                )
+            )
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert calls == ["https://example.test/start"]
+
+
+def test_http_session_retains_allowed_redirect_destination() -> None:
+    """Evidence identifies the allowlisted final response rather than its entry URL."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/start":
+            return httpx.Response(
+                302,
+                headers={"location": "/allowed?credential=secret"},
+            )
+        return httpx.Response(200, content=b"allowed")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/start", "/allowed"),
+    )
+
+    async def exercise() -> None:
+        capture = await session.fetch(
+            PortalRequest(
+                url=HttpUrl("https://example.test/start"),
+                intent=RequestIntent.SEARCH,
+                redirect_boundary=boundary,
+            )
+        )
+        assert str(capture.url) == "https://example.test/allowed"
+        await session.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_redirect_boundary_can_restrict_queries_to_observed_paths() -> None:
+    """A path allowlist does not silently admit queries on every route."""
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/disclaimer", "/results"),
+        query_paths=("/disclaimer",),
+    )
+    assert boundary.allows("https://example.test/disclaimer?returnUrl=%2Fresults")
+    assert not boundary.allows("https://example.test/results?unexpected=value")
+
+
+def test_redirect_boundary_can_allow_one_exact_queried_url() -> None:
+    """A validated form action need not allow arbitrary queries on its path."""
+    accepted = HttpUrl("https://example.test/disclaimer/accept?returnUrl=%2Fresults")
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/disclaimer/accept", "/results"),
+        query_paths=(),
+        exact_urls=(accepted,),
+    )
+    assert boundary.allows(str(accepted))
+    assert not boundary.allows(
+        "https://example.test/disclaimer/accept?returnUrl=%2Fother"
+    )
+
+
+def test_http_session_rate_limits_each_physical_redirect_hop() -> None:
+    """Each request in an allowed redirect chain receives the host gap."""
+    current = [10.0]
+    sleeps: list[float] = []
+    paths: list[str] = []
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        current[0] += delay
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/allowed"})
+        return httpx.Response(200, content=b"allowed")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(2.0, clock=lambda: current[0], sleep=sleep),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/start", "/allowed"),
+    )
+
+    async def exercise() -> None:
+        await session.fetch(
+            PortalRequest(
+                url=HttpUrl("https://example.test/start"),
+                intent=RequestIntent.SEARCH,
+                redirect_boundary=boundary,
+            )
+        )
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert paths == ["/start", "/allowed"]
+    assert sleeps == [2.0]
+
+
+def test_http_session_rejects_initial_url_outside_redirect_boundary() -> None:
+    """A boundary also constrains the first URL before transport."""
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, content=b"must not run")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/allowed",),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(RedirectBoundaryError):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl("https://example.test/unobserved"),
+                    intent=RequestIntent.SEARCH,
+                    redirect_boundary=boundary,
+                )
+            )
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert calls == 0
+
+
+def test_http_session_bounds_redirect_loops() -> None:
+    """A redirect cycle terminates without reading a response body."""
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(302, headers={"location": "/loop"})
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(0),
+    )
+
+    async def exercise() -> None:
+        with pytest.raises(SourceUnavailableError, match="redirect limit"):
+            await session.fetch(_request("https://example.test/loop"))
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert calls > 1
 
 
 def test_http_session_retry_after_and_transport_failures() -> None:

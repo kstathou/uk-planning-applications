@@ -51,7 +51,9 @@ from yimby.domain import (
     CommentRecord,
     Completeness,
     CompleteSection,
+    DiscoveryEvidenceCapture,
     DocumentRecord,
+    DurableDiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
     NormalisedObservation,
@@ -61,7 +63,9 @@ from yimby.domain import (
     RunStatus,
     SourceId,
     SourceReference,
+    StoredCheckpoint,
     TransportMode,
+    UnavailableSection,
 )
 from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.exporting import (
@@ -87,7 +91,7 @@ WINDOW = DiscoveryWindow(
 )
 CAMDEN_FIXTURE_EASTING = 530748
 PILOT_AUTHORITY_COUNT = 15
-LIVE_READY_AUTHORITY_COUNT = 3
+LIVE_READY_AUTHORITY_COUNT = 4
 UNCHANGED_AND_REBUILT_VERSIONS = 2
 BARNET_REQUEST_COUNT = 3
 REPEATED_RETRY_ATTEMPTS = 2
@@ -302,6 +306,7 @@ def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> N
     ) == (rich_reference,)
     store.set_suppression(application_id, suppressed=True, reason="reviewed")
     assert store.application_views() == ()
+    assert store.authority_application_ids(AuthorityId("barnet")) == (application_id,)
     store.set_suppression(application_id, suppressed=False, reason="corrected")
     assert store.application_views() == (store.application_view(application_id),)
     with pytest.raises(KeyError):
@@ -408,6 +413,70 @@ def test_semantic_ordering_does_not_create_false_changes(tmp_path: Path) -> None
     store.close()
 
 
+def test_current_events_replace_obsolete_values_and_capabilities_do_not_downgrade(
+    tmp_path: Path,
+) -> None:
+    """Current projections replace stale rows and capabilities only strengthen."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    original = _rich_observation()
+    first_run = store.begin_run(AuthorityId("barnet"))
+    application_id = store.commit_observation(first_run, original)
+
+    replacement_event = ApplicationEvent(
+        event_type="decision",
+        event_at=datetime(2026, 9, 8, tzinfo=UTC),
+        details="Amended",
+    )
+    changed = original.model_copy(
+        update={
+            "native_json": '{"native":"changed-event"}',
+            "normalised": original.normalised.model_copy(
+                update={
+                    "metadata": original.normalised.metadata.model_copy(
+                        update={"events": (replacement_event,)}
+                    )
+                }
+            ),
+            "observed_at": datetime(2026, 9, 8, tzinfo=UTC),
+        }
+    )
+    second_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(second_run, changed)
+    assert store.application_view(application_id).metadata.events == (
+        replacement_event,
+    )
+
+    unavailable_reference = SourceReference(
+        source_id=SourceId("barnet-public-access"),
+        reference="RICH-2026-2",
+        locator="https://example.test/application/RICH-2026-2",
+    )
+    unavailable = original.model_copy(
+        update={
+            "native_json": '{"native":"documents-unavailable"}',
+            "normalised": original.normalised.model_copy(
+                update={
+                    "reference": unavailable_reference,
+                    "documents": (),
+                    "completeness": original.normalised.completeness.model_copy(
+                        update={
+                            "documents": UnavailableSection(
+                                reason="not exposed for this record"
+                            )
+                        }
+                    ),
+                }
+            ),
+        }
+    )
+    third_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(third_run, unavailable)
+    state = store.authority_states(datetime(2020, 1, 1, tzinfo=UTC))[0]
+    assert state.manifest.capabilities.documents == CapabilityState.SUPPORTED
+    store.close()
+
+
 def test_removal_and_reversion_preserve_observed_transition_order(
     tmp_path: Path,
 ) -> None:
@@ -425,6 +494,7 @@ def test_removal_and_reversion_preserve_observed_transition_order(
         ("restored-form", (*original.normalised.documents, added)),
     )
     application_id: ApplicationId | None = None
+    semantic_states: list[tuple[tuple[str, str, str], ...]] = []
     for native_state, documents in states:
         run_id = store.begin_run(AuthorityId("barnet"))
         application_id = store.commit_observation(
@@ -438,6 +508,7 @@ def test_removal_and_reversion_preserve_observed_transition_order(
                 }
             ),
         )
+        semantic_states.append(store.authority_semantic_state(AuthorityId("barnet")))
 
     assert application_id is not None
     assert (
@@ -445,6 +516,9 @@ def test_removal_and_reversion_preserve_observed_transition_order(
         == REMOVAL_AND_REVERSION_CHANGES
     )
     assert store.observed_change_count() == REMOVAL_AND_REVERSION_CHANGES
+    assert semantic_states[0] != semantic_states[1]
+    assert semantic_states[1] != semantic_states[2]
+    assert semantic_states[0] == semantic_states[2]
     assert [item.title for item in store.get_application(application_id).documents] == [
         "Application form",
         "Decision notice",
@@ -568,6 +642,16 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     """A corrupt native-to-evidence link fails instead of fabricating provenance."""
     store = _store(tmp_path)
     _collect_barnet(store)
+    registered = store.evidence_registration_audit(AuthorityId("barnet"))
+    assert registered.application_count == 1
+    assert registered.observation_count == 1
+    assert registered.applications_with_evidence == 1
+    assert registered.observations_with_evidence == 1
+    assert registered.registrations
+    assert registered.database_objects
+    assert registered.unlinked_digests == ()
+    assert registered.current_rebuild_coherent
+    assert registered.missing_digests == ()
     store.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
         connection.execute(
@@ -583,7 +667,31 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     reopened = _store(tmp_path)
     with pytest.raises(KeyError):
         reopened.retained_native_records()
+    missing = reopened.evidence_registration_audit(AuthorityId("barnet"))
+    assert missing.registrations == ()
+    assert missing.missing_digests == tuple(
+        item.digest for item in registered.registrations
+    )
     reopened.close()
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM observation_evidence")
+        connection.commit()
+    reopened = _store(tmp_path)
+    empty = reopened.evidence_registration_audit(AuthorityId("barnet"))
+    assert empty.applications_with_evidence == 0
+    reopened.close()
+    for malformed in ("{", "[]"):
+        with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+            connection.execute(
+                "UPDATE native_rebuild_inputs SET evidence_digests_json = ?",
+                (malformed,),
+            )
+            connection.commit()
+        reopened = _store(tmp_path)
+        assert not reopened.evidence_registration_audit(
+            AuthorityId("barnet")
+        ).current_rebuild_coherent
+        reopened.close()
 
 
 def test_retained_evidence_rejects_valid_gzip_with_wrong_digest(
@@ -600,6 +708,264 @@ def test_retained_evidence_rejects_valid_gzip_with_wrong_digest(
     with pytest.raises(EvidenceIntegrityError, match=relative_path):
         store.retained_native_records()
     store.close()
+
+
+def test_authority_reference_and_evidence_integrity_proofs(tmp_path: Path) -> None:
+    """Qualification reads independent identities and verifies evidence bodies."""
+    store = _store(tmp_path)
+    _collect_barnet(store)
+
+    references = store.authority_reference_sets(AuthorityId("barnet"))
+    assert references.discovery == references.applications
+    assert references.applications == references.rebuild_inputs
+    assert references.discovery[0].source_id == SourceId("barnet-idox-current")
+
+    integrity = store.evidence_integrity(AuthorityId("barnet"))
+    assert integrity.captures_checked > 0
+    assert integrity.uncompressed_bytes > 0
+    assert integrity.issues == ()
+    assert len(integrity.manifest_sha256) == len(sha256(b"").hexdigest())
+
+    evidence_path = next((tmp_path / "evidence").rglob("*.gz"))
+    original = evidence_path.read_bytes()
+    evidence_path.write_bytes(gzip.compress(b"tampered", mtime=0))
+    assert {
+        issue.code for issue in store.evidence_integrity(AuthorityId("barnet")).issues
+    } == {"digest-mismatch"}
+
+    evidence_path.write_bytes(b"not-gzip")
+    assert {
+        issue.code for issue in store.evidence_integrity(AuthorityId("barnet")).issues
+    } == {"invalid-gzip"}
+    evidence_path.write_bytes(original)
+    store.close()
+
+
+def test_discovery_evidence_is_registered_linked_and_verified(tmp_path: Path) -> None:
+    """Discovery proof is a first-class authority-linked evidence capture."""
+    store = _store(tmp_path)
+    authority_id = AuthorityId("camden")
+    run_id = store.begin_run(authority_id)
+    body = b'{"reported_count":331,"schema_version":1}'
+    capture = EvidenceCapture(
+        url=HttpUrl("https://planningrecords.camden.gov.uk/results"),
+        media_type="application/vnd.yimby.camden-discovery+json",
+        body=body,
+        digest=EvidenceDigest(sha256(body).hexdigest()),
+    )
+    retained = DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=HttpUrl("https://planningrecords.camden.gov.uk/results"),
+        request_method="GET",
+    )
+
+    store.commit_discovery(
+        run_id,
+        authority_id,
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json='{"kind":"test"}',
+            ),
+            complete=False,
+            evidence=(retained,),
+            evidence_key="date:received",
+            evidence_page=1,
+        ),
+    )
+
+    assert store.discovery_evidence_count(authority_id) == 1
+    assert store.discovery_evidence_captures(authority_id) == (capture,)
+    integrity = store.evidence_integrity(authority_id)
+    assert integrity.captures_checked == 1
+    assert integrity.uncompressed_bytes == len(body)
+    assert integrity.issues == ()
+    store.close()
+
+
+@pytest.mark.parametrize(
+    ("corruption", "expected_code"),
+    [
+        ("missing-rebuild", "application-without-rebuild-input"),
+        ("empty-evidence", "application-without-evidence"),
+        ("unregistered", "unregistered-digest"),
+        ("path-mismatch", "path-mismatch"),
+        ("missing-path", "missing-path"),
+    ],
+)
+def test_evidence_integrity_reports_broken_authority_links(
+    tmp_path: Path,
+    corruption: str,
+    expected_code: str,
+) -> None:
+    """Every broken application-to-evidence edge is named in the proof."""
+    root = tmp_path / corruption
+    store = _store(root)
+    _collect_barnet(store)
+    store.close()
+    database = root / "yimby.sqlite3"
+
+    with closing(sqlite3.connect(database)) as connection:
+        digest = connection.execute("SELECT digest FROM evidence LIMIT 1").fetchone()[0]
+        if corruption == "missing-rebuild":
+            connection.execute("DELETE FROM native_rebuild_inputs")
+        elif corruption == "empty-evidence":
+            connection.execute(
+                "UPDATE native_rebuild_inputs SET evidence_digests_json = '[]'"
+            )
+        elif corruption == "unregistered":
+            connection.execute(
+                "UPDATE native_rebuild_inputs SET evidence_digests_json = ?",
+                (json.dumps(["a" * 64]),),
+            )
+        elif corruption == "path-mismatch":
+            connection.execute(
+                "UPDATE evidence SET path = 'wrong/path.gz' WHERE digest = ?",
+                (digest,),
+            )
+        connection.commit()
+
+    if corruption == "missing-path":
+        evidence_path = next((root / "evidence").rglob(f"{digest}.gz"))
+        evidence_path.unlink()
+
+    reopened = _store(root)
+    codes = {
+        issue.code
+        for issue in reopened.evidence_integrity(AuthorityId("barnet")).issues
+    }
+    assert expected_code in codes
+    reopened.close()
+
+
+def test_evidence_audit_preserves_observation_history(tmp_path: Path) -> None:
+    """Current rebuild input cannot orphan evidence retained by older observations."""
+    store = _store(tmp_path)
+    store.register_authorities(barnet_registry().manifests())
+    first = _rich_observation()
+    first_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(first_run, first)
+
+    second_body = b'{"native":"changed"}'
+    second_digest = EvidenceDigest(sha256(second_body).hexdigest())
+    second = first.model_copy(
+        update={
+            "native_json": second_body.decode(),
+            "normalised": first.normalised.model_copy(
+                update={
+                    "proposal": "Changed rich operational record",
+                    "provenance": (
+                        Provenance(field="proposal", evidence=second_digest),
+                    ),
+                }
+            ),
+            "evidence": (
+                EvidenceCapture(
+                    url=HttpUrl("https://example.test/application/RICH-2026-1"),
+                    media_type="application/json",
+                    body=second_body,
+                    digest=second_digest,
+                ),
+            ),
+            "observed_at": datetime(2026, 9, 8, tzinfo=UTC),
+        }
+    )
+    second_run = store.begin_run(AuthorityId("barnet"))
+    store.commit_observation(second_run, second)
+
+    audit = store.evidence_registration_audit(AuthorityId("barnet"))
+    expected_observations = len((first, second))
+    assert audit.application_count == 1
+    assert audit.observation_count == expected_observations
+    assert audit.applications_with_evidence == 1
+    assert audit.observations_with_evidence == expected_observations
+    assert {item.digest for item in audit.registrations} == {
+        first.evidence[0].digest,
+        second_digest,
+    }
+    assert {item.digest for item in audit.database_objects} == {
+        first.evidence[0].digest,
+        second_digest,
+    }
+    assert audit.missing_digests == ()
+    assert audit.unlinked_digests == ()
+    assert audit.current_rebuild_coherent
+    store.close()
+
+
+def test_discovery_evidence_requires_page_scope_and_audits_missing_rows(
+    tmp_path: Path,
+) -> None:
+    """Discovery bodies require page identity and missing registry rows are visible."""
+    store = _store(tmp_path)
+    run_id = store.begin_run(AuthorityId("barnet"))
+    body = b"discovery"
+    digest = EvidenceDigest(sha256(body).hexdigest())
+    capture = EvidenceCapture(
+        url=HttpUrl("https://example.test/search"),
+        media_type="text/html",
+        body=body,
+        digest=digest,
+    )
+    retained = DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=HttpUrl("https://example.test/search"),
+        request_method="GET",
+    )
+    checkpoint = StoredCheckpoint(schema_version=1, payload_json="{}")
+    for invalid in (
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=checkpoint,
+            complete=False,
+            evidence=(retained,),
+        ),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=checkpoint,
+            complete=False,
+            evidence_key="received",
+            evidence_page=1,
+        ),
+    ):
+        with pytest.raises(ValueError, match="query key and page"):
+            store.commit_discovery(run_id, AuthorityId("barnet"), invalid)
+    store.commit_discovery(
+        run_id,
+        AuthorityId("barnet"),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=checkpoint,
+            complete=True,
+            evidence=(retained,),
+            evidence_key="received",
+            evidence_page=1,
+        ),
+    )
+    audit = store.evidence_registration_audit(AuthorityId("barnet"))
+    assert len(audit.discovery_registrations) == 1
+    assert audit.missing_digests == ()
+    store.close()
+
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM evidence WHERE digest = ?", (digest,))
+        connection.commit()
+    reopened = _store(tmp_path)
+    missing = reopened.evidence_registration_audit(AuthorityId("barnet"))
+    assert missing.discovery_registrations == ()
+    assert missing.missing_digests == (digest,)
+    reopened.close()
+
+
+def test_discovery_request_form_decoder_rejects_malformed_values() -> None:
+    """Retained logical request fields fail closed when their JSON is malformed."""
+    decoder = SqliteStore._decode_request_form  # noqa: SLF001
+    assert decoder(None) is None
+    assert decoder("{") is None
+    for malformed in ("{}", '[["name"]]', '[["name", 1]]'):
+        assert decoder(malformed) is None
+    assert decoder('[["name", "value"]]') == (("name", "value"),)
 
 
 def test_exports_are_deterministic_profiled_and_suppressed(tmp_path: Path) -> None:
@@ -773,7 +1139,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5, 6)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -809,7 +1175,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()
@@ -820,6 +1186,60 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     assert "ConditionPathExists=/path/to/enable-yimby-sync" in service
     assert "[Install]" not in timer
     assert "Persistent=false" in timer
+
+
+def test_migrations_upgrade_existing_discovery_evidence_schema(
+    tmp_path: Path,
+) -> None:
+    """A database already at Camden's migration 008 upgrades without data loss."""
+    database = tmp_path / "yimby.sqlite3"
+    migrations = Path("src/yimby/migrations")
+    existing_version = 8
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        for migration in sorted(migrations.glob("[0-9][0-9][0-9]_*.sql")):
+            version = int(migration.name.split("_", maxsplit=1)[0])
+            if version > existing_version:
+                continue
+            connection.executescript(migration.read_text())
+            connection.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) "
+                "VALUES (?, ?, ?)",
+                (version, migration.name, "2026-09-16T00:00:00+00:00"),
+            )
+        connection.execute(
+            "INSERT INTO runs(id, authority_id, started_at) VALUES (?, ?, ?)",
+            ("run-008", "camden", "2026-09-16T00:00:00+00:00"),
+        )
+        digest = "a" * 64
+        connection.execute(
+            "INSERT INTO evidence(digest, path, source_url, media_type) "
+            "VALUES (?, ?, ?, ?)",
+            (digest, f"aa/{digest}.gz", "https://example.test/search", "text/html"),
+        )
+        connection.execute(
+            "INSERT INTO discovery_evidence(authority_id, run_id, digest) "
+            "VALUES (?, ?, ?)",
+            ("camden", "run-008", digest),
+        )
+        connection.commit()
+
+    store = _store(tmp_path)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    store.close()
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute(
+            "SELECT query_key, page, digest FROM discovery_evidence"
+        ).fetchone()
+    assert row == ("legacy-unscoped", 1, digest)
 
 
 class _CancellingSession:

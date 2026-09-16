@@ -109,11 +109,14 @@ uv run python scripts/smoke_devon.py --confirm-live
 uv run python scripts/smoke_peak_district.py --confirm-live
 ```
 
-Arun and Devon restrict discovery to their recorded received-date paths.
-Peak District's smoke remains a small rolling-week diagnostic, while its
-complete bootstrap uses the qualification command below. Camden resolves one
-explicit reference and deliberately rejects an unsupported bounded date
-search. These commands refuse before creating a live session unless
+Arun restricts discovery to its recorded received-date path. Devon uses its
+exact advanced-search form for maximum 30-day planning received and determined
+and appeal received and determined windows, with optional complete outstanding
+planning and appeal enumeration. Peak
+District's smoke remains a small rolling-week diagnostic, while its complete
+bootstrap uses the qualification command below. Camden's smoke reads one
+explicit reference from its official Socrata API without opening the planning
+portal. These commands refuse before creating a live session unless
 `--confirm-live` is present.
 
 Peak District has a dedicated persisted qualification command:
@@ -146,6 +149,51 @@ entries, and zero attachment-body requests. It validates all 1,560 retained
 evidence rows. Peak District is `LIVE_READY` for the receipt-backed HTTP
 contract, but remains operationally unqualified until successful weekly cycles
 occur on or after 23 September and 30 September 2026.
+
+Camden's primary workflow uses official dataset `2eiu-s2cw`. Optionally export
+`CAMDEN_SOCRATA_APP_TOKEN` for the API's app-token quota; `.env` is not loaded
+automatically. The qualification command performs two real API collection
+passes, checks evidence and database integrity, and writes a JSON receipt:
+
+```sh
+uv run python scripts/qualify_camden.py \
+  --confirm-live --data-dir <empty-directory> \
+  --start 2026-08-18 --end 2026-09-16 --include-open
+```
+
+Add `--resume` when reusing that exact directory. An unfinished cursor requires
+the same scope and source upload watermark; if either changes, use a fresh
+directory. Completed cursors restart a full scoped API read on refresh.
+The standard `yimby bootstrap --authority camden` and refresh commands also
+select this HTTP API. Documents and comment text are unavailable from this
+source; neither the portal nor document links are fetched. The 16 September
+bootstrap collected 1,499 applications in four requests, then repeated it
+unchanged in four more requests. Two weekly qualification cycles remain open.
+
+Devon's complete persisted bootstrap has a dedicated qualification command:
+
+```sh
+uv run python scripts/qualify_devon.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-devon-2026-09-16 \
+  --start 2026-08-18 --end 2026-09-16 --include-open
+```
+
+The command requires an exact inclusive 30-day scope and an empty directory
+unless `--resume` is present. Its six-query inventory covers dated and
+outstanding planning and appeals, including the distinct appeal result and
+detail routes. It runs the collection twice, verifies terminal checkpoint and
+query coherence, exact durable reference/application agreement, durable
+per-query row and page totals, retry and section state, SQLite integrity,
+per-observation evidence links, complete database/filesystem evidence
+reconciliation including noncanonical residual files, attachment policy,
+idempotence, and two succeeded run states, then fsyncs a versioned receipt. If
+durable history already exists, qualification requires the original valid,
+nonzero live receipt before constructing a session; a missing or corrupt
+receipt cannot be re-minted from a terminal store. A terminal resume validates
+the current store without network I/O and preserves the original receipt
+byte-for-byte. The receipt records later cycles as pending; it does not enable
+scheduling or promote registry readiness.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:

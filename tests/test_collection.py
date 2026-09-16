@@ -98,6 +98,8 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
             {
                 "title": "Site plan",
                 "url": "https://publicaccess.barnet.gov.uk/online-applications/files/site-plan.pdf",
+                "category": None,
+                "published_date": None,
             }
         ],
         "comments": [

@@ -191,6 +191,44 @@ class SourceReference(FrozenModel):
     locator: str | None = None
 
 
+class EvidenceCapture(FrozenModel):
+    """One permitted response retained as source evidence."""
+
+    url: HttpUrl
+    media_type: str
+    body: bytes
+    digest: EvidenceDigest
+
+
+class DiscoveryEvidenceCapture(FrozenModel):
+    """One discovery response bound to the logical request that produced it."""
+
+    capture: EvidenceCapture
+    request_url: HttpUrl
+    request_method: Literal["GET", "POST"]
+    request_form: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def url(self) -> HttpUrl:
+        """Expose the retained response URL for evidence consumers."""
+        return self.capture.url
+
+    @property
+    def media_type(self) -> str:
+        """Expose the retained response media type."""
+        return self.capture.media_type
+
+    @property
+    def body(self) -> bytes:
+        """Expose the retained response body."""
+        return self.capture.body
+
+    @property
+    def digest(self) -> EvidenceDigest:
+        """Expose the retained response digest."""
+        return self.capture.digest
+
+
 class StoredCheckpoint(FrozenModel):
     """Type-erased checkpoint persisted by the common runner."""
 
@@ -204,6 +242,9 @@ class DiscoveryBatch[CheckpointT: BaseModel](FrozenModel):
     references: tuple[SourceReference, ...]
     next_checkpoint: CheckpointT
     complete: bool
+    evidence: tuple[DiscoveryEvidenceCapture, ...] = ()
+    evidence_key: str | None = None
+    evidence_page: int | None = Field(default=None, ge=1)
 
 
 class DurableDiscoveryBatch(FrozenModel):
@@ -212,15 +253,9 @@ class DurableDiscoveryBatch(FrozenModel):
     references: tuple[SourceReference, ...]
     next_checkpoint: StoredCheckpoint
     complete: bool
-
-
-class EvidenceCapture(FrozenModel):
-    """One permitted response retained as source evidence."""
-
-    url: HttpUrl
-    media_type: str
-    body: bytes
-    digest: EvidenceDigest
+    evidence: tuple[DiscoveryEvidenceCapture, ...] = ()
+    evidence_key: str | None = None
+    evidence_page: int | None = Field(default=None, ge=1)
 
 
 class NativeDocument(FrozenModel):
@@ -259,6 +294,8 @@ class DocumentRecord(FrozenModel):
 
     title: str
     url: HttpUrl
+    category: str | None = None
+    published_date: date | None = None
 
 
 class CommentRecord(FrozenModel):
@@ -363,6 +400,39 @@ class DiscoveryState(FrozenModel):
     references: tuple[str, ...]
     queued: tuple[SourceReference, ...]
     checkpoint: StoredCheckpoint | None
+
+
+class AuthorityReferenceSets(FrozenModel):
+    """Independent durable identity views used by qualification."""
+
+    discovery: tuple[SourceReference, ...]
+    applications: tuple[SourceReference, ...]
+    rebuild_inputs: tuple[SourceReference, ...]
+
+
+class EvidenceIntegrityIssue(FrozenModel):
+    """One authority-linked evidence registration or content failure."""
+
+    digest: str | None
+    code: Literal[
+        "application-without-rebuild-input",
+        "application-without-evidence",
+        "unregistered-digest",
+        "path-mismatch",
+        "missing-path",
+        "invalid-gzip",
+        "digest-mismatch",
+    ]
+
+
+class EvidenceIntegrityReport(FrozenModel):
+    """Deterministic proof over authority-linked compressed evidence."""
+
+    captures_checked: int = Field(ge=0)
+    compressed_bytes: int = Field(ge=0)
+    uncompressed_bytes: int = Field(ge=0)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issues: tuple[EvidenceIntegrityIssue, ...]
 
 
 class QualificationSnapshot(FrozenModel):

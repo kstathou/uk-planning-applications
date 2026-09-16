@@ -56,13 +56,7 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         "captured weekly IDOX request and detail-tab contracts",
         LiveTransportKind.HTTP,
     ),
-    AuthorityId("camden"): _status(
-        LiveReadiness.DISCOVERY_ONLY,
-        "exact-reference detail and document collection are implemented; "
-        "bounded enumeration is unresolved",
-        "captured Camden JSF, Northgate, and CMWebDrawer contracts",
-        LiveTransportKind.HTTP,
-    ),
+    AuthorityId("camden"): CAMDEN_PACKAGE.manifest.live_status,
     AuthorityId("haringey"): _status(
         LiveReadiness.BROWSER_ONLY,
         "the rolling seven-day browser journey is implemented; advanced and "
@@ -73,9 +67,11 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("devon"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "rolling 90-day discovery and detail collection are implemented; "
-        "older-open and other windows are unresolved",
-        "captured Devon disclaimer, rolling search, detail, and document contracts",
+        "exact planning and appeal discovery is live-qualified; "
+        "two later weekly cycles remain pending",
+        "live-qualified Devon disclaimer, advanced search, canonical pager, detail, "
+        "and document-metadata contracts; typed qualification receipt records a "
+        "zero-network terminal rerun",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("peak-district"): _status(
