@@ -13,7 +13,6 @@ import httpx
 from pydantic import ConfigDict, Field, HttpUrl, TypeAdapter
 
 from yimby.authorities.camden.adapter import CamdenAdapter
-from yimby.authorities.camden.discovery import CAMDEN_SOURCE
 from yimby.domain import (
     ApplicationMetadata,
     AuthorityCapabilities,
@@ -46,8 +45,15 @@ if TYPE_CHECKING:
     from yimby.transport import PortalSession
 
 DATASET_URL = "https://opendata.camden.gov.uk/resource/2eiu-s2cw.json"
+CAMDEN_OPEN_DATA_SOURCE = SourceId("camden-socrata-2eiu-s2cw")
 PAGE_SIZE = 1000
 _ROWS = TypeAdapter(list[dict[str, object]])
+_SUMMARY_SELECT = (
+    "count(distinct pk) AS total,"
+    "count(distinct application_number) AS references,"
+    "count(distinct (pk || '|' || application_number)) AS pairs,"
+    "max(last_uploaded) AS watermark"
+)
 
 
 class CamdenOpenDataError(ValueError):
@@ -93,6 +99,20 @@ class CamdenOpenDataCheckpointV1(FrozenModel):
 def api_url(**parameters: str) -> HttpUrl:
     """Encode SoQL values; credentials never appear in URLs or evidence."""
     return HttpUrl(f"{DATASET_URL}?{urlencode(parameters)}")
+
+
+def summary_parameters(where: str) -> dict[str, str]:
+    """Return the canonical aggregate request parameters."""
+    return {"$select": _SUMMARY_SELECT, "$where": where}
+
+
+def page_parameters(where: str, last_pk: int) -> dict[str, str]:
+    """Return the canonical keyset-page request parameters."""
+    return {
+        "$where": f"{where} AND pk > {last_pk}",
+        "$order": "pk ASC,socrata_id ASC",
+        "$limit": str(PAGE_SIZE),
+    }
 
 
 def _discovery_capture(
@@ -178,7 +198,7 @@ class CamdenOpenDataAdapter:
             "sources": (
                 *CamdenAdapter.manifest.sources,
                 SourceDefinition(
-                    id=SourceId("camden-socrata-2eiu-s2cw"),
+                    id=CAMDEN_OPEN_DATA_SOURCE,
                     base_url=HttpUrl(DATASET_URL),
                     valid_from=date(2010, 1, 1),
                 ),
@@ -200,18 +220,7 @@ class CamdenOpenDataAdapter:
         self, session: PortalSession, where: str
     ) -> tuple[int, str, DiscoveryEvidenceCapture]:
         request = PortalRequest(
-            url=api_url(
-                **{
-                    "$select": (
-                        "count(distinct pk) AS total,"
-                        "count(distinct application_number) AS references,"
-                        "count(distinct (pk || '|' || application_number)) "
-                        "AS pairs,"
-                        "max(last_uploaded) AS watermark"
-                    ),
-                    "$where": where,
-                }
-            ),
+            url=api_url(**summary_parameters(where)),
             intent=RequestIntent.SEARCH,
         )
         capture = await session.fetch(request)
@@ -251,13 +260,7 @@ class CamdenOpenDataAdapter:
         while True:
             previous_last_pk = cursor.last_pk
             request = PortalRequest(
-                url=api_url(
-                    **{
-                        "$where": f"{where} AND pk > {cursor.last_pk}",
-                        "$order": "pk ASC,socrata_id ASC",
-                        "$limit": str(PAGE_SIZE),
-                    }
-                ),
+                url=api_url(**page_parameters(where, cursor.last_pk)),
                 intent=RequestIntent.SEARCH,
             )
             capture = await session.fetch(request)
@@ -302,7 +305,9 @@ class CamdenOpenDataAdapter:
             yield DiscoveryBatch(
                 references=tuple(
                     SourceReference(
-                        source_id=CAMDEN_SOURCE, reference=ref, locator=row.pk
+                        source_id=CAMDEN_OPEN_DATA_SOURCE,
+                        reference=ref,
+                        locator=row.pk,
                     )
                     for ref, row in unique.items()
                 ),
@@ -319,7 +324,7 @@ class CamdenOpenDataAdapter:
         self, session: PortalSession, reference: SourceReference
     ) -> NativeSnapshot[CamdenOpenDataApplicationV1]:
         """Serve a discovered row or refresh one reference via the same API."""
-        if reference.source_id != CAMDEN_SOURCE:
+        if reference.source_id != CAMDEN_OPEN_DATA_SOURCE:
             _fail("unexpected source identity")
         cached = (
             self._cache.pop(reference.reference, None)
@@ -385,11 +390,14 @@ class CamdenOpenDataAdapter:
                 Provenance(field="proposal", evidence=snapshot.evidence[0].digest),
                 Provenance(field="status", evidence=snapshot.evidence[0].digest),
             ),
-            normaliser_version="camden-open-data-v1",
+            normaliser_version="camden-open-data-v2",
             metadata=ApplicationMetadata(
                 address=row.development_address,
                 application_type=row.application_type,
                 decision=row.decision_type,
+                received_date=row.registered_date.date()
+                if row.registered_date
+                else None,
                 validated_date=row.valid_from_date.date()
                 if row.valid_from_date
                 else None,

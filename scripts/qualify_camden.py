@@ -10,13 +10,17 @@ import asyncio
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
+from urllib.parse import parse_qsl, urlsplit
 
 from yimby.authorities.camden import CamdenPackage
 from yimby.authorities.camden.open_data import (
     DATASET_URL,
     CamdenOpenDataCheckpointV1,
     create_session,
+    page_parameters,
+    scope_filter,
+    summary_parameters,
 )
 from yimby.collection import Collector
 from yimby.domain import AuthorityId, DiscoveryWindow
@@ -27,6 +31,82 @@ from yimby.store import SqliteStore
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from yimby.store import RetainedDiscoveryEvidenceRegistration
+
+
+_REQUESTS_PER_QUERY = 2
+
+
+def _fail(reason: str) -> NoReturn:
+    raise ValueError(reason)
+
+
+def _request_parameters(
+    item: RetainedDiscoveryEvidenceRegistration,
+) -> dict[str, str]:
+    if (
+        item.page != 1
+        or item.response_url != DATASET_URL
+        or item.request_method != "GET"
+        or item.request_form != ()
+        or item.request_url is None
+    ):
+        _fail("Camden discovery evidence subject is invalid")
+    parsed = urlsplit(item.request_url)
+    if f"{parsed.scheme}://{parsed.netloc}{parsed.path}" != DATASET_URL or (
+        parsed.fragment
+    ):
+        _fail("Camden discovery evidence URL is invalid")
+    return dict(parse_qsl(parsed.query))
+
+
+def _query_cursor(query_key: str) -> int:
+    prefix = "socrata:after:"
+    if not query_key.startswith(prefix):
+        _fail("Camden discovery evidence query key is invalid")
+    try:
+        return int(query_key.removeprefix(prefix))
+    except ValueError:
+        _fail("Camden discovery evidence cursor is invalid")
+
+
+def _expected_request_parameters(
+    window: DiscoveryWindow,
+    cursor: int,
+) -> tuple[dict[str, str], dict[str, str]]:
+    where = scope_filter(window)
+    return (
+        summary_parameters(where),
+        page_parameters(where, cursor),
+    )
+
+
+def _validate_discovery_registrations(
+    registrations: tuple[RetainedDiscoveryEvidenceRegistration, ...],
+    window: DiscoveryWindow,
+) -> int:
+    if not registrations:
+        _fail("Camden discovery evidence is missing")
+    run_ids = {item.run_id for item in registrations}
+    if len(run_ids) != 1:
+        _fail("Camden discovery evidence spans multiple runs")
+    groups: dict[str, list[RetainedDiscoveryEvidenceRegistration]] = {}
+    for item in registrations:
+        groups.setdefault(item.query_key, []).append(item)
+    cursors: set[int] = set()
+    for query_key, items in groups.items():
+        cursor = _query_cursor(query_key)
+        cursors.add(cursor)
+        request_parameters = [_request_parameters(item) for item in items]
+        if len(request_parameters) != _REQUESTS_PER_QUERY or any(
+            subject not in request_parameters
+            for subject in _expected_request_parameters(window, cursor)
+        ):
+            _fail("Camden discovery evidence request contract is invalid")
+    if -1 not in cursors:
+        _fail("Camden discovery evidence does not start at the scope boundary")
+    return len(groups)
 
 
 async def qualify(data_dir: Path, window: DiscoveryWindow) -> dict[str, object]:
@@ -39,6 +119,12 @@ async def qualify(data_dir: Path, window: DiscoveryWindow) -> dict[str, object]:
     states = []
     try:
         for _ in range(2):
+            previous_run_ids = {
+                item.run_id
+                for item in store.evidence_registration_audit(
+                    authority
+                ).discovery_registrations
+            }
             collector = Collector(AuthorityRegistry((CamdenPackage(),)), store)
             session = create_session()
             try:
@@ -51,9 +137,20 @@ async def qualify(data_dir: Path, window: DiscoveryWindow) -> dict[str, object]:
                     stored.payload_json
                 )
                 integrity = store.evidence_integrity(authority)
+                registration_audit = store.evidence_registration_audit(authority)
+                current_registrations = tuple(
+                    item
+                    for item in registration_audit.discovery_registrations
+                    if item.run_id not in previous_run_ids
+                )
+                discovery_query_pages = _validate_discovery_registrations(
+                    current_registrations,
+                    window,
+                )
                 if (
                     not checkpoint.complete
                     or integrity.issues
+                    or registration_audit.missing_digests
                     or store.database_integrity() != "ok"
                 ):
                     message = "Camden API collection proof failed"
@@ -74,6 +171,8 @@ async def qualify(data_dir: Path, window: DiscoveryWindow) -> dict[str, object]:
                         "requests": len(session.requested_urls),
                         "response_bytes": session.transferred_bytes,
                         "attachment_body_requests": report.attachment_body_requests,
+                        "discovery_evidence_registrations": len(current_registrations),
+                        "discovery_query_pages": discovery_query_pages,
                         "evidence": integrity.model_dump(mode="json"),
                     }
                 )
@@ -84,7 +183,7 @@ async def qualify(data_dir: Path, window: DiscoveryWindow) -> dict[str, object]:
             message = "Camden API immediate refresh changed semantic state"
             raise ValueError(message)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "source": DATASET_URL,
             "created_at": datetime.now(UTC).isoformat(),
             "scope": window.model_dump(mode="json"),

@@ -17,7 +17,6 @@ import pytest
 
 from yimby.authorities.camden import CamdenPackage
 from yimby.authorities.camden import open_data as api
-from yimby.authorities.camden.discovery import CAMDEN_SOURCE
 from yimby.authorities.camden.fixtures import fixture_session
 from yimby.collection import Collector
 from yimby.domain import (
@@ -157,6 +156,10 @@ def test_bulk_collection_duplicate_boundary_refresh_and_rebuild(
     try:
         asyncio.run(collect())
         assert len(store.authority_application_ids(AuthorityId("camden"))) == 3
+        assert {
+            identity.source_id
+            for identity in store.application_identities(AuthorityId("camden"))
+        } == {api.CAMDEN_OPEN_DATA_SOURCE}
         assert store.qualification_snapshot(AuthorityId("camden")).native_versions == 3
         assert store.evidence_integrity(AuthorityId("camden")).issues == ()
         for retained in store.retained_native_records():
@@ -272,7 +275,9 @@ def test_exact_reference_fails_closed(
 ) -> None:
     feed = Feed([row(1)])
     reference = SourceReference(
-        source_id=CAMDEN_SOURCE, reference="2026/1/P", locator="1"
+        source_id=api.CAMDEN_OPEN_DATA_SOURCE,
+        reference="2026/1/P",
+        locator="1",
     )
     if failure == "source":
         reference = reference.model_copy(update={"source_id": SourceId("wrong")})
@@ -306,6 +311,7 @@ def test_exact_normalisation_preserves_dates_and_unknowns() -> None:
                 system_status=None,
                 easting="530748",
                 northing="182755",
+                registered_date="2026-08-20T00:00:00",
                 valid_from_date="2026-08-18T00:00:00",
                 decision_date="2026-09-15T00:00:00",
                 full_application={
@@ -320,13 +326,19 @@ def test_exact_normalisation_preserves_dates_and_unknowns() -> None:
         adapter = api.CamdenOpenDataAdapter()
         try:
             snapshot = await adapter.fetch(
-                client, SourceReference(source_id=CAMDEN_SOURCE, reference="2026/1/P")
+                client,
+                SourceReference(
+                    source_id=api.CAMDEN_OPEN_DATA_SOURCE,
+                    reference="2026/1/P",
+                ),
             )
             observation = adapter.normalise(snapshot)
             assert observation.status == "unknown"
             assert observation.metadata.location is not None
             assert observation.metadata.validated_date == WINDOW.start
             assert observation.metadata.decision_date == date(2026, 9, 15)
+            assert observation.metadata.received_date == date(2026, 8, 20)
+            assert observation.normaliser_version == "camden-open-data-v2"
         finally:
             await client.aclose()
 
@@ -437,9 +449,42 @@ def test_api_qualification_command(
     assert receipt["immediate_refresh_unchanged"]
     assert receipt["passes"][0]["source_applications"] == 1
     assert receipt["passes"][1]["requests"] == 3
+    assert receipt["passes"][0]["discovery_evidence_registrations"] == 2
+    assert receipt["passes"][0]["discovery_query_pages"] == 1
     with pytest.raises(SystemExit):
         module.main([*arguments, "--confirm-live"])
     assert module.main([*arguments, "--confirm-live", "--resume"]) == 0
+
+
+def test_api_qualification_accepts_shifted_refresh_scope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualifier_module()
+    monkeypatch.setattr(module, "create_session", lambda: session(Feed([row(1)])))
+    data_dir = tmp_path / "run"
+    asyncio.run(module.qualify(data_dir, WINDOW))
+    shifted = DiscoveryWindow(
+        start=date(2026, 8, 25),
+        end=date(2026, 9, 23),
+        include_open=True,
+    )
+    receipt = asyncio.run(module.qualify(data_dir, shifted))
+    assert receipt["scope"] == shifted.model_dump(mode="json")
+    store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    try:
+        checkpoint = store.discovery_state(AuthorityId("camden")).checkpoint
+        assert checkpoint is not None
+        parsed = api.CamdenOpenDataCheckpointV1.model_validate_json(
+            checkpoint.payload_json
+        )
+        assert parsed.window == shifted
+        assert parsed.complete
+    finally:
+        store.close()
 
 
 @pytest.mark.parametrize("fault", ["count", "attachment"])
@@ -482,3 +527,85 @@ def test_api_qualification_rejects_changed_immediate_refresh(
     monkeypatch.setattr(module, "create_session", lambda: session(next(feeds)))
     with pytest.raises(ValueError, match="immediate refresh changed"):
         asyncio.run(module.qualify(tmp_path / "changed", WINDOW))
+
+
+def _tamper_discovery_registration(store: SqliteStore, mutation: str) -> None:
+    match mutation:
+        case "query-key":
+            store._connection.execute(
+                "UPDATE discovery_evidence SET query_key = 'wrong' "
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case "page":
+            store._connection.execute(
+                "UPDATE discovery_evidence SET page = 2 "
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case "response-url":
+            store._connection.execute(
+                "UPDATE discovery_evidence SET response_url = "
+                "'https://example.test/wrong' "
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case "request-url":
+            store._connection.execute(
+                "UPDATE discovery_evidence SET request_url = "
+                "'https://example.test/wrong' "
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case "request-method":
+            store._connection.execute(
+                "UPDATE discovery_evidence SET request_method = 'POST' "
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case "request-form":
+            store._connection.execute(
+                "UPDATE discovery_evidence SET request_form_json = "
+                '\'[["unexpected","value"]]\' '
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case "delete":
+            store._connection.execute(
+                "DELETE FROM discovery_evidence "
+                "WHERE rowid = (SELECT MAX(rowid) FROM discovery_evidence)"
+            )
+        case _:
+            raise AssertionError(mutation)
+    store._connection.commit()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "query-key",
+        "page",
+        "response-url",
+        "request-url",
+        "request-method",
+        "request-form",
+        "delete",
+    ],
+)
+def test_api_qualification_rejects_tampered_discovery_registration(
+    mutation: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _qualifier_module()
+    real_collect = module.Collector.collect
+
+    async def tampered_collect(
+        collector: Collector,
+        authority: AuthorityId,
+        window: DiscoveryWindow,
+        live_session: HttpxPortalSession,
+    ) -> CollectionReport:
+        report = await real_collect(collector, authority, window, live_session)
+        store = collector._store
+        _tamper_discovery_registration(store, mutation)
+        return cast("CollectionReport", report)
+
+    monkeypatch.setattr(module.Collector, "collect", tampered_collect)
+    monkeypatch.setattr(module, "create_session", lambda: session(Feed([row(1)])))
+    with pytest.raises(ValueError, match="discovery evidence"):
+        asyncio.run(module.qualify(tmp_path / mutation, WINDOW))
