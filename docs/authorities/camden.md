@@ -26,11 +26,11 @@ not a transactional snapshot guarantee. Source upload timestamps and duplicate
 row IDs do not create semantic application versions.
 
 Native records retain all published columns; normalisation exposes reference,
-proposal, address, application type, status, decision, validation/decision dates,
-coordinates, officer and full-application link. Registration and other source
-dates remain in the native payload. Raw response evidence is retained. The
-legacy source identity and numeric locator are preserved to avoid duplicating
-previously stored applications. Older native records still rebuild offline.
+proposal, address, application type, status, decision, registration,
+validation and decision dates, coordinates, officer and full-application link.
+Raw response evidence is retained. Live API records use the source identity
+`camden-socrata-2eiu-s2cw`; retained portal records keep their separate
+`camden-jsf-search` identity and still rebuild offline.
 
 Documents and public comment text are **unsupported** by this feed and marked
 unavailable, never falsely complete or empty. The source's `comment` field is a
@@ -40,9 +40,12 @@ the historical portal qualification command is retired.
 
 Live qualification for 18 August–16 September 2026 plus older open applications
 persisted 1,499 distinct applications in four HTTP requests. A second full read
-used four requests and left semantic state unchanged. Both passes verified
-stored evidence, reconciled counts and passed SQLite integrity checks, with
-zero attachment requests. See `.audit/camden-open-data-2026-09-16.json`.
+used four requests and left semantic state unchanged. Both passes verified four
+request-bound discovery registrations across two keyset query pages, reconciled
+counts and passed SQLite integrity checks, with zero attachment requests. The
+database stored all 1,499 applications under the Socrata source identity and all
+1,499 registration dates in common metadata. See
+`.audit/camden-open-data-2026-09-16.json`.
 The feed's latest upload was 16 September 2026 at 02:30:29. Weekly qualification
 cycles remain pending; this establishes application-metadata readiness only.
 
