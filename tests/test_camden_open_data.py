@@ -10,7 +10,6 @@ import importlib.util
 import json
 from datetime import date
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, cast
 
 import httpx
@@ -37,6 +36,7 @@ from yimby.store import SqliteStore
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
+    from types import ModuleType
 
     from yimby.domain import DiscoveryBatch
 
@@ -77,9 +77,7 @@ class Feed:
         if "$select" in query:
             self.summaries += 1
             total = len({str(item["pk"]) for item in self.rows})
-            references = len(
-                {str(item["application_number"]) for item in self.rows}
-            )
+            references = len({str(item["application_number"]) for item in self.rows})
             pairs = len(
                 {
                     (str(item["pk"]), str(item["application_number"]))
@@ -475,9 +473,7 @@ def test_api_qualification_rejects_changed_immediate_refresh(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     module = _qualifier_module()
-    feeds = iter(
-        [Feed([row(1)]), Feed([row(1, development_description="Changed")])]
-    )
+    feeds = iter([Feed([row(1)]), Feed([row(1, development_description="Changed")])])
     monkeypatch.setattr(module, "create_session", lambda: session(next(feeds)))
     with pytest.raises(ValueError, match="immediate refresh changed"):
         asyncio.run(module.qualify(tmp_path / "changed", WINDOW))
