@@ -25,6 +25,7 @@ dependencies = [
     "pydantic>=2.11",
     "pyproj>=3.7",
     "streamlit>=1.48",
+    "truststore>=0.10.4",
 ]
 
 [project.scripts]

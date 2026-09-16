@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import ssl
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
+import truststore
 from pydantic import HttpUrl
 
 from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
@@ -124,6 +126,7 @@ class HttpxPortalSession:
             follow_redirects=True,
             headers=_DEFAULT_HEADERS,
             timeout=httpx.Timeout(30.0),
+            verify=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
         )
         self._limiter = limiter or HostRateLimiter()
         self._max_attempts = max_attempts

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import truststore
 from pydantic import HttpUrl
 
 from yimby.authorities.barnet import BARNET_PACKAGE
@@ -341,6 +342,10 @@ def test_http_session_default_client_identifies_the_collector() -> None:
     session = HttpxPortalSession()
     assert session._client.headers["user-agent"].startswith("yimby/0.1 ")
     assert "text/html" in session._client.headers["accept"]
+    assert isinstance(
+        session._client._transport._pool._ssl_context,
+        truststore.SSLContext,
+    )
     asyncio.run(session.aclose())
 
 
