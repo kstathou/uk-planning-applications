@@ -155,7 +155,8 @@ def _result_page(
     <input name="PagingParameters.TotalRecords" value="0">
     <input name="IsPaginationClicked" value="true">
     <span>Total record(s): {reported}</span>
-    <div id="generalSearchPagination" data-url="/AssureLive/ES/Presentation/Planning/OnlinePlanning/SearchResultsForPagination">{links}</div>
+    <div class="pagination">{links}</div>
+    <div id="generalSearchPagination" data-url="/AssureLive/ES/Presentation/Planning/OnlinePlanning/SearchResultsForPagination"></div>
     """.encode()
 
 
