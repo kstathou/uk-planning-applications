@@ -438,6 +438,32 @@ def _write_receipt(path: Path, receipt: DevonQualificationReceiptV1) -> None:
         os.close(directory)
 
 
+def _receipt_to_persist(
+    path: Path,
+    candidate: DevonQualificationReceiptV1,
+) -> DevonQualificationReceiptV1:
+    if not path.exists() or candidate.costs.initial.request_count != 0:
+        return candidate
+    try:
+        prior = DevonQualificationReceiptV1.model_validate_json(path.read_text())
+    except (OSError, ValueError):
+        return candidate
+    if (
+        prior.scope == candidate.scope
+        and prior.expected_queries == candidate.expected_queries
+        and prior.completed_queries == candidate.completed_queries
+        and prior.counts == candidate.counts
+        and prior.costs.initial.request_count > 0
+        and prior.costs.rerun.request_count == 0
+        and prior.costs.rerun.transferred_bytes == 0
+        and prior.costs.rerun.attachment_body_requests == 0
+        and all(check.ok for check in prior.checks)
+        and all(check.ok for check in candidate.checks)
+    ):
+        return prior
+    return candidate
+
+
 def _default_session() -> HttpxPortalSession:
     return HttpxPortalSession()
 
@@ -469,8 +495,10 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
-                _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
+                candidate = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt_path = config.data_dir / _RECEIPT_NAME
+                receipt = _receipt_to_persist(receipt_path, candidate)
+                _write_receipt(receipt_path, receipt)
             finally:
                 store.close()
     except QualificationFailedError as error:
