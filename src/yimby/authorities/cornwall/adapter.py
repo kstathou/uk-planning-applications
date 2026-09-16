@@ -62,10 +62,19 @@ _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
 
 
+class CornwallDiscoveryScope(FrozenModel):
+    """Exact live discovery request owning resumable Cornwall progress."""
+
+    start: date
+    end: date
+    include_open: bool
+
+
 class CornwallCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable Cornwall weekly-list progress."""
 
     result_page: str
+    live_scope: CornwallDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
     active_query: str | None = None
     next_page: int = 1
@@ -159,7 +168,17 @@ class CornwallAdapter:
         window: DiscoveryWindow,
         checkpoint: CornwallCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[CornwallCheckpointV1]]:
-        progress = checkpoint or CornwallCheckpointV1(result_page="live")
+        requested_scope = CornwallDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=window.include_open,
+        )
+        progress = checkpoint
+        if progress is None or progress.live_scope != requested_scope:
+            progress = CornwallCheckpointV1(
+                result_page="live",
+                live_scope=requested_scope,
+            )
         if window.include_open and progress.live_complete:
             raise CornwallOpenEnumerationUnsupportedError
         if progress.live_complete:

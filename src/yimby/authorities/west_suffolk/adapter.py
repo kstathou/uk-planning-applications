@@ -62,10 +62,19 @@ _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
 
 
+class WestSuffolkDiscoveryScope(FrozenModel):
+    """Exact live discovery request owning resumable West Suffolk progress."""
+
+    start: date
+    end: date
+    include_open: bool
+
+
 class WestSuffolkCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable WestSuffolk weekly-list progress."""
 
     result_page: str
+    live_scope: WestSuffolkDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
     active_query: str | None = None
     next_page: int = 1
@@ -160,7 +169,17 @@ class WestSuffolkAdapter:
         window: DiscoveryWindow,
         checkpoint: WestSuffolkCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[WestSuffolkCheckpointV1]]:
-        progress = checkpoint or WestSuffolkCheckpointV1(result_page="live")
+        requested_scope = WestSuffolkDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=window.include_open,
+        )
+        progress = checkpoint
+        if progress is None or progress.live_scope != requested_scope:
+            progress = WestSuffolkCheckpointV1(
+                result_page="live",
+                live_scope=requested_scope,
+            )
         if window.include_open and progress.live_complete:
             raise WestSuffolkOpenEnumerationUnsupportedError
         if progress.live_complete:

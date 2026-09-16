@@ -62,10 +62,19 @@ _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
 
 
+class DurhamDiscoveryScope(FrozenModel):
+    """Exact live discovery request owning resumable Durham progress."""
+
+    start: date
+    end: date
+    include_open: bool
+
+
 class DurhamCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable Durham weekly-list progress."""
 
     result_page: str
+    live_scope: DurhamDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
     active_query: str | None = None
     next_page: int = 1
@@ -160,7 +169,17 @@ class DurhamAdapter:
         window: DiscoveryWindow,
         checkpoint: DurhamCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[DurhamCheckpointV1]]:
-        progress = checkpoint or DurhamCheckpointV1(result_page="live")
+        requested_scope = DurhamDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=window.include_open,
+        )
+        progress = checkpoint
+        if progress is None or progress.live_scope != requested_scope:
+            progress = DurhamCheckpointV1(
+                result_page="live",
+                live_scope=requested_scope,
+            )
         if window.include_open and progress.live_complete:
             raise DurhamOpenEnumerationUnsupportedError
         if progress.live_complete:

@@ -56,10 +56,19 @@ _DATE_TYPES = ("DC_Validated", "DC_Decided")
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 
 
+class LeedsDiscoveryScope(FrozenModel):
+    """Exact live discovery request owning resumable Leeds progress."""
+
+    start: date
+    end: date
+    include_open: bool
+
+
 class LeedsCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable Leeds weekly-list progress."""
 
     result_page: str
+    live_scope: LeedsDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
     active_query: str | None = None
     next_page: int = 1
@@ -147,7 +156,17 @@ class LeedsAdapter:
         window: DiscoveryWindow,
         checkpoint: LeedsCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[LeedsCheckpointV1]]:
-        progress = checkpoint or LeedsCheckpointV1(result_page="live")
+        requested_scope = LeedsDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=window.include_open,
+        )
+        progress = checkpoint
+        if progress is None or progress.live_scope != requested_scope:
+            progress = LeedsCheckpointV1(
+                result_page="live",
+                live_scope=requested_scope,
+            )
         if window.include_open and progress.live_complete:
             raise LeedsOpenEnumerationUnsupportedError
         if progress.live_complete:

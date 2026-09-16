@@ -996,7 +996,7 @@ def test_authority_legacy_unscoped_live_checkpoint_restarts(case: _Case) -> None
         payload_json=checkpoint_type(
             result_page="live",
             live_complete=True,
-        ).model_dump_json(),
+        ).model_dump_json(exclude_none=True),
     )
 
     async def exercise() -> None:
@@ -1057,10 +1057,20 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
     """Terminal, stale, empty-window, and stalled checkpoints stay explicit."""
     adapter = _member(case, "Adapter")()
     checkpoint_type = _member(case, "CheckpointV1")
+    scope_type = _member(case, "DiscoveryScope")
 
     async def exercise() -> None:
         terminal_session = _session(_IdoxMock(case))
-        terminal_checkpoint = checkpoint_type(result_page="live", live_complete=True)
+        scope = scope_type(
+            start=WEEK.start,
+            end=WEEK.end,
+            include_open=WEEK.include_open,
+        )
+        terminal_checkpoint = checkpoint_type(
+            result_page="live",
+            live_scope=scope,
+            live_complete=True,
+        )
         terminal = [
             batch
             async for batch in adapter.discover(
@@ -1075,11 +1085,21 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
         await terminal_session.aclose()
 
         terminal_open_session = _session(_IdoxMock(case))
+        open_window = WEEK.model_copy(update={"include_open": True})
+        terminal_open_checkpoint = checkpoint_type(
+            result_page="live",
+            live_scope=scope_type(
+                start=open_window.start,
+                end=open_window.end,
+                include_open=open_window.include_open,
+            ),
+            live_complete=True,
+        )
         with pytest.raises(RuntimeError, match="older-open"):
             async for _batch in adapter.discover(
                 terminal_open_session,
-                WEEK.model_copy(update={"include_open": True}),
-                terminal_checkpoint,
+                open_window,
+                terminal_open_checkpoint,
             ):
                 pass
         await terminal_open_session.aclose()
@@ -1087,6 +1107,7 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
         stale_session = _session(_IdoxMock(case))
         stale = checkpoint_type(
             result_page="live",
+            live_scope=scope,
             active_query="01/01/2000|DC_Validated",
         )
         with pytest.raises(ValueError, match="checkpoint query"):
