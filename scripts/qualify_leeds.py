@@ -55,6 +55,7 @@ _RESUME_REQUIRED = "resume-required"
 _MAX_REFERENCE_FAILURES = 3
 _MAX_NO_PROGRESS_FAILURES = 3
 _WEEKLY_DATE_TYPES = ("DC_Validated", "DC_Decided")
+_WEEK_DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 _CASE_TYPE_VALUES = (
     "DAG",
     "ADV",
@@ -371,6 +372,25 @@ def _expected_query_inventory(scope: QualificationScope) -> tuple[str, ...]:
     )
 
 
+def _query_inventory_identity(inventory: tuple[str, ...]) -> tuple[str, ...]:
+    identities: list[str] = []
+    for key in inventory:
+        rendered_date, separator, date_type = key.partition("|")
+        if not separator or date_type not in _WEEKLY_DATE_TYPES:
+            identities.append(key)
+            continue
+        for date_format in _WEEK_DATE_FORMATS:
+            try:
+                week = datetime.strptime(rendered_date, date_format).date()  # noqa: DTZ007
+            except ValueError:
+                continue
+            identities.append(f"{week.isoformat()}|{date_type}")
+            break
+        else:
+            identities.append(key)
+    return tuple(identities)
+
+
 def _terminal_checkpoint(
     store: SqliteStore,
     scope: QualificationScope,
@@ -398,7 +418,8 @@ def _terminal_checkpoint(
         checkpoint.result_page == "live"
         and checkpoint.live_scope == expected_scope
         and checkpoint.live_complete
-        and checkpoint.completed_queries == expected_queries
+        and _query_inventory_identity(checkpoint.completed_queries)
+        == _query_inventory_identity(expected_queries)
         and len(checkpoint.query_totals) == len(expected_queries)
         and all(total >= 0 for total in checkpoint.query_totals)
         and checkpoint.active_query is None
