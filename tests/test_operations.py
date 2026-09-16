@@ -205,8 +205,9 @@ def _commit_rich(store: SqliteStore) -> ApplicationId:
     return application_id
 
 
-def test_zero_request_success_does_not_advance_source_freshness(tmp_path: Path) -> None:
-    """A no-op command success is not a new source observation."""
+def test_zero_request_success_does_not_advance_source_freshness(  # noqa: D103
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     _commit_rich(store)
     before = next(

@@ -487,3 +487,13 @@ checks, formatting, configured mypy, build, both hook stages, pilot
 verification, the typed artifact assertions above, and `git diff --check` all
 passed again. The full suite collected 397 tests; all passed with 100 percent
 statement and branch coverage.
+
+Transcript scope correction
+Recorded: 2026-09-16T14:54:42Z
+
+The file header's "complete combined stdout/stderr" description applies only
+to the original timestamped command block that begins at 12:48:25Z. Later
+sections through 14:32:11Z are explicitly summaries and are not complete
+terminal transcripts. A new complete post-remediation command transcript,
+including exact commands, combined output, exit statuses, and timestamps, is
+recorded after the final qualification rerun below.

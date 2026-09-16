@@ -473,7 +473,13 @@ class ArunAdapter:
         elif isinstance(checkpoint.cursor, ArunLiveCursor):
             cursor = checkpoint.cursor
             if cursor.scope != scope or cursor.plan != plan:
-                raise ArunCheckpointError
+                if not _is_complete(cursor.progress):
+                    raise ArunCheckpointError
+                cursor = ArunLiveCursor(
+                    scope=scope,
+                    plan=plan,
+                    progress=ArunReady(next_query=0),
+                )
         else:
             raise ArunCheckpointError
         if _is_complete(cursor.progress):
@@ -856,7 +862,6 @@ class _SearchResults(FrozenModel):
 
     @property
     def has_show_all(self) -> bool:
-        """Report whether the portal supplied an exact expansion form."""
         return self.show_all_form is not None
 
 
@@ -991,7 +996,6 @@ def _show_all_request(
 
 
 def _request_evidence(request: PortalRequest) -> ArunRequestContract:
-    """Describe the exact ordered request expected for a query."""
     return ArunRequestContract(
         url=request.url,
         method=request.method,
@@ -1428,8 +1432,6 @@ def _store_unique_field(fields: dict[str, str], label: str, value: str) -> None:
 
 
 class _ArunAppealFields(FrozenModel):
-    """Appeal subrecord published at the end of one detail table."""
-
     reference: str | None = None
     status: str | None = None
     lodged_date: date | None = None
@@ -1453,7 +1455,10 @@ def _parse_appeal_fields(body: bytes) -> _ArunAppealFields:
     if len(candidates) != 1:
         _raise_parse("appeal block")
     table, start = candidates[0]
-    rows = tuple(table.find_all("tr", recursive=False))[start : start + 4]
+    table_rows = tuple(table.find_all("tr", recursive=False))
+    if start + 4 != len(table_rows):
+        _raise_parse("appeal block")
+    rows = table_rows[start : start + 4]
     labels_and_values = []
     for row in rows:
         cells = row.find_all(["th", "td"], recursive=False)
@@ -1486,7 +1491,6 @@ def _parse_application_pages(
     document_body: bytes,
     expected_reference: str,
 ) -> ArunApplicationV1:
-    """Rebuild the complete Arun-native model from its retained source pages."""
     fields = _parse_labelled_fields(detail_body)
     appeal = _parse_appeal_fields(detail_body)
     published = _published_reference(fields, expected_reference)

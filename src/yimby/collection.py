@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING
@@ -34,6 +34,7 @@ class _RunContext:
     started: float
     storage_before: int
     active_reference: SourceReference | None = None
+    attachment_urls: set[str] = field(default_factory=set)
 
 
 class Collector:
@@ -63,7 +64,6 @@ class Collector:
         )
         checkpoint = self._store.discovery_state(authority_id).checkpoint
         application_ids = []
-        attachment_urls: set[str] = set()
         processed: set[tuple[str, str]] = set()
 
         async def collect_reference(reference: SourceReference) -> None:
@@ -72,7 +72,7 @@ class Collector:
                 return
             context.active_reference = reference
             collected = await package.collect(session, reference)
-            attachment_urls.update(
+            context.attachment_urls.update(
                 str(document.url) for document in collected.normalised.documents
             )
             application_ids.append(self._store.commit_observation(run_id, collected))
@@ -104,16 +104,13 @@ class Collector:
                 error,
             )
             raise
-        retrieved_attachment_urls = attachment_urls.intersection(session.requested_urls)
-        attachment_body_requests = session.attachment_body_requests + len(
-            retrieved_attachment_urls
-        )
+        attachment_body_requests = self._attachment_body_requests(context)
         self._store.finish_run(
             run_id,
             authority_id,
             RunOutcome(
                 status=RunStatus.SUCCEEDED,
-                metrics=self._metrics(context, attachment_body_requests),
+                metrics=self._metrics(context),
                 transport_mode=session.mode,
             ),
         )
@@ -148,10 +145,7 @@ class Collector:
             context.authority_id,
             RunOutcome(
                 status=status,
-                metrics=self._metrics(
-                    context,
-                    context.session.attachment_body_requests,
-                ),
+                metrics=self._metrics(context),
                 transport_mode=context.session.mode,
                 failure_message=error_name,
             ),
@@ -160,16 +154,20 @@ class Collector:
     def _metrics(
         self,
         context: _RunContext,
-        attachment_body_requests: int,
     ) -> RunMetrics:
         return RunMetrics(
             request_count=len(context.session.requested_urls),
             transferred_bytes=context.session.transferred_bytes,
             duration_ms=max(0, round((monotonic() - context.started) * 1000)),
             browser_time_ms=context.session.browser_time_ms,
-            attachment_body_requests=attachment_body_requests,
+            attachment_body_requests=self._attachment_body_requests(context),
             storage_growth_bytes=max(
                 0,
                 self._store.storage_bytes() - context.storage_before,
             ),
         )
+
+    @staticmethod
+    def _attachment_body_requests(context: _RunContext) -> int:
+        retrieved = context.attachment_urls.intersection(context.session.requested_urls)
+        return context.session.attachment_body_requests + len(retrieved)

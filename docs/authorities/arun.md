@@ -35,6 +35,9 @@ every other partition must remain below the 200-result cap. Completed queries
 are immutable in the versioned checkpoint. An interrupted active query is
 replayed before Show All so that a newly arrived first-page record is included
 without repeating completed partitions.
+A completed terminal checkpoint rolls forward to a fresh canonical plan when a
+later weekly scope is supplied; scope changes remain rejected while a plan is
+in progress.
 
 The result parser reconciles a source-reported partial total with the exact
 expanded references, rejects duplicates within a response, and de-duplicates

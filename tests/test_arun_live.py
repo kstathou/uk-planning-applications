@@ -826,6 +826,31 @@ def test_arun_live_checkpoint_rejects_a_different_scope() -> None:
         )
 
 
+def test_arun_completed_checkpoint_starts_a_new_scope() -> None:
+    adapter = arun.ArunAdapter()
+    first_window = DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+    first_batches = asyncio.run(
+        _batches(adapter, _Session(_DiscoveryResponder()), first_window, None)
+    )
+    terminal = first_batches[-1].next_checkpoint
+    second_window = first_window.model_copy(update={"start": date(2026, 8, 19)})
+    second_session = _Session(_DiscoveryResponder())
+
+    second_batches = asyncio.run(
+        _batches(adapter, second_session, second_window, terminal)
+    )
+
+    assert second_batches[-1].complete
+    second_cursor = second_batches[-1].next_checkpoint.cursor
+    assert isinstance(second_cursor, arun.ArunLiveCursor)
+    assert second_cursor.scope.start == second_window.start
+    assert second_session.requests
+
+
 def test_arun_reference_identity_is_unique_across_overlapping_queries() -> None:
     adapter = arun.ArunAdapter()
     window = DiscoveryWindow(
@@ -1487,6 +1512,13 @@ def test_arun_appeal_block_rejects_ambiguous_or_incomplete_shapes() -> None:
         )
     with pytest.raises(arun.ArunParseError, match="appeal block"):
         arun._parse_appeal_fields(block.replace(b"<th>Type</th>", b"<th>State</th>"))
+    with pytest.raises(arun.ArunParseError, match="appeal block"):
+        arun._parse_appeal_fields(
+            block.replace(
+                b"</table>",
+                b"<tr><th>Later</th><td>silently discarded</td></tr></table>",
+            )
+        )
 
 
 def test_arun_detail_fields_reject_duplicate_normalised_labels() -> None:
@@ -1832,8 +1864,53 @@ def test_arun_qualification_rejects_checkpoint_source_count_tampering(
 
     assert module.main([*args, "--resume"], session_factory=factory) == 1
     error = json.loads(capsys.readouterr().err)
-    assert error["error"] == "qualification-failed"
+    assert error["error"] == "qualification-failed", error
     assert "terminal-checkpoint" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
+
+
+def test_arun_qualification_fails_cleanly_on_missing_application_captures(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "missing-application-captures"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    factory = lambda: _Session(_QualificationResponder())  # noqa: E731
+
+    assert module.main(args, session_factory=factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(
+            """
+            UPDATE native_rebuild_inputs
+            SET evidence_digests_json = '[]'
+            WHERE application_id = (
+                SELECT application_id
+                FROM native_rebuild_inputs
+                ORDER BY application_id
+                LIMIT 1
+            )
+            """
+        )
+        connection.commit()
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "native-evidence-agreement" in error["failed_checks"]
+    assert "normalised-evidence-agreement" in error["failed_checks"]
     assert receipt_path.read_text(encoding="utf-8") == original
 
 
@@ -1960,6 +2037,36 @@ def test_arun_qualification_accepts_legacy_terminal_request_contracts(
         ORDER BY reference
         LIMIT 1
         """,
+        """
+        UPDATE applications
+        SET source_id = 'tampered-source'
+        WHERE id = (
+            SELECT id
+            FROM applications
+            WHERE authority_id = 'arun'
+            ORDER BY reference
+            LIMIT 1
+        );
+        UPDATE discovery_queue
+        SET source_id = 'tampered-source'
+        WHERE reference = (
+            SELECT reference
+            FROM applications
+            WHERE source_id = 'tampered-source'
+            LIMIT 1
+        )
+        """,
+        """
+        UPDATE applications
+        SET locator = 'https://example.test/tampered'
+        WHERE id = (
+            SELECT id
+            FROM applications
+            WHERE authority_id = 'arun'
+            ORDER BY reference
+            LIMIT 1
+        )
+        """,
     ],
 )
 def test_arun_qualification_rejects_normalised_state_tampering(
@@ -1988,12 +2095,12 @@ def test_arun_qualification_rejects_normalised_state_tampering(
     receipt_path = data_dir / "arun-qualification-v3.json"
     original = receipt_path.read_text(encoding="utf-8")
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
-        connection.execute(tamper_sql)
+        connection.executescript(tamper_sql)
         connection.commit()
 
     assert module.main([*args, "--resume"], session_factory=factory) == 1
     error = json.loads(capsys.readouterr().err)
-    assert error["error"] == "qualification-failed"
+    assert error["error"] == "qualification-failed", error
     assert "normalised-evidence-agreement" in error["failed_checks"]
     assert receipt_path.read_text(encoding="utf-8") == original
 

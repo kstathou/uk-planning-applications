@@ -351,7 +351,9 @@ class StoredApplication(FrozenModel):
 
     id: ApplicationId
     authority_id: AuthorityId
+    source_id: SourceId
     reference: str
+    locator: str | None
     proposal: str
     status: str
     documents: tuple[DocumentRecord, ...]

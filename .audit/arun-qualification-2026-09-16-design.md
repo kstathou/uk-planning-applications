@@ -45,6 +45,9 @@ global unique reference union, and exactly one of these states:
 Illegal combinations cannot be constructed. A terminal cursor yields one empty
 complete batch without a request. A crash before the store commit safely
 repeats the portal request; a crash after it resumes at the committed state.
+An in-progress cursor rejects a different scope. Once its scope is complete, a
+different weekly scope starts a fresh canonical plan instead of being blocked
+by the prior terminal cursor.
 The earlier V1 checkpoint shape is decoded explicitly. Its fixture cursor is
 upconverted directly; its live cursor restarts the canonical plan for the same
 scope, relying on durable reference de-duplication rather than inventing missing
@@ -120,7 +123,8 @@ schema-version-3 receipt atomically. The receipt proves:
 - exact checkpoint/source-count equality, including null source totals, and
   agreement with each reconstructed expected request contract, plus exact
   agreement between the complete native and normalised persisted models and
-  their retained detail and document-index evidence;
+  their retained detail and document-index evidence, including persisted source
+  identity and locator;
 - complete current application and document sections for every retained record;
 - a successful completed run plus an immediate successful rerun with a
   byte-for-byte semantic fingerprint match; all historical run outcomes and
@@ -135,7 +139,8 @@ it and validate it against retained source evidence.
 The exact 648-record portal population includes the source-published test/dummy
 references `DUMMY_P`, `H/1/18/PL`, and `H/5/26/PL`. They remain in the source
 inventory as ordinary unsuppressed stored application rows and are identified
-explicitly as source test/dummy records in the receipt and documentation.
+explicitly as source test/dummy records in the documentation. The receipt's
+exact reference inventory includes them without adding a separate classifier.
 
 Two weekly refresh targets remain explicitly pending. The registry stays
 `DISCOVERY_ONLY`; a successful bootstrap receipt does not promote Arun to

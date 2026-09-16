@@ -886,15 +886,17 @@ def test_arun_terminal_and_parser_boundaries() -> None:
     )
     batches = asyncio.run(_batches(adapter, _Session(_ArunMock()), window, terminal))
     assert batches[0].complete
-    with pytest.raises(arun.ArunCheckpointError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(_ArunMock()),
-                window.model_copy(update={"include_open": True}),
-                terminal,
-            )
+    rolled_session = _Session(_ArunMock())
+    rolled = asyncio.run(
+        _batches(
+            adapter,
+            rolled_session,
+            window.model_copy(update={"include_open": True}),
+            terminal,
         )
+    )
+    assert rolled[-1].complete
+    assert rolled_session.requests
 
     complete_mock = _ArunMock(first_reported=1, first_show_all=False)
     complete = asyncio.run(_batches(adapter, _Session(complete_mock), window, None))

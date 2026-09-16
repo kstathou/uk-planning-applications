@@ -457,7 +457,10 @@ class SqliteStore:
     def get_application(self, application_id: ApplicationId) -> StoredApplication:
         """Return current successful content plus latest completeness."""
         row = self._connection.execute(
-            "SELECT authority_id, reference FROM applications WHERE id = ?",
+            """
+            SELECT authority_id, source_id, reference, locator
+            FROM applications WHERE id = ?
+            """,
             (application_id,),
         ).fetchone()
         if row is None:
@@ -483,7 +486,9 @@ class SqliteStore:
         return StoredApplication(
             id=application_id,
             authority_id=AuthorityId(row["authority_id"]),
+            source_id=SourceId(row["source_id"]),
             reference=row["reference"],
+            locator=row["locator"],
             proposal=application.proposal,
             status=application.status,
             documents=documents,

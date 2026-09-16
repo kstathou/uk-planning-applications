@@ -223,16 +223,12 @@ class _QualificationState(FrozenModel):
 
 
 class _TerminalDiscoveryProof(FrozenModel):
-    """Revalidated terminal query inventory and retained search evidence."""
-
     inventory: tuple[QualificationQuery, ...]
     search_form_evidence_digest: EvidenceDigest
     search_digests: tuple[EvidenceDigest, ...]
 
 
 class _ValidatedQueryEvidence(FrozenModel):
-    """One completed query reparsed from its retained response bodies."""
-
     inventory: QualificationQuery
     digests: tuple[EvidenceDigest, ...]
 
@@ -512,11 +508,12 @@ def _evidence_and_sections(
         native = ArunApplicationV1.model_validate_json(record.native_json)
         native_rows.append(native)
         current = store.get_application(record.application_id)
-        native_evidence_agreement = (
-            native_evidence_agreement and _native_evidence_agrees(record, native)
-        )
+        record_native_agrees = _native_evidence_agrees(record, native)
+        native_evidence_agreement = native_evidence_agreement and record_native_agrees
         normalised_evidence_agreement = (
-            normalised_evidence_agreement and _normalised_evidence_agrees(store, record)
+            normalised_evidence_agreement
+            and record_native_agrees
+            and _normalised_evidence_agrees(store, record)
         )
         sections_complete = sections_complete and (
             record.completeness.application.kind == "complete"
@@ -604,7 +601,9 @@ def _normalised_evidence_agrees(
     return (
         application.id == record.application_id
         and application.authority_id == expected.authority_id
+        and application.source_id == expected.reference.source_id
         and application.reference == expected.reference.reference
+        and application.locator == expected.reference.locator
         and application.proposal == expected.proposal
         and application.status == expected.status
         and application.documents
@@ -930,7 +929,6 @@ def _run_qualification(
     session_factory: SessionFactory,
     now: Clock,
 ) -> ArunQualificationReceiptV3:
-    """Translate only expected operational boundary failures."""
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
             store = SqliteStore(
