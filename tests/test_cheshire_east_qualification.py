@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import importlib.util
 import sys
@@ -13,11 +14,17 @@ from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import pytest
+from bs4 import BeautifulSoup
+from bs4.element import Tag
+
 import yimby.authorities.cheshire_east.adapter as cheshire
 from yimby.domain import (
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
+    SourceId,
+    SourceReference,
     TransportMode,
 )
 from yimby.transport import PortalRequest, RequestMethod
@@ -38,11 +45,15 @@ def _search_form() -> bytes:
       <select name="application_type_id">
         <option value="" selected>Any</option><option value="4">Full</option>
       </select>
+      <select name="decision_type_id"><option value="">Any</option></select>
       <input name="valid_date_from" value="">
       <input name="valid_date_to" value="">
       <input type="checkbox" name="ignored_checkbox" value="1">
       <input type="checkbox" name="included_checkbox" value="yes" checked>
       <input type="text" name="disabled_value" value="no" disabled>
+      <textarea name="proposal">House</textarea>
+      <select name="empty_multiple" multiple><option value="one">One</option></select>
+      <input type="submit" name="ignored_submit" value="Search">
       <button type="submit" name="submit_button" value="Search">Search</button>
     </form>
     """
@@ -203,9 +214,11 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
         ("submitted", ""),
         ("application_reference_number", ""),
         ("application_type_id", ""),
+        ("decision_type_id", ""),
         ("valid_date_from", "18-08-2026"),
         ("valid_date_to", "16-09-2026"),
         ("included_checkbox", "yes"),
+        ("proposal", "House"),
     )
 
 
@@ -245,6 +258,235 @@ def test_cheshire_detail_contract_includes_only_document_metadata() -> None:
         "https://pa.cheshireeast.gov.uk/planning/"
         "?fa=downloadDocument&id=3364715&public_record_id=406569"
     )
+
+
+def test_cheshire_search_and_form_failure_boundaries() -> None:
+    result = cheshire.parse_search_boundary(
+        b"""
+        <table id="application_results_table">
+        <tr><th>Reference</th><th>Application Type</th><th>Location</th>
+        <th>Proposal</th><th>View</th></tr>
+        <tr><td>26/1/FUL</td><td>Full</td><td>One Road</td><td>Build</td>
+        <td><button class="view_application" data-id="1">View</button></td></tr>
+        </table>
+        """
+    )
+    assert result.explicit_zero is False
+    assert result.results[0].public_reference == "26/1/FUL"
+
+    for body in (b"<main></main>", b"<p>No Results Found</p><p>No Results Found</p>"):
+        with pytest.raises(cheshire.CheshireEastParseError):
+            cheshire.parse_search_boundary(body)
+
+    for body in (
+        _search_form().replace(
+            b'action="/planning/index.html"', b'action="/planning/wrong"'
+        ),
+        _search_form().replace(
+            b'<input name="valid_date_to" value="">',
+            b'<input name="valid_date_to" value=""><input name="valid_date_to">',
+        ),
+    ):
+        with pytest.raises(cheshire.CheshireEastParseError):
+            cheshire.parse_search_form(body)
+
+    custom = BeautifulSoup(
+        """
+        <form>
+          <input type="button" name="a" value="a">
+          <input type="file" name="b" value="b">
+          <input type="image" name="c" value="c">
+          <input type="reset" name="d" value="d">
+          <input type="radio" name="e" value="e">
+          <input type="radio" name="f" value="f" checked>
+          <select name="g" multiple><option value="g" selected>G</option></select>
+        </form>
+        """,
+        "html.parser",
+    ).select_one("form")
+    assert isinstance(custom, Tag)
+    assert tuple(
+        (field.name, field.value)
+        for field in cheshire._successful_form_fields(custom, {})
+    ) == (("f", "f"), ("g", "g"))
+
+
+def test_cheshire_weekly_contract_failure_boundaries() -> None:
+    counted = (
+        _weekly_results()
+        .replace(
+            b"<table>",
+            b'<table data-result-count="50">',
+        )
+        .replace(
+            b"</table>",
+            b'</table><nav class="pagination"><a href="?page=2">Next</a></nav>'
+            b"<button>All Results Loaded</button>",
+        )
+    )
+    boundary = cheshire.parse_weekly_boundary(counted)
+    assert boundary.reported_total == 50
+    assert boundary.pagination_links == ("?page=2",)
+    assert boundary.terminal_marker is True
+    with_empty_table = _weekly_results().replace(b"<table>", b"<table></table><table>")
+    assert len(cheshire.parse_weekly_boundary(with_empty_table).rows) == 50
+    with_wrong_table = _weekly_results().replace(
+        b"<table>", b"<table><tr><th>Wrong</th></tr></table><table>"
+    )
+    assert len(cheshire.parse_weekly_boundary(with_wrong_table).rows) == 50
+
+    invalid_forms = (
+        b"<html></html>",
+        _weekly_form().replace(b'method="post"', b'method="get"'),
+        _weekly_form().replace(b'name="week"', b'name="other"'),
+    )
+    for body in invalid_forms:
+        with pytest.raises(cheshire.CheshireEastParseError):
+            cheshire.parse_weekly_form(body)
+
+    invalid_pages = (
+        b"<table></table>",
+        _weekly_results().replace(b"<td>Proposal 1</td>", b""),
+        _weekly_results().replace(
+            b'<a href="/planning/index.html?fa=getApplication&amp;id=400001">View</a>',
+            b"No link",
+        ),
+        _weekly_results().replace(
+            b"/planning/index.html?fa=getApplication&amp;id=400001",
+            b"/planning/wrong?fa=getApplication&amp;id=400001",
+        ),
+        _weekly_results().replace(b"<table>", b'<table data-result-count="many">'),
+    )
+    for body in invalid_pages:
+        with pytest.raises(cheshire.CheshireEastParseError):
+            cheshire.parse_weekly_boundary(body)
+
+    with pytest.raises(cheshire.CheshireEastParseError):
+        cheshire.detail_request("not-numeric")
+
+
+def test_cheshire_detail_contract_failure_boundaries() -> None:
+    failures = (
+        (
+            _detail().replace(
+                b'data-application-id="406569"', b'data-application-id="9"'
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"26/3335/PRIOR-1A", b"26/OTHER"),
+            cheshire.CheshireEastReferenceMismatchError,
+        ),
+        (
+            _detail().replace(
+                b'<div class="col-md-7">Pending Officer Allocation</div>', b""
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'</div>\n    <div id="documents">',
+                b'<div class="row pad-bottom-5"><div><strong>Application Status:</strong></div><div class="col-md-7">Other</div></div></div><div id="documents">',
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"14-09-2026", b"not-a-date", 1),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"374136, 360487", b"unknown"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b" disabled>All Documents Loaded", b">All Documents Loaded"
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"<thead><tr>", b"<thead><tr><th>Unexpected</th>"),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<td data-field-name="thumbnail">', b'<td data-field-name="wrong">'
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'<a href="/planning/?fa=downloadDocument&amp;id=3364715&amp;public_record_id=406569">Download</a>',
+                b"No link",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(b"public_record_id=406569", b"public_record_id=9"),
+            cheshire.CheshireEastParseError,
+        ),
+    )
+    for body, error in failures:
+        with pytest.raises(error):
+            cheshire.parse_detail_contract(
+                body,
+                expected_reference="26/3335/PRIOR-1A",
+                expected_locator="406569",
+            )
+
+    missing_required = _detail().replace(
+        b'<div class="row pad-bottom-5"><div><strong>Valid Date:</strong></div><div class="col-md-7">14-09-2026</div></div>',
+        b"",
+    )
+    with pytest.raises(cheshire.CheshireEastParseError):
+        cheshire.parse_detail_contract(
+            missing_required,
+            expected_reference="26/3335/PRIOR-1A",
+            expected_locator="406569",
+        )
+    empty_table = BeautifulSoup(_detail(), "html.parser")
+    documents = empty_table.select_one("table#application_documents")
+    assert isinstance(documents, Tag)
+    documents.clear()
+    with pytest.raises(cheshire.CheshireEastParseError):
+        cheshire.parse_detail_contract(
+            str(empty_table).encode(),
+            expected_reference="26/3335/PRIOR-1A",
+            expected_locator="406569",
+        )
+
+    cheshire._assert_window(
+        cheshire.CheshireEastCheckpointV1(search_page="live"),
+        DiscoveryWindow(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+    )
+
+
+def test_cheshire_live_detail_remains_unreachable_from_partial_discovery() -> None:
+    adapter = cheshire.CheshireEastAdapter()
+    session = _QualificationSession()
+
+    async def exercise() -> None:
+        for reference in (
+            SourceReference(source_id=SourceId("other"), reference="26/1"),
+            SourceReference(source_id=cheshire.SOURCE, reference="26/1"),
+        ):
+            with pytest.raises(cheshire.CheshireEastRoutingError):
+                await adapter.fetch(session, reference)
+        with pytest.raises(cheshire.CheshireEastDetailUnavailableError):
+            await adapter.fetch(
+                session,
+                SourceReference(
+                    source_id=cheshire.SOURCE,
+                    reference="26/1",
+                    locator="1",
+                ),
+            )
+
+    asyncio.run(exercise())
 
 
 def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(

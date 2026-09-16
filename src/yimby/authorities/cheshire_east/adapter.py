@@ -261,13 +261,6 @@ def parse_search_form(body: bytes) -> Tag:
     return form
 
 
-def _named_control(form: Tag, name: str) -> Tag:
-    control = form.find(None, {"name": name})
-    if not isinstance(control, Tag):
-        _raise_parse(name)
-    return control
-
-
 def _unique_named_control(form: Tag, name: str) -> Tag:
     controls = form.find_all(None, {"name": name})
     if len(controls) != 1 or not isinstance(controls[0], Tag):
