@@ -955,3 +955,88 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
     assert captured.out == ""
     assert '"error": "runtime-failure"' in captured.err
     assert '"exception": "ValidationError"' in captured.err
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "request-method",
+        "request-url",
+        "request-form",
+        "evidence-url",
+        "evidence-media-type",
+        "recent-zero-with-reference",
+        "historical-week",
+        "detail-locator",
+        "document-url",
+    ],
+)
+def test_cheshire_offline_resume_binds_requests_evidence_and_contract(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    tamper: str,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert (
+        module.main(
+            arguments,
+            session_factory=_QualificationSession,
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
+        == 1
+    )
+    capsys.readouterr()
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    if tamper == "request-method":
+        payload["attempted_requests"][0]["method"] = "POST"
+    elif tamper == "request-url":
+        payload["attempted_requests"][0]["url"] = "https://example.com/evil"
+    elif tamper == "request-form":
+        payload["attempted_requests"][0]["form"] = [
+            {"name": "evil", "value": "x"}
+        ]
+    elif tamper == "evidence-url":
+        payload["evidence"][0]["source_url"] = "https://example.com/evil"
+    elif tamper == "evidence-media-type":
+        payload["evidence"][0]["media_type"] = "application/pdf"
+    elif tamper == "recent-zero-with-reference":
+        payload["source_contract"]["recent"]["visible_references"] = ["26/X"]
+    elif tamper == "historical-week":
+        payload["source_contract"]["weekly"]["week"] = "2030-01-01"
+    elif tamper == "detail-locator":
+        payload["source_contract"]["detail"]["locator"] = "999999"
+    elif tamper == "document-url":
+        payload["source_contract"]["detail"]["documents"][0]["url"] = (
+            "https://example.com/evil"
+        )
+    else:
+        raise AssertionError(tamper)
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "tampered resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"error": "runtime-failure"' in captured.err
