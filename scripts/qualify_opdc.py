@@ -82,7 +82,13 @@ SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
 
 
-class QualificationScope(FrozenModel):
+class _ReceiptModel(FrozenModel):
+    """Reject fields outside the versioned qualification receipt schema."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class QualificationScope(_ReceiptModel):
     """The exact inclusive 30-day discovery scope proven by the receipt."""
 
     start: date
@@ -90,7 +96,7 @@ class QualificationScope(FrozenModel):
     include_open: Literal[True] = True
 
 
-class QualificationIdentity(FrozenModel):
+class QualificationIdentity(_ReceiptModel):
     """One exact source, public reference, and Agile locator agreement."""
 
     source_id: Literal["opdc-agile-applications"] = "opdc-agile-applications"
@@ -98,7 +104,7 @@ class QualificationIdentity(FrozenModel):
     locator: str = Field(min_length=1)
 
 
-class QualificationCounts(FrozenModel):
+class QualificationCounts(_ReceiptModel):
     """Durable OPDC counts after collection."""
 
     applications: int = Field(ge=0)
@@ -112,7 +118,7 @@ class QualificationCounts(FrozenModel):
     unmapped_records: int = Field(ge=0)
 
 
-class QualificationCost(FrozenModel):
+class QualificationCost(_ReceiptModel):
     """Observable transport cost for the initial qualification pass."""
 
     request_count: int = Field(ge=0)
@@ -120,7 +126,7 @@ class QualificationCost(FrozenModel):
     attachment_body_requests: int = Field(ge=0)
 
 
-class ZeroNetworkCost(FrozenModel):
+class ZeroNetworkCost(_ReceiptModel):
     """A typed proof that the immediate rerun performed no source I/O."""
 
     request_count: Literal[0]
@@ -128,28 +134,28 @@ class ZeroNetworkCost(FrozenModel):
     attachment_body_requests: Literal[0]
 
 
-class QualificationCosts(FrozenModel):
+class QualificationCosts(_ReceiptModel):
     """Initial collection cost and its zero-network rerun proof."""
 
     initial: QualificationCost
     rerun: ZeroNetworkCost
 
 
-class QualificationCheck(FrozenModel):
+class QualificationCheck(_ReceiptModel):
     """One named, falsifiable acceptance invariant."""
 
     name: str
     ok: bool
 
 
-class QualificationQuery(FrozenModel):
+class QualificationQuery(_ReceiptModel):
     """Compact receipt summary of one identity-backed discovery query."""
 
     query: OpdcDiscoveryQuery
     result_total: int = Field(ge=0)
 
 
-class QualificationEvidenceCommitment(FrozenModel):
+class QualificationEvidenceCommitment(_ReceiptModel):
     """Sanitized aggregate and digest commitment for retained evidence."""
 
     canonicalization: Literal["sha256-canonical-json-v1"]
@@ -163,21 +169,19 @@ class QualificationEvidenceCommitment(FrozenModel):
     content_digest_set_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
-class _EvidenceCaptureCommitmentInput(FrozenModel):
+class _EvidenceCaptureCommitmentInput(_ReceiptModel):
     digest: str
     source_url: str
     media_type: str
 
 
-class _ApplicationCaptureCommitmentInput(FrozenModel):
+class _ApplicationCaptureCommitmentInput(_ReceiptModel):
     identity: QualificationIdentity
     captures: tuple[_EvidenceCaptureCommitmentInput, ...]
 
 
-class _OpdcQualificationReceiptV1(FrozenModel):
+class _OpdcQualificationReceiptV1(_ReceiptModel):
     """Fields shared by private and sanitized OPDC qualification receipts."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal[1] = 1
     authority_id: Literal["opdc"] = "opdc"
