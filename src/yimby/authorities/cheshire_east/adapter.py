@@ -461,8 +461,6 @@ def _exact_search_control_values(
     if name in _SEARCH_FILTER_NAMES:
         return _neutral_search_filter_values(control, name)
     input_type = str(control.get("type", "text")).casefold()
-    if control.name == "input" and input_type == "hidden":
-        return (str(control.get("value", "")),)
     if control.name == "input" and input_type in {
         "button",
         "file",

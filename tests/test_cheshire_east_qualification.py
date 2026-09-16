@@ -52,7 +52,6 @@ def _search_form() -> bytes:
     <form id="form" name="form" method="post" action="/planning/index.html">
       <input type="hidden" name="fa" value="search">
       <input type="hidden" name="submitted" value="">
-      <input type="hidden" name="csrf_token" value="token">
       <input name="application_reference_number" value="">
       <select name="application_type_id">
         <option value="" selected>Any</option><option value="4">Full</option>
@@ -388,7 +387,6 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
     assert tuple((field.name, field.value) for field in request.form) == (
         ("fa", "search"),
         ("submitted", ""),
-        ("csrf_token", "token"),
         ("application_reference_number", ""),
         ("application_type_id", ""),
         ("decision_type_id", ""),
@@ -788,8 +786,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         ),
         _search_form().replace(
             b"</form>",
-            b'<input type="hidden" name="unknown_hidden_filter" '
-            b'value="narrow"></form>',
+            b'<input type="hidden" name="unknown_hidden_filter" value="narrow"></form>',
         ),
         _search_form() + _search_form(),
     ):
@@ -2087,7 +2084,7 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         (("attempted_requests", 0, "method"), "POST"),
         (("attempted_requests", 0, "url"), "https://example.com/evil"),
         (("attempted_requests", 0, "form"), [{"name": "evil", "value": "x"}]),
-        (("attempted_requests", 1, "form", 10, "value"), "Tampered proposal"),
+        (("attempted_requests", 1, "form", 9, "value"), "Tampered proposal"),
         (
             ("evidence", 0, "source_url"),
             "http://pa.cheshireeast.gov.uk/planning/index.html?fa=search",
