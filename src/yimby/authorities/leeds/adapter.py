@@ -895,19 +895,20 @@ async def _fetch_summary(
     session: PortalSession,
     locator: str,
 ) -> EvidenceCapture:
-    for attempt in range(_DETAIL_BODY_ATTEMPTS):
+    attempt = 0
+    while True:
         capture = await session.fetch(
             _detail_request(locator, "summary", RequestIntent.DETAIL)
         )
         soup = BeautifulSoup(capture.body, "html.parser")
         if soup.select("#simpleDetailsTable"):
             return capture
-        if attempt + 1 < _DETAIL_BODY_ATTEMPTS:
+        attempt += 1
+        if attempt < _DETAIL_BODY_ATTEMPTS:
             continue
         if _is_remote_exception(capture.body):
             raise LeedsDetailUnavailableError
         raise LeedsDetailUnverifiedError
-    raise LeedsDetailUnverifiedError
 
 
 def _parse_summary(body: bytes) -> dict[str, str]:
@@ -934,7 +935,8 @@ async def _fetch_documents(
     locator: str,
     evidence: list[EvidenceCapture],
 ) -> tuple[tuple[LeedsDocumentV1, ...], SectionState]:
-    for attempt in range(_DETAIL_BODY_ATTEMPTS):
+    attempt = 0
+    while True:
         try:
             capture = await session.fetch(
                 _detail_request(locator, "documents", RequestIntent.DETAIL)
@@ -943,7 +945,8 @@ async def _fetch_documents(
             return (), FailedSection(code="source-unavailable")
         if not _is_remote_exception(capture.body):
             break
-        if attempt + 1 == _DETAIL_BODY_ATTEMPTS:
+        attempt += 1
+        if attempt == _DETAIL_BODY_ATTEMPTS:
             raise LeedsDetailUnavailableError
     evidence.append(capture)
     try:

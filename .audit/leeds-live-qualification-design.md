@@ -38,13 +38,16 @@ class _WeeklyQuery(FrozenModel):
     week: str
     date_type: Literal["DC_Validated", "DC_Decided"]
 
+
 class _DateRangeQuery(FrozenModel):
     kind: Literal["validated", "decision"]
     start: date
     end: date
 
+
 class _CurrentCaseTypeQuery(FrozenModel):
     case_type: str
+
 
 class _ActiveAppealQuery(FrozenModel):
     appeal_status: Literal["Appeal lodged"] = "Appeal lodged"
@@ -70,9 +73,11 @@ class LeedsQueryCompletionV1(FrozenModel):
     key: str
     reported_total: int
 
+
 class LeedsReferenceIdentityV1(FrozenModel):
     reference: str
     locator: str
+
 
 class LeedsCheckpointV2(FrozenModel):
     result_page: str

@@ -1,4 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
+# ruff: noqa: SLF001
 
 """Leeds live qualification behavior."""
 
@@ -15,7 +16,9 @@ from urllib.parse import parse_qsl
 
 import httpx
 import pytest
+from bs4 import BeautifulSoup
 
+import yimby.authorities.leeds.adapter as leeds_adapter
 from yimby.authorities.leeds.adapter import (
     SOURCE,
     LeedsAdapter,
@@ -82,6 +85,7 @@ EXPECTED_QUERY_COUNT = 43
 EXPECTED_ADVANCED_QUERY_COUNT = 33
 EXPECTED_QUALIFICATION_PASSES = 2
 CONFIG_ERROR_EXIT = 2
+SECOND_PAGE = 2
 
 
 def _weekly_form() -> bytes:
@@ -293,12 +297,116 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
         asyncio.run(_discover(_LeedsSearchMock(case_types=CASE_TYPES[:-1])))
 
 
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (b"<html></html>", "advanced form"),
+        (
+            _advanced_form().replace(b'method="post"', b'method="get"'),
+            "advanced form",
+        ),
+        (
+            _advanced_form().replace(
+                b'<input name="searchCriteria.reference" value="">',
+                b"",
+            ),
+            "advanced form fields",
+        ),
+        (
+            _advanced_form().replace(
+                b'<input type="hidden" name="caseAddressType" value="Application">',
+                b'<input type="hidden" name="caseAddressType" value="">',
+            ),
+            "advanced form discriminators",
+        ),
+        (
+            _advanced_form().replace(
+                b'<select name="searchCriteria.caseStatus">',
+                (
+                    b'<input name="searchCriteria.caseStatus" value="">'
+                    b'<select name="other.caseStatus">'
+                ),
+            ),
+            "advanced case status",
+        ),
+    ],
+    ids=("missing", "method", "field", "discriminator", "select"),
+)
+def test_leeds_rejects_advanced_form_boundary_drift(
+    body: bytes,
+    message: str,
+) -> None:
+    """Every portal-owned advanced-form discriminator fails closed."""
+    with pytest.raises(LeedsParseError, match=message):
+        leeds_adapter._parse_advanced_form(body)
+
+
 def test_leeds_rejects_a_capped_case_type_partition() -> None:
     """A capped partition is neither empty nor complete."""
     with pytest.raises(RuntimeError) as raised:
         asyncio.run(_discover(_LeedsSearchMock(capped_case_type="FU")))
 
     assert type(raised.value).__name__ == "LeedsSearchCapError"
+
+
+def test_leeds_rejects_an_invalid_advanced_page_number() -> None:
+    """Advanced result parsing never accepts a non-positive page."""
+    with pytest.raises(LeedsParseError, match="advanced result page"):
+        leeds_adapter._parse_advanced_search_page(
+            b"<p>No results found</p>",
+            page=0,
+        )
+
+
+def test_leeds_checkpoint_rejects_unroutable_and_conflicting_identities() -> None:
+    """Queued human references retain one non-empty portal keyVal."""
+    advance = leeds_adapter._advance_checkpoint
+    active_page = leeds_adapter._ActivePage(
+        query_key="query",
+        page=1,
+        row_count=0,
+    )
+    search_page = leeds_adapter._SearchPage
+
+    with pytest.raises(ValueError, match="no keyVal locator"):
+        advance(
+            LeedsCheckpointV1(result_page="live"),
+            active_page=active_page,
+            search_page=search_page(
+                references=(
+                    SourceReference(source_id=SOURCE, reference="26/05001/FU"),
+                ),
+                reported=1,
+            ),
+            all_query_keys=("query",),
+        )
+
+    checkpoint = LeedsCheckpointV1(
+        result_page="live",
+        seen_references=("26/05001/FU",),
+        seen_identities=(
+            leeds_adapter.LeedsReferenceIdentityV1(
+                reference="26/05001/FU",
+                locator="ORIGINAL",
+            ),
+        ),
+    )
+    with pytest.raises(LeedsParseError, match="identity conflict"):
+        advance(
+            checkpoint,
+            active_page=active_page,
+            search_page=search_page(
+                references=(
+                    SourceReference(
+                        source_id=SOURCE,
+                        reference="26/05001/FU",
+                        locator="CHANGED",
+                    ),
+                ),
+                reported=1,
+            ),
+            all_query_keys=("query",),
+        )
 
 
 def test_leeds_terminal_checkpoint_rerun_has_zero_network_io() -> None:
@@ -313,6 +421,127 @@ def test_leeds_terminal_checkpoint_rerun_has_zero_network_io() -> None:
     assert second[0].complete
     assert second[0].references == ()
     assert mock.requests == []
+
+
+def _advanced_result_page(reference: str, locator: str) -> bytes:
+    return f"""
+    <div data-result-count="2"></div>
+    <li class="searchresult">
+      <a href="applicationDetails.do?keyVal={locator}&activeTab=summary">
+        <span>Reference</span><span>{reference}</span>
+      </a>
+    </li>
+    """.encode()
+
+
+class _LeedsPagedAdvancedMock(_LeedsSearchMock):
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        fields = tuple(parse_qsl(request.content.decode(), keep_blank_values=True))
+        if path.endswith("/advancedSearchResults.do"):
+            values = dict(fields)
+            if values.get("date(applicationValidatedStart)"):
+                self.requests.append((request.method, path, fields))
+                return httpx.Response(
+                    200,
+                    content=_advanced_result_page("26/05001/FU", "ADVANCED-A"),
+                )
+        if path.endswith("/pagedSearchResults.do"):
+            self.requests.append((request.method, path, fields))
+            return httpx.Response(
+                200,
+                content=_advanced_result_page("26/05002/FU", "ADVANCED-B"),
+            )
+        return super().__call__(request)
+
+
+def test_leeds_exhausts_a_paginated_advanced_partition() -> None:
+    """Advanced discovery advances page state until its reported total."""
+    mock = _LeedsPagedAdvancedMock()
+
+    batches = asyncio.run(_discover(mock))
+
+    assert batches[-1].complete
+    assert any(
+        reference.reference == "26/05002/FU"
+        for batch in batches
+        for reference in batch.references
+    )
+
+
+def test_leeds_resumes_a_paginated_advanced_partition() -> None:
+    """An interrupted advanced query restores portal state before page two."""
+
+    async def interrupt_and_resume() -> tuple[
+        LeedsCheckpointV1,
+        list[DiscoveryBatch[LeedsCheckpointV1]],
+        _LeedsPagedAdvancedMock,
+    ]:
+        first_mock = _LeedsPagedAdvancedMock()
+        first_session = _session(first_mock)
+        batches = cast(
+            "AsyncGenerator[DiscoveryBatch[LeedsCheckpointV1]]",
+            LeedsAdapter().discover(first_session, WINDOW, None),
+        )
+        try:
+            first_page = None
+            for _ in range(11):
+                first_page = await anext(batches)
+            assert first_page is not None
+            checkpoint = first_page.next_checkpoint
+        finally:
+            await batches.aclose()
+            await first_session.aclose()
+
+        resumed_mock = _LeedsPagedAdvancedMock()
+        resumed_session = _session(resumed_mock)
+        try:
+            resumed = [
+                batch
+                async for batch in LeedsAdapter().discover(
+                    resumed_session,
+                    WINDOW,
+                    checkpoint,
+                )
+            ]
+        finally:
+            await resumed_session.aclose()
+        return checkpoint, resumed, resumed_mock
+
+    checkpoint, resumed, mock = asyncio.run(interrupt_and_resume())
+
+    assert checkpoint.active_query == "advanced|validated|2026-08-18|2026-09-16"
+    assert checkpoint.next_page == SECOND_PAGE
+    assert checkpoint.query_row_count == 1
+    assert resumed[-1].complete
+    assert resumed[0].references[0].reference == "26/05002/FU"
+    advanced_first_pages = [
+        request
+        for request in mock.requests
+        if request[1].endswith("/advancedSearchResults.do")
+    ]
+    assert len(advanced_first_pages) == EXPECTED_ADVANCED_QUERY_COUNT
+    assert any(
+        path.endswith("/pagedSearchResults.do")
+        for _method, path, _fields in mock.requests
+    )
+
+
+def test_leeds_repairs_a_complete_inventory_checkpoint_flag() -> None:
+    """A complete query inventory can repair a stale nonterminal flag."""
+    terminal = asyncio.run(_discover(_LeedsSearchMock()))[-1].next_checkpoint
+    checkpoint = terminal.model_copy(update={"live_complete": False})
+    mock = _LeedsSearchMock()
+
+    batches = asyncio.run(_discover(mock, checkpoint))
+
+    assert len(batches) == 1
+    assert batches[0].complete
+    assert batches[0].next_checkpoint.live_complete
+    assert [path for _method, path, _fields in mock.requests] == [
+        "/online-applications/search.do",
+        "/online-applications/search.do",
+    ]
 
 
 def _late_terminal_page() -> bytes:
@@ -654,6 +883,151 @@ def test_leeds_accepts_observed_weekday_date_rendering() -> None:
     snapshot = asyncio.run(_fetch(_LeedsDetailMock(validated_date="Wed 19 Aug 2026")))
 
     assert snapshot.payload.validated_date == date(2026, 8, 19)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (b"<html></html>", "simpleDetailsTable"),
+        (
+            b'<table id="simpleDetailsTable"><tr><td>orphan</td></tr></table>',
+            "summary labelled values",
+        ),
+        (
+            (
+                b'<table id="simpleDetailsTable">'
+                b"<tr><th>Reference</th><td>A</td></tr>"
+                b"<tr><th>Reference</th><td>B</td></tr></table>"
+            ),
+            "summary labelled values",
+        ),
+    ],
+    ids=("missing-table", "empty-fields", "duplicate-label"),
+)
+def test_leeds_rejects_malformed_summary_boundaries(
+    body: bytes,
+    message: str,
+) -> None:
+    """Malformed summary tables cannot create partially trusted records."""
+    with pytest.raises(LeedsParseError, match=message):
+        leeds_adapter._parse_summary(body)
+
+
+def test_leeds_accepts_an_explicit_empty_document_page() -> None:
+    """Only the official no-documents wording establishes emptiness."""
+    documents, state = leeds_adapter._parse_documents(b"<p>No documents found</p>")
+
+    assert documents == ()
+    assert isinstance(state, EmptySection)
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        (_documents() + _documents(header_only=True), "documents table"),
+        (b'<table summary="Documents"></table>', "documents table header"),
+        (
+            _documents().replace(
+                b"</table>",
+                b'<a href="pagedSearchResults.do?action=page">Next</a></table>',
+            ),
+            "documents pagination",
+        ),
+        (
+            (
+                b'<table summary="Documents">'
+                b"<tr><th>Date Published</th><th>Document Type</th>"
+                b"<th>Description</th><th>View</th></tr>"
+                b"<tr><td>15/09/2026</td><td>Plan</td><td>Description</td></tr>"
+                b"</table>"
+            ),
+            "document metadata row",
+        ),
+        (
+            _documents().replace(
+                b'<a href="files/tree-plan.pdf">View</a>',
+                b"View",
+            ),
+            "document metadata link",
+        ),
+        (
+            _documents().replace(b"15/09/2026", b"not-a-date"),
+            "document published date",
+        ),
+    ],
+    ids=(
+        "multiple-tables",
+        "missing-header",
+        "pagination",
+        "row-width",
+        "missing-link",
+        "published-date",
+    ),
+)
+def test_leeds_rejects_malformed_document_boundaries(
+    body: bytes,
+    message: str,
+) -> None:
+    """Every observed document-table invariant remains fail-closed."""
+    with pytest.raises(LeedsParseError, match=message):
+        leeds_adapter._parse_documents(body)
+
+
+def test_leeds_result_pager_and_required_field_boundaries() -> None:
+    """Pager state and typed summary fields reject ambiguous source values."""
+    visible_page = leeds_adapter._visible_result_page
+    with pytest.raises(LeedsParseError, match="reported result count"):
+        visible_page(
+            BeautifulSoup(
+                '<div class="pager"><strong>one</strong></div>', "html.parser"
+            ),
+            (1, 1, 1),
+        )
+    with pytest.raises(LeedsParseError, match="reported result count"):
+        visible_page(
+            BeautifulSoup(
+                '<div class="pager"><strong>1</strong></div>'
+                '<select name="searchCriteria.resultsPerPage">'
+                '<option selected value="many">many</option></select>',
+                "html.parser",
+            ),
+            (1, 1, 1),
+        )
+    with pytest.raises(LeedsParseError, match="reported result count"):
+        visible_page(
+            BeautifulSoup(
+                '<div class="pager"><strong>2</strong></div>'
+                '<select name="searchCriteria.resultsPerPage">'
+                '<option selected value="10">10</option></select>',
+                "html.parser",
+            ),
+            (1, 1, 11),
+        )
+
+    current_pages = leeds_adapter._current_result_pages
+    assert current_pages(
+        BeautifulSoup(
+            '<input name="searchCriteria.page" value="">',
+            "html.parser",
+        ),
+        allow_empty_first_page_marker=True,
+    ) == (1,)
+    with pytest.raises(LeedsParseError, match="reported result count"):
+        current_pages(
+            BeautifulSoup(
+                '<input name="searchCriteria.page" value="later">',
+                "html.parser",
+            ),
+            allow_empty_first_page_marker=False,
+        )
+
+    with pytest.raises(LeedsParseError, match="summary proposal"):
+        leeds_adapter._required_field({}, "proposal")
+    with pytest.raises(LeedsParseError, match="date received date"):
+        leeds_adapter._optional_date(
+            {"received date": "not-a-date"},
+            "received date",
+        )
 
 
 def test_leeds_retries_a_transient_summary_shell() -> None:
