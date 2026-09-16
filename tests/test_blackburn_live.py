@@ -11,7 +11,7 @@ from hashlib import sha256
 from typing import TYPE_CHECKING
 
 import pytest
-from pydantic import HttpUrl
+from pydantic import HttpUrl, ValidationError
 
 import yimby.authorities.blackburn_with_darwen.adapter as blackburn
 from yimby import DiscoveryWindow
@@ -228,3 +228,41 @@ def test_blackburn_search_requires_an_explicit_empty_marker() -> None:
     assert blackburn._parse_search_rows(b"<strong>No Results Found.</strong>") == ()
     with pytest.raises(blackburn.BlackburnWithDarwenParseError):
         blackburn._parse_search_rows(b"<html><body></body></html>")
+
+
+def test_blackburn_query_types_reject_invalid_ranges() -> None:
+    with pytest.raises(ValidationError):
+        blackburn.BlackburnDateRangeV1(
+            start=date(2026, 9, 16),
+            end=date(2026, 9, 15),
+        )
+    query = _query(
+        blackburn.BlackburnQueryKind.RECEIVED,
+        date(2026, 8, 18),
+        date(2026, 9, 16),
+    )
+    assert query.key == "received|2026-08-18|2026-09-16"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'<table id="application_results_table"></table>',
+        _search_html("<tr><td>wrong columns</td></tr>"),
+        _search_html(_result_row(1).replace("view_application", "wrong")),
+        _search_html(_result_row(1).replace('data-id="178001"', 'data-id="bad"')),
+    ],
+)
+def test_blackburn_search_rows_fail_closed_on_shape_drift(body: bytes) -> None:
+    with pytest.raises(blackburn.BlackburnWithDarwenParseError):
+        blackburn._parse_search_rows(body)
+
+
+def test_blackburn_search_rejects_duplicates_and_more_than_the_observed_cap() -> None:
+    duplicate = _result_row(1)
+    with pytest.raises(blackburn.BlackburnDuplicateReferenceError):
+        blackburn._parse_search_rows(_search_html(duplicate, duplicate))
+    with pytest.raises(blackburn.BlackburnResultCountError):
+        blackburn._parse_search_rows(
+            _search_html(*(_result_row(number) for number in range(1, 32)))
+        )
