@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, E501, PLR2004, SLF001
-
-"""Live boundaries for Cheshire East and Haringey's browser register."""
+# ruff: noqa: ANN401, D100, D103, E501, PLR2004, SLF001
 
 from __future__ import annotations
 
@@ -361,7 +359,6 @@ def _haringey_package() -> AuthorityPackage[
 
 
 def test_haringey_public_collector_keeps_files_metadata_only(tmp_path: Path) -> None:
-    """The public collector stores six file rows and no attachment body request."""
     package = _haringey_package()
     store = SqliteStore(tmp_path / "db.sqlite3", EvidenceStore(tmp_path / "evidence"))
     collector = Collector(AuthorityRegistry((package,)), store)
@@ -392,7 +389,6 @@ def test_haringey_public_collector_keeps_files_metadata_only(tmp_path: Path) -> 
 
 
 def test_haringey_reconciles_dynamic_six_page_capture_and_locators() -> None:
-    """Dynamic totals, not the older 72/8 capture, drive traversal."""
     pages = {
         page: _search_page(
             page,
@@ -425,7 +421,6 @@ def test_haringey_reconciles_dynamic_six_page_capture_and_locators() -> None:
 
 
 def test_haringey_discovery_failure_boundaries() -> None:
-    """Wrong windows, pages, totals, and open scope fail explicitly."""
     adapter = haringey.HaringeyAdapter(today=lambda: TODAY)
     hit = _search_hit(1)
 
@@ -494,7 +489,6 @@ def test_haringey_discovery_failure_boundaries() -> None:
 
 
 def test_haringey_terminal_and_deduplicated_resume() -> None:
-    """A completed checkpoint is idempotent and repeated rows stay source-local."""
     adapter = haringey.HaringeyAdapter(today=lambda: TODAY)
     hit = _search_hit(1)
     checkpoint = haringey.HaringeyCheckpointV1(
@@ -551,7 +545,6 @@ def test_haringey_terminal_and_deduplicated_resume() -> None:
 
 
 def test_haringey_fetch_failure_sections_and_routing() -> None:
-    """Child tab failures remain explicit while a valid detail survives."""
     adapter = haringey.HaringeyAdapter(today=lambda: TODAY)
     hit = _search_hit(2582)
     page = _search_page(1, (hit,), pages=1, total=1)
@@ -594,7 +587,6 @@ def test_haringey_fetch_failure_sections_and_routing() -> None:
 
 
 def test_haringey_detail_and_file_parser_boundaries() -> None:
-    """Detail labels, date formats, and accessible file descriptions are strict."""
     fields, constraint = haringey._parse_detail(_detail_html("HGY/2026/2582"))
     assert fields["proposal"] == "Build & landscape six homes"
     assert str(constraint) == "https://gis.example.test/constraints"
@@ -723,7 +715,6 @@ def _search_page_mock(*, malformed_route: bool = False) -> MagicMock:
 
 
 def test_haringey_page_object_uses_recorded_search_selectors() -> None:
-    """The production page object drives the exact quick-link and page selector."""
     page = _search_page_mock()
     boundary = _InteractiveBoundary(cast("Page", page))
     clock = iter((1.0, 1.1))
@@ -803,7 +794,6 @@ def _detail_page_mock() -> MagicMock:
 
 
 def test_haringey_page_object_opens_only_recorded_child_tabs() -> None:
-    """Detail capture clicks Comments and Files but no file or Download all control."""
     page = _detail_page_mock()
     boundary = _InteractiveBoundary(cast("Page", page))
     session = HaringeyPlaywrightSession(boundary)
@@ -841,7 +831,6 @@ def test_haringey_page_object_opens_only_recorded_child_tabs() -> None:
 
 
 def test_page_object_parser_and_pagination_failures() -> None:
-    """Selector drift and malformed visible values fail at the page-object boundary."""
     for value in (
         "bad",
         "Showing 0 to 1 of 1 results",
@@ -865,7 +854,6 @@ def test_page_object_parser_and_pagination_failures() -> None:
 
 
 def test_haringey_page_object_search_failure_branches() -> None:
-    """Page bounds, card counts, and missing result links are explicit failures."""
 
     async def validate(page: MagicMock, number: int) -> Any:
         session = HaringeyPlaywrightSession(_InteractiveBoundary(cast("Page", page)))
@@ -904,7 +892,6 @@ def test_haringey_page_object_search_failure_branches() -> None:
 
 
 def test_haringey_page_selection_sets_and_missing_files_header() -> None:
-    """Component-local page sets are bounded and a files header is mandatory."""
     page = MagicMock()
     target = MagicMock()
     target.count = AsyncMock(side_effect=(0, 1))
@@ -947,7 +934,6 @@ def test_haringey_page_selection_sets_and_missing_files_header() -> None:
 def test_playwright_interaction_hook_lifecycle_and_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The generic hook owns page lifecycle without owning authority selectors."""
     page = MagicMock()
     page.close = AsyncMock()
     context = MagicMock()
@@ -986,7 +972,6 @@ def test_playwright_interaction_hook_lifecycle_and_factory(
 
 
 def test_extensionless_salesforce_download_is_blocked_everywhere() -> None:
-    """Fixture, HTTP, and browser transports reject Salesforce version bodies."""
     url = "https://example.test/pr/sfc/servlet.shepherd/version/download/123"
     request = PortalRequest(url=HttpUrl(url), intent=RequestIntent.DETAIL)
     fixture = FixtureSession({url: FixtureResponse(body=b"never")})
@@ -1018,7 +1003,6 @@ def test_extensionless_salesforce_download_is_blocked_everywhere() -> None:
 
 
 def test_registry_statuses_remain_truthful() -> None:
-    """Fixture and partial browser implementation never become live readiness."""
     registry = pilot_registry()
     assert (
         registry.manifest(AuthorityId("cheshire-east")).live_status.readiness.value

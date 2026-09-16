@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
 
-"""Authority package registry."""
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
