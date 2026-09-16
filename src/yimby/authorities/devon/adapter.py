@@ -122,12 +122,21 @@ class DevonPageProofV1(FrozenModel):
     next_locator: HttpUrl
 
 
+class DevonQuerySummaryV1(FrozenModel):
+    """Durable row and page totals for one completed discovery query."""
+
+    query_key: str = Field(min_length=1)
+    row_count: int = Field(ge=0)
+    page_count: int = Field(ge=1)
+
+
 class DevonCheckpointV1(FrozenModel):
     """Fixture cursor plus validated resumable Devon discovery progress."""
 
     result_page: str
     live_scope: DevonDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
+    query_summaries: tuple[DevonQuerySummaryV1, ...] = ()
     active_query: str | None = None
     next_page: int = Field(default=1, ge=1)
     active_pages: tuple[DevonPageProofV1, ...] = ()
@@ -135,11 +144,12 @@ class DevonCheckpointV1(FrozenModel):
     live_complete: bool = False
 
     @model_validator(mode="after")
-    def validate_live_progress(self) -> Self:  # noqa: C901
+    def validate_live_progress(self) -> Self:  # noqa: C901, PLR0912
         """Exclude contradictory fixture, active, and terminal states."""
         if self.live_scope is None:
             if (
                 self.completed_queries
+                or self.query_summaries
                 or self.active_query is not None
                 or self.next_page != 1
                 or self.active_pages
@@ -153,6 +163,10 @@ class DevonCheckpointV1(FrozenModel):
         keys = _query_keys(self.live_scope)
         if self.completed_queries != keys[: len(self.completed_queries)]:
             _raise_checkpoint("completed-query-prefix")
+        if tuple(item.query_key for item in self.query_summaries) != (
+            self.completed_queries
+        ):
+            _raise_checkpoint("completed-query-summaries")
         if len({item.reference for item in self.seen_references}) != len(
             self.seen_references
         ) or any(item.locator is None for item in self.seen_references):
@@ -189,6 +203,7 @@ class DevonQualificationAuditV1(FrozenModel):
     scope: DevonDiscoveryScope
     expected_queries: tuple[str, ...]
     completed_queries: tuple[str, ...]
+    query_summaries: tuple[DevonQuerySummaryV1, ...]
     terminal_coherent: bool
     references: tuple[SourceReference, ...]
 
@@ -518,6 +533,7 @@ def qualification_audit(
         scope=scope,
         expected_queries=expected,
         completed_queries=validated.completed_queries,
+        query_summaries=validated.query_summaries,
         terminal_coherent=(
             validated.live_complete
             and validated.completed_queries == expected
@@ -629,8 +645,18 @@ def _advance_checkpoint(
             fresh.append(reference)
     if page.terminal:
         completed = (*progress.completed_queries, query.key)
+        query_summaries = (
+            *progress.query_summaries,
+            DevonQuerySummaryV1(
+                query_key=query.key,
+                row_count=sum(len(proof.references) for proof in progress.active_pages)
+                + len(page.references),
+                page_count=page.page,
+            ),
+        )
         updated: dict[str, object] = {
             "completed_queries": completed,
+            "query_summaries": query_summaries,
             "active_query": None,
             "next_page": 1,
             "active_pages": (),
@@ -745,9 +771,12 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
         _raise_parse("accepted disclaimer search response")
     result_blocks = soup.select("dl.searchResultsList")
     detail_blocks = soup.select("dl.details-grid")
+    pagers = soup.select("ul.pagination")
     if result_blocks and detail_blocks:
         _raise_parse("mixed result and detail response")
     if detail_blocks:
+        if pagers:
+            _raise_pagination("singleton-detail-pager")
         if expected_page != 1:
             _raise_parse("page-one singleton detail")
         fields = _parse_labelled_fields(body)
@@ -772,7 +801,6 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
     references = tuple(_parse_result_reference(block) for block in result_blocks)
     if len({item.reference for item in references}) != len(references):
         _raise_parse("duplicate result reference")
-    pagers = soup.select("ul.pagination")
     if not references:
         if pagers or "no records" not in text.casefold():
             _raise_parse("search results or no-records message")
@@ -1052,7 +1080,15 @@ def _parse_documents(
     documents = []
     for link in links:
         href = urljoin(f"{BASE_URL}/", str(link.get("href", "")))
-        query = parse_qs(urlsplit(href).query)
+        parts = urlsplit(href)
+        if (
+            parts.scheme != "https"
+            or parts.netloc != urlsplit(BASE_URL).netloc
+            or parts.path != "/Document/Download"
+            or parts.fragment
+        ):
+            _raise_parse("document locator")
+        query = parse_qs(parts.query)
         title = (
             link.get_text(" ", strip=True)
             or _query_value(query, "fileName", "filename")

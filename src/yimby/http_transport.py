@@ -181,54 +181,46 @@ class HttpxPortalSession:
             headers["content-type"] = "application/x-www-form-urlencoded"
         for attempt in range(1, self._max_attempts + 1):
             try:
-                async with self._limiter.turn(host):
-                    response: httpx.Response | None = None
-                    try:
-                        response = await self._send_with_redirects(
-                            self._client.build_request(
-                                portal_request.method,
-                                url,
-                                content=encoded_form,
-                                headers=headers,
-                            ),
-                            portal_request.redirect_boundary,
+                async with self._send_with_redirects(
+                    self._client.build_request(
+                        portal_request.method,
+                        url,
+                        content=encoded_form,
+                        headers=headers,
+                    ),
+                    portal_request.redirect_boundary,
+                ) as response:
+                    last_status = response.status_code
+                    if (
+                        response.status_code in _RETRYABLE_STATUS
+                        and attempt < self._max_attempts
+                    ):
+                        retry_after = _retry_after_seconds(
+                            response.headers.get("retry-after"), self._now()
                         )
-                        last_status = response.status_code
-                        if (
-                            response.status_code in _RETRYABLE_STATUS
-                            and attempt < self._max_attempts
-                        ):
-                            retry_after = _retry_after_seconds(
-                                response.headers.get("retry-after"), self._now()
-                            )
-                            await response.aclose()
-                            response = None
-                            await self._sleep(
-                                retry_after
-                                if retry_after is not None
-                                else _backoff(attempt)
-                            )
-                            continue
-                        if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
-                            raise _status_error(safe_url, response.status_code)
-                        final_url = urlsplit(str(response.url))
-                        if _is_attachment_path(
-                            final_url.path
-                        ) or _is_attachment_response(response):
-                            self._attachment_body_requests += 1
-                            raise _attachment_error(final_url.hostname or host)
-                        body = await response.aread()
-                        media_type = response.headers.get(
-                            "content-type", "application/octet-stream"
+                        await self._sleep(
+                            retry_after
+                            if retry_after is not None
+                            else _backoff(attempt)
                         )
-                        return (
-                            body,
-                            media_type.partition(";")[0].strip().lower(),
-                            str(response.url),
-                        )
-                    finally:
-                        if response is not None:
-                            await response.aclose()
+                        continue
+                    if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
+                        raise _status_error(safe_url, response.status_code)
+                    final_url = urlsplit(str(response.url))
+                    if _is_attachment_path(final_url.path) or _is_attachment_response(
+                        response
+                    ):
+                        self._attachment_body_requests += 1
+                        raise _attachment_error(final_url.hostname or host)
+                    body = await response.aread()
+                    media_type = response.headers.get(
+                        "content-type", "application/octet-stream"
+                    )
+                    return (
+                        body,
+                        media_type.partition(";")[0].strip().lower(),
+                        str(response.url),
+                    )
             except httpx.TransportError as error:
                 if attempt == self._max_attempts:
                     raise _attempts_error(safe_url, attempt) from error
@@ -236,35 +228,38 @@ class HttpxPortalSession:
                 continue
         raise _status_error(safe_url, last_status)  # pragma: no cover
 
+    @asynccontextmanager
     async def _send_with_redirects(
         self,
         request: httpx.Request,
         boundary: RedirectBoundary | None,
-    ) -> httpx.Response:
-        """Follow redirects only after validating each destination."""
+    ) -> AsyncIterator[httpx.Response]:
+        """Rate-limit and validate every physical request in a redirect chain."""
         current = request
         for redirect_count in range(_MAX_REDIRECTS + 1):
-            response = await self._client.send(
-                current,
-                stream=True,
-                follow_redirects=False,
-            )
-            next_request = response.next_request
-            if next_request is None:
-                return response
-            next_url = str(next_request.url)
-            next_parts = urlsplit(next_url)
-            if _is_attachment_path(next_parts.path):
-                self._attachment_body_requests += 1
-                await response.aclose()
-                raise _attachment_error(next_parts.hostname)
-            if boundary is not None and not boundary.allows(next_url):
-                await response.aclose()
-                raise _redirect_error(next_url)
-            if redirect_count == _MAX_REDIRECTS:
-                await response.aclose()
-                raise _redirect_limit_error(_safe_url(str(request.url)))
-            await response.aclose()
+            host = urlsplit(str(current.url)).hostname or ""
+            async with self._limiter.turn(host):
+                response = await self._client.send(
+                    current,
+                    stream=True,
+                    follow_redirects=False,
+                )
+                try:
+                    next_request = response.next_request
+                    if next_request is None:
+                        yield response
+                        return
+                    next_url = str(next_request.url)
+                    next_parts = urlsplit(next_url)
+                    if _is_attachment_path(next_parts.path):
+                        self._attachment_body_requests += 1
+                        raise _attachment_error(next_parts.hostname)
+                    if boundary is not None and not boundary.allows(next_url):
+                        raise _redirect_error(next_url)
+                    if redirect_count == _MAX_REDIRECTS:
+                        raise _redirect_limit_error(_safe_url(str(request.url)))
+                finally:
+                    await response.aclose()
             current = next_request
         raise AssertionError  # pragma: no cover
 

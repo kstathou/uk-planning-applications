@@ -23,6 +23,7 @@ from yimby.authorities.devon import DEVON_PACKAGE
 from yimby.authorities.devon.adapter import (
     DevonCheckpointV1,
     DevonQualificationAuditV1,
+    DevonQuerySummaryV1,
     qualification_audit,
 )
 from yimby.collection import Collector
@@ -42,7 +43,7 @@ from yimby.store import EvidenceRegistrationAudit, SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("devon")
-_RECEIPT_NAME = "devon-qualification-v1.json"
+_RECEIPT_NAME = "devon-qualification-v2.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -108,15 +109,16 @@ class PendingWeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class DevonQualificationReceiptV1(FrozenModel):
+class DevonQualificationReceiptV2(FrozenModel):
     """Versioned result of a complete local live qualification."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     authority_id: Literal["devon"] = "devon"
     created_at: datetime
     scope: QualificationScope
     expected_queries: tuple[str, ...]
     completed_queries: tuple[str, ...]
+    query_summaries: tuple[DevonQuerySummaryV1, ...]
     counts: QualificationCounts
     costs: QualificationCosts
     run_statuses: tuple[RunStatus, ...]
@@ -257,7 +259,9 @@ def _evidence_inventory(data_dir: Path) -> tuple[str, ...]:
         return ()
     return tuple(
         sorted(
-            str(path.relative_to(evidence_root)) for path in evidence_root.rglob("*.gz")
+            str(path.relative_to(evidence_root))
+            for path in evidence_root.rglob("*")
+            if path.is_file()
         )
     )
 
@@ -379,7 +383,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> DevonQualificationReceiptV1:
+) -> DevonQualificationReceiptV2:
     registry = AuthorityRegistry((DEVON_PACKAGE,))
     collector = Collector(registry, store)
     window = DiscoveryWindow(
@@ -434,11 +438,12 @@ async def _qualify(
     )
     _require(final_checks)
     audit = cast("DevonQualificationAuditV1", _checkpoint_audit(store, config.scope))
-    return DevonQualificationReceiptV1(
+    return DevonQualificationReceiptV2(
         created_at=now(),
         scope=config.scope,
         expected_queries=audit.expected_queries,
         completed_queries=audit.completed_queries,
+        query_summaries=audit.query_summaries,
         counts=_counts(final_snapshot),
         costs=QualificationCosts(initial=initial, rerun=rerun),
         run_statuses=run_statuses,
@@ -452,7 +457,7 @@ async def _qualify(
     )
 
 
-def _write_receipt(path: Path, receipt: DevonQualificationReceiptV1) -> None:
+def _write_receipt(path: Path, receipt: DevonQualificationReceiptV2) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:
@@ -469,18 +474,19 @@ def _write_receipt(path: Path, receipt: DevonQualificationReceiptV1) -> None:
 
 def _receipt_to_persist(
     path: Path,
-    candidate: DevonQualificationReceiptV1,
-) -> DevonQualificationReceiptV1:
+    candidate: DevonQualificationReceiptV2,
+) -> DevonQualificationReceiptV2:
     if not path.exists() or candidate.costs.initial.request_count != 0:
         return candidate
     try:
-        prior = DevonQualificationReceiptV1.model_validate_json(path.read_text())
+        prior = DevonQualificationReceiptV2.model_validate_json(path.read_text())
     except (OSError, ValueError):
         return candidate
     if (
         prior.scope == candidate.scope
         and prior.expected_queries == candidate.expected_queries
         and prior.completed_queries == candidate.completed_queries
+        and prior.query_summaries == candidate.query_summaries
         and prior.counts == candidate.counts
         and prior.run_statuses == candidate.run_statuses
         and prior.checks == candidate.checks
