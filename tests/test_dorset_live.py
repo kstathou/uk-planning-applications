@@ -615,7 +615,10 @@ def test_dorset_live_detail_distinguishes_duplicate_document_metadata() -> None:
     collected = asyncio.run(collect_detail())
 
     assert len({document.title for document in collected.normalised.documents}) == 1
-    assert [str(document.url).rsplit("#", 1)[-1] for document in collected.normalised.documents] == [
+    assert [
+        str(document.url).rsplit("#", 1)[-1]
+        for document in collected.normalised.documents
+    ] == [
         "document-0",
         "document-1",
     ]

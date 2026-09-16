@@ -790,7 +790,6 @@ def _parse_documents_grid(
         return ()
     documents = []
     indices = []
-    document_index_url = HttpUrl(f"{source_url}#")
     prefix = "ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__"
     for row in rows:
         row_id = str(row.get("id", ""))
@@ -823,7 +822,7 @@ def _parse_documents_grid(
                 published_date=_parse_dorset_date(published),
                 title=" ".join(title.split()),
                 size=size_match.group(1),
-                url=document_index_url,
+                url=HttpUrl(f"{source_url}#document-{index}"),
             )
         )
         indices.append(index)
