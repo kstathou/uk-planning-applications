@@ -36,16 +36,18 @@ requirement.
 | Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded; portal blocked on 16 September 2026 | Discovery-only adapter; exact received-date and older-open routes unproved during outage | Open | Open |
-| West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Ten weekly and eight active-state partitions completed with strict pagination, exact form values, persisted details, and no attachment bodies | Verified, 730 applications, receipt dated 16 September 2026 | Open |
+| West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Ten weekly and eight active-state partitions completed with strict pagination, exact form values, persisted details, and no attachment bodies | Historical version 1 bootstrap verified with 730 applications; fresh version 2 evidence run pending | Open |
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
 As of 16 September 2026, West Suffolk, OPDC, Peak District, Camden, and Devon
-have completed verified live bootstraps. West Suffolk's versioned receipt
-proves 730 discovered references and 730 persisted applications, terminal
-checkpoint coherence, no pending retries, no failed current sections, database
-integrity, retained evidence-path presence, no unmapped records, no
-attachment-body requests, and an immediate zero-request rerun. OPDC's
+have completed historical or current verified live bootstraps. West Suffolk's
+schema version 1 receipt proves 730 discovered references and 730 persisted
+applications, terminal checkpoint coherence, no pending retries, no failed
+current sections, database integrity, retained evidence-path presence, no
+unmapped records, no attachment-body requests, and an immediate zero-request
+rerun. It predates the current version 2 request-bound discovery and evidence
+commitments, so a fresh live version 2 receipt remains pending. OPDC's
 sanitized [committed receipt](evidence/opdc-qualification-2026-09-16.json)
 proves 55 persisted applications, exact terminal discovery, complete
 implemented sections, local database and evidence integrity, 103 distinct

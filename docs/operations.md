@@ -100,6 +100,30 @@ Without `--confirm-live`, every smoke exits before constructing a live session.
 Each accepts a non-secret state path for resumable pagination. Leeds stops at
 its explicit unverified-detail boundary even when discovery succeeds.
 
+West Suffolk has a dedicated persisted qualification command for its complete
+weekly and older-open inventory:
+
+```sh
+uv run python scripts/qualify_west_suffolk.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-west-suffolk-v2-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+Add `--resume` only when reusing a non-empty directory. The schema version 2
+receipt verifies the complete query inventory, exact request-bound discovery
+captures, current application-to-capture associations, evidence-body digests,
+terminal checkpoint, cumulative application and queue counts, SQLite
+integrity, section state, attachment policy, and an immediate zero-network
+rerun. An unchanged terminal resume preserves the receipt byte-for-byte. A
+shifted weekly window uses the same cumulative store, adds newly discovered
+applications, and writes a new scope-specific receipt after its own zero-network
+rerun. The historical committed schema version 1 receipt predates these
+stronger checks; produce a fresh live version 2 receipt before treating them as
+live-verified.
+
 The captured non-IDOX contracts have matching opt-in smokes:
 
 ```sh

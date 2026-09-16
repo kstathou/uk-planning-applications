@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
@@ -20,25 +21,33 @@ from pydantic import Field
 from yimby.authorities.west_suffolk import WEST_SUFFOLK_PACKAGE
 from yimby.authorities.west_suffolk.adapter import (
     WestSuffolkCheckpointV1,
+    WestSuffolkDiscoveryProofV1,
     WestSuffolkDiscoveryScope,
+    validate_west_suffolk_discovery_proof,
 )
 from yimby.collection import Collector
 from yimby.domain import (
     AuthorityId,
     DiscoveryWindow,
+    EvidenceCapture,
+    EvidenceDigest,
     FrozenModel,
     QualificationSnapshot,
     RunStatus,
 )
-from yimby.evidence import EvidenceStore
+from yimby.evidence import EvidenceIntegrityError, EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
-from yimby.store import SqliteStore
+from yimby.store import (
+    EvidenceRegistrationAudit,
+    RetainedDiscoveryEvidenceRegistration,
+    SqliteStore,
+)
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("west-suffolk")
-_RECEIPT_NAME = "west-suffolk-qualification-v1.json"
+_RECEIPT_NAME = "west-suffolk-qualification-v2.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -57,6 +66,7 @@ _ADVANCED_QUERY_KEYS = (
     "advanced|searchCriteria.appealStatus|High Court Appeal Lodged",
     "advanced|searchCriteria.appealStatus|Pending Appeal Decision",
 )
+_MINIMUM_QUALIFICATION_RUNS = 2
 
 
 SessionFactory = Callable[[], PortalSession]
@@ -107,10 +117,26 @@ class QualificationCheck(FrozenModel):
     ok: bool
 
 
-class WestSuffolkQualificationReceiptV1(FrozenModel):
+class QualificationEvidenceCommitment(FrozenModel):
+    """Privacy-safe commitment to application and discovery captures."""
+
+    canonicalization: Literal["sha256-canonical-json-v1"]
+    applications: int = Field(ge=1)
+    application_capture_associations: int = Field(ge=1)
+    discovery_capture_associations: int = Field(ge=1)
+    content_digests: int = Field(ge=1)
+    retained_evidence_rows: int = Field(ge=1)
+    missing_paths: int = Field(ge=0)
+    invalid_paths: int = Field(ge=0)
+    application_capture_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    discovery_capture_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    content_digest_set_sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class WestSuffolkQualificationReceiptV2(FrozenModel):
     """Versioned result of a complete local live qualification."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     authority_id: Literal["west-suffolk"] = "west-suffolk"
     created_at: datetime
     scope: QualificationScope
@@ -118,6 +144,7 @@ class WestSuffolkQualificationReceiptV1(FrozenModel):
     costs: QualificationCosts
     run_statuses: tuple[RunStatus, ...]
     checks: tuple[QualificationCheck, ...]
+    evidence_commitment: QualificationEvidenceCommitment
 
 
 class _Config(FrozenModel):
@@ -140,6 +167,10 @@ class QualificationFailedError(RuntimeError):
         """Retain the stable names of failed invariants."""
         super().__init__("qualification checks failed")
         self.failed_checks = failed_checks
+
+
+class _DiscoveryProofInvalidError(ValueError):
+    """One retained discovery proof cannot establish its claimed subject."""
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -199,15 +230,15 @@ async def _collect_once(
 def _terminal_checkpoint(
     store: SqliteStore,
     scope: QualificationScope,
-) -> bool:
+) -> WestSuffolkCheckpointV1 | None:
     state = store.discovery_state(_AUTHORITY_ID)
     stored = state.checkpoint
     if stored is None or stored.schema_version != 1:
-        return False
+        return None
     try:
         checkpoint = WestSuffolkCheckpointV1.model_validate_json(stored.payload_json)
     except ValueError:
-        return False
+        return None
     expected = WestSuffolkDiscoveryScope(
         start=scope.start,
         end=scope.end,
@@ -215,7 +246,7 @@ def _terminal_checkpoint(
     )
     seen = checkpoint.seen_references
     durable = state.references
-    return (
+    if not (
         checkpoint.result_page == "live"
         and checkpoint.live_scope == expected
         and checkpoint.live_complete
@@ -225,8 +256,10 @@ def _terminal_checkpoint(
         and checkpoint.query_row_count == 0
         and bool(durable)
         and len(seen) == len(set(seen))
-        and set(seen) == set(durable)
-    )
+        and set(seen).issubset(durable)
+    ):
+        return None
+    return checkpoint
 
 
 def _expected_weekly_queries(
@@ -273,9 +306,219 @@ def _parse_week_date(value: str) -> date | None:
     return None
 
 
+def _discovery_evidence_complete(
+    store: SqliteStore,
+    checkpoint: WestSuffolkCheckpointV1 | None,
+    audit: EvidenceRegistrationAudit,
+) -> bool:
+    if checkpoint is None or not checkpoint.discovery_proofs:
+        return False
+    proofs = checkpoint.discovery_proofs
+    proof_keys = tuple(proof.query_key for proof in proofs)
+    if tuple(dict.fromkeys(proof_keys)) != checkpoint.completed_queries:
+        return False
+    try:
+        captures = {
+            capture.digest: capture
+            for capture in store.discovery_evidence_captures(_AUTHORITY_ID)
+        }
+        seen = set().union(
+            *(
+                _query_proof_references(
+                    query_key,
+                    proofs,
+                    captures,
+                    audit.discovery_registrations,
+                )
+                for query_key in checkpoint.completed_queries
+            )
+        )
+    except (EvidenceIntegrityError, KeyError, OSError, ValueError):
+        return False
+    return seen == set(checkpoint.seen_references)
+
+
+def _query_proof_references(
+    query_key: str,
+    proofs: tuple[WestSuffolkDiscoveryProofV1, ...],
+    captures: dict[EvidenceDigest, EvidenceCapture],
+    registrations: tuple[RetainedDiscoveryEvidenceRegistration, ...],
+) -> set[str]:
+    query_proofs = tuple(proof for proof in proofs if proof.query_key == query_key)
+    if tuple(proof.page for proof in query_proofs) != tuple(
+        range(1, len(query_proofs) + 1)
+    ):
+        raise _DiscoveryProofInvalidError
+    references: set[str] = set()
+    row_count = 0
+    reported: int | None = None
+    for proof in query_proofs:
+        if not _proof_is_registered(proof, registrations):
+            raise _DiscoveryProofInvalidError
+        capture = captures.get(proof.digest)
+        if capture is None:
+            raise _DiscoveryProofInvalidError
+        parsed = validate_west_suffolk_discovery_proof(proof, capture)
+        if reported is not None and parsed.reported != reported:
+            raise _DiscoveryProofInvalidError
+        reported = parsed.reported
+        row_count += len(parsed.references)
+        if row_count > reported or (
+            proof.page < len(query_proofs) and row_count == reported
+        ):
+            raise _DiscoveryProofInvalidError
+        references.update(item.reference for item in parsed.references)
+    if reported is None or row_count != reported:
+        raise _DiscoveryProofInvalidError
+    return references
+
+
+def _proof_is_registered(
+    proof: WestSuffolkDiscoveryProofV1,
+    registrations: tuple[RetainedDiscoveryEvidenceRegistration, ...],
+) -> bool:
+    matches = tuple(
+        item
+        for item in registrations
+        if item.query_key == proof.query_key
+        and item.page == proof.page
+        and item.digest == proof.digest
+    )
+    return bool(matches) and all(
+        item.response_url == str(proof.response_url)
+        and item.request_url == str(proof.request_url)
+        and item.request_method == proof.request_method
+        and item.request_form == proof.request_form
+        for item in matches
+    )
+
+
+def _sha256_commitment(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    return f"sha256:{sha256(payload).hexdigest()}"
+
+
+def _evidence_commitment(
+    store: SqliteStore,
+    checkpoint: WestSuffolkCheckpointV1 | None,
+    snapshot: QualificationSnapshot,
+) -> QualificationEvidenceCommitment | None:
+    audit = store.evidence_registration_audit(_AUTHORITY_ID)
+    missing_paths = store.missing_evidence_paths()
+    invalid_paths = store.invalid_evidence_paths()
+    try:
+        records = tuple(
+            record
+            for record in store.retained_native_records()
+            if record.authority_id == _AUTHORITY_ID
+        )
+        retained_evidence = store.retained_evidence()
+    except (EvidenceIntegrityError, KeyError, OSError, ValueError):
+        return None
+    if (
+        checkpoint is None
+        or len(records) != snapshot.applications
+        or audit.application_count != snapshot.applications
+        or audit.applications_with_evidence != snapshot.applications
+        or audit.observation_count < snapshot.applications
+        or audit.observations_with_evidence != audit.observation_count
+        or audit.missing_digests
+        or audit.unlinked_digests
+        or not audit.current_rebuild_coherent
+        or missing_paths
+        or invalid_paths
+        or not retained_evidence
+        or not all(record.evidence for record in records)
+        or not _discovery_evidence_complete(store, checkpoint, audit)
+    ):
+        return None
+    applications = tuple(
+        sorted(
+            (
+                {
+                    "source_id": str(record.reference.source_id),
+                    "reference": record.reference.reference,
+                    "locator": record.reference.locator,
+                    "captures": [
+                        {
+                            "digest": str(capture.digest),
+                            "source_url": str(capture.url),
+                            "media_type": capture.media_type,
+                        }
+                        for capture in record.evidence
+                    ],
+                }
+                for record in records
+            ),
+            key=lambda item: (
+                str(item["source_id"]),
+                str(item["reference"]),
+                str(item["locator"]),
+            ),
+        )
+    )
+    discovery = tuple(
+        {
+            "query_key": proof.query_key,
+            "page": proof.page,
+            "digest": str(proof.digest),
+            "response_url": str(proof.response_url),
+            "request_url": str(proof.request_url),
+            "request_method": proof.request_method,
+            "request_form": proof.request_form,
+        }
+        for proof in checkpoint.discovery_proofs
+    )
+    content_digests = tuple(
+        sorted({str(capture.digest) for capture in retained_evidence})
+    )
+    return QualificationEvidenceCommitment(
+        canonicalization="sha256-canonical-json-v1",
+        applications=len(applications),
+        application_capture_associations=sum(
+            len(record.evidence) for record in records
+        ),
+        discovery_capture_associations=len(discovery),
+        content_digests=len(content_digests),
+        retained_evidence_rows=len(retained_evidence),
+        missing_paths=0,
+        invalid_paths=0,
+        application_capture_sha256=_sha256_commitment(applications),
+        discovery_capture_sha256=_sha256_commitment(discovery),
+        content_digest_set_sha256=_sha256_commitment(content_digests),
+    )
+
+
 def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
     return QualificationCounts.model_validate(
         snapshot.model_dump(exclude={"authority_id"})
+    )
+
+
+def _durable_acquisition_cost(store: SqliteStore) -> QualificationCost | None:
+    runs = store.run_costs(_AUTHORITY_ID)
+    if (
+        len(runs) < _MINIMUM_QUALIFICATION_RUNS
+        or runs[-1].status != RunStatus.SUCCEEDED
+        or runs[-1].request_count != 0
+        or runs[-1].transferred_bytes != 0
+        or runs[-2].status != RunStatus.SUCCEEDED
+        or any(run.status == RunStatus.RUNNING for run in runs[:-1])
+    ):
+        return None
+    request_count = sum(run.request_count for run in runs[:-1])
+    transferred_bytes = sum(run.transferred_bytes for run in runs[:-1])
+    if request_count == 0 or transferred_bytes == 0:
+        return None
+    return QualificationCost(
+        request_count=request_count,
+        transferred_bytes=transferred_bytes,
+        attachment_body_requests=0,
     )
 
 
@@ -285,10 +528,14 @@ def _base_checks(
     scope: QualificationScope,
     initial: QualificationCost,
 ) -> tuple[QualificationCheck, ...]:
+    checkpoint = _terminal_checkpoint(store, scope)
+    audit = store.evidence_registration_audit(_AUTHORITY_ID)
+    discovery_evidence = _discovery_evidence_complete(store, checkpoint, audit)
+    commitment = _evidence_commitment(store, checkpoint, snapshot)
     return (
         QualificationCheck(
             name="terminal-checkpoint",
-            ok=_terminal_checkpoint(store, scope),
+            ok=checkpoint is not None,
         ),
         QualificationCheck(
             name="pending-retries",
@@ -309,6 +556,18 @@ def _base_checks(
         QualificationCheck(
             name="evidence-paths",
             ok=not store.missing_evidence_paths(),
+        ),
+        QualificationCheck(
+            name="evidence-integrity",
+            ok=not store.invalid_evidence_paths(),
+        ),
+        QualificationCheck(
+            name="discovery-evidence",
+            ok=discovery_evidence,
+        ),
+        QualificationCheck(
+            name="application-evidence",
+            ok=commitment is not None,
         ),
         QualificationCheck(
             name="application-count",
@@ -335,7 +594,7 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> WestSuffolkQualificationReceiptV1:
+) -> WestSuffolkQualificationReceiptV2:
     registry = AuthorityRegistry((WEST_SUFFOLK_PACKAGE,))
     collector = Collector(registry, store)
     window = DiscoveryWindow(
@@ -343,24 +602,47 @@ async def _qualify(
         end=config.scope.end,
         include_open=config.scope.include_open,
     )
-    prior_status_count = len(store.run_statuses())
+    prior_run_count = len(store.run_costs(_AUTHORITY_ID))
     initial = await _collect_once(collector, window, session_factory)
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     initial_checks = _base_checks(store, first_snapshot, config.scope, initial)
     _require(initial_checks)
+    first_checkpoint = _terminal_checkpoint(store, config.scope)
+    first_commitment = _evidence_commitment(
+        store,
+        first_checkpoint,
+        first_snapshot,
+    )
+    if first_checkpoint is None or first_commitment is None:
+        raise QualificationFailedError(("application-evidence",))
 
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
-    run_statuses = store.run_statuses()[prior_status_count:]
+    final_checkpoint = _terminal_checkpoint(store, config.scope)
+    final_commitment = _evidence_commitment(
+        store,
+        final_checkpoint,
+        final_snapshot,
+    )
+    runs = store.run_costs(_AUTHORITY_ID)[prior_run_count:]
+    run_statuses = tuple(run.status for run in runs)
     final_checks = (
         *_base_checks(store, final_snapshot, config.scope, initial),
         QualificationCheck(
             name="idempotent-rerun",
-            ok=first_snapshot == final_snapshot,
+            ok=(
+                first_snapshot == final_snapshot
+                and first_checkpoint == final_checkpoint
+                and first_commitment == final_commitment
+            ),
         ),
         QualificationCheck(
             name="terminal-rerun-requests",
-            ok=(rerun.request_count == 0 and rerun.attachment_body_requests == 0),
+            ok=(
+                rerun.request_count == 0
+                and rerun.transferred_bytes == 0
+                and rerun.attachment_body_requests == 0
+            ),
         ),
         QualificationCheck(
             name="run-statuses",
@@ -368,19 +650,45 @@ async def _qualify(
         ),
     )
     _require(final_checks)
-    return WestSuffolkQualificationReceiptV1(
+    acquisition_cost = _durable_acquisition_cost(store)
+    if acquisition_cost is None or final_commitment is None:
+        raise QualificationFailedError(("bootstrap-provenance",))
+    return WestSuffolkQualificationReceiptV2(
         created_at=now(),
         scope=config.scope,
         counts=_counts(final_snapshot),
-        costs=QualificationCosts(initial=initial, rerun=rerun),
+        costs=QualificationCosts(initial=acquisition_cost, rerun=rerun),
         run_statuses=run_statuses,
         checks=final_checks,
+        evidence_commitment=final_commitment,
     )
+
+
+def _read_prior_receipt(path: Path) -> WestSuffolkQualificationReceiptV2 | None:
+    if not path.exists():
+        return None
+    try:
+        return WestSuffolkQualificationReceiptV2.model_validate_json(
+            path.read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError) as error:
+        raise QualificationFailedError(("preserved-live-receipt",)) from error
+
+
+def _receipt_to_persist(
+    prior: WestSuffolkQualificationReceiptV2 | None,
+    candidate: WestSuffolkQualificationReceiptV2,
+) -> WestSuffolkQualificationReceiptV2:
+    if prior is None or prior.scope != candidate.scope:
+        return candidate
+    if candidate.model_copy(update={"created_at": prior.created_at}) == prior:
+        return prior
+    raise QualificationFailedError(("preserved-live-receipt",))
 
 
 def _write_receipt(
     path: Path,
-    receipt: WestSuffolkQualificationReceiptV1,
+    receipt: WestSuffolkQualificationReceiptV2,
 ) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
@@ -427,8 +735,12 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
-                _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
+                receipt_path = config.data_dir / _RECEIPT_NAME
+                prior = _read_prior_receipt(receipt_path)
+                candidate = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt = _receipt_to_persist(prior, candidate)
+                if receipt is candidate:
+                    _write_receipt(receipt_path, receipt)
             finally:
                 store.close()
     except QualificationFailedError as error:
