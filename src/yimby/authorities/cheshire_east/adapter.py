@@ -431,15 +431,7 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         or set(map(str, marker.get_attribute_list("class"))) != {"text-danger"}
         or _normalise_label(marker.get_text(" ", strip=True)) != "no results found."
         or container.get_text(" ", strip=True) != marker.get_text(" ", strip=True)
-        or any(
-            element.has_attr("hidden")
-            or str(element.get("aria-hidden", "")).casefold() == "true"
-            or "display:none"
-            in str(element.get("style", "")).replace(" ", "").casefold()
-            or "visibility:hidden"
-            in str(element.get("style", "")).replace(" ", "").casefold()
-            for element in (container, marker_parent, marker)
-        )
+        or _has_hidden_ancestor(marker)
         or container.select("script, style, template, title, noscript")
     ):
         _raise_parse("search result boundary")
@@ -450,6 +442,19 @@ def parse_search_boundary(body: bytes) -> CheshireEastSearchBoundaryV1:
         pagination_links=(),
         terminal_marker=True,
     )
+
+
+def _has_hidden_ancestor(element: Tag) -> bool:
+    for candidate in (element, *element.parents):
+        style = str(candidate.get("style", "")).replace(" ", "").casefold()
+        if (
+            candidate.has_attr("hidden")
+            or str(candidate.get("aria-hidden", "")).casefold() == "true"
+            or "display:none" in style
+            or "visibility:hidden" in style
+        ):
+            return True
+    return False
 
 
 def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:

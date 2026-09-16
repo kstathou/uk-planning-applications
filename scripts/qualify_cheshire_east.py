@@ -759,7 +759,8 @@ def _validate_evidence_bindings(
 
 
 def _is_attachment_media_type(media_type: str) -> bool:
-    return media_type in _ATTACHMENT_MEDIA_TYPES or media_type.startswith(
+    canonical = media_type.partition(";")[0].strip().casefold()
+    return canonical in _ATTACHMENT_MEDIA_TYPES or canonical.startswith(
         _ATTACHMENT_MEDIA_PREFIXES
     )
 
