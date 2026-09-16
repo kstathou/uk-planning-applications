@@ -49,7 +49,8 @@ The additions include confirmed distinct implementations: [Arun's Ocella interfa
 Arun completed a persisted live bootstrap on 16 September 2026 for the
 inclusive 30-day window plus older open applications: 60 exact date queries
 reconciled to 648 unique applications, with document metadata and source
-evidence retained and an immediate zero-network rerun. This is bootstrap
+evidence retained, exact result membership reverified from 73 search captures,
+and an immediate zero-network rerun. This is bootstrap
 evidence only. The approximately 7- and 14-day refresh cycles remain pending,
 so Arun stays discovery-only and is not operationally qualified.
 

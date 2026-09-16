@@ -41,9 +41,10 @@ requirement.
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
 As of 16 September 2026, Arun has completed a verified live bootstrap. Its
-versioned receipt reconciles 648 unique references and applications, 1,296
-evidence captures, zero pending retries, zero failed current sections, zero
-unmapped records, and a zero-I/O immediate rerun. It remains discovery-only
+schema-version-2 receipt reconciles 648 unique references and applications, 73
+search captures, 1,296 application captures, zero pending retries, zero failed
+current sections, zero unmapped records, and a zero-network-I/O immediate
+rerun. It remains discovery-only
 because the two later weekly cycles are pending. The Barnet smoke is incomplete
 because the source returned HTTP 429 during pagination; its saved checkpoint
 permits a later bounded resume without repeating completed pages. The other

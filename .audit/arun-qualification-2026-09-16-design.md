@@ -17,11 +17,14 @@ The live plan for the inclusive 2026-08-18 to 2026-09-16 scope is:
 5. one undecided received-date query for each calendar month from 2024-01-01
    through the scope end, with the last window clipped to the scope end.
 
-This produces 60 non-overlapping, ordered queries. The official portal returns
-an explicit empty result for the 1948-1999 open partition. Every later partition
-must expose fewer than 200 results and exact agreement between its reported and
-enumerated reference sets. A cap, unexpected pagination, missing Show All form,
-or count disagreement fails closed.
+This produces 60 ordered queries. The 58 older-open date partitions are
+mutually non-overlapping; the received, decided, and older-open populations
+intentionally overlap and are reconciled by exact application reference. The
+official portal returns an explicit empty result for the 1948-1999 open
+partition. Every later partition must expose fewer than 200 results and exact
+agreement between its reported and enumerated reference sets. A cap, unexpected
+pagination, missing or query-changing Show All form, or count disagreement
+fails closed.
 
 Parish partitioning was rejected. The form exposes 34 official area values, but
 the portal does not state that every application has one of those values. Date
@@ -43,9 +46,11 @@ complete batch without a request. A crash before the store commit safely
 repeats the portal request; a crash after it resumes at the committed state.
 
 The canonical plan is also the source for checkpoint validation and the receipt
-query inventory. Completed query summaries retain the query key, reported count,
-and enumerated count. The final receipt retains the full typed inventory rather
-than only a digest.
+query inventory. Completed query summaries retain the query key, exact
+reference membership, reported count, enumerated count, and initial and
+expanded result-evidence digests. The final receipt retains the full typed
+inventory and all exact durable reference sets rather than only aggregate
+counts or a digest.
 
 ## Portal form boundary
 
@@ -55,10 +60,13 @@ preserve portal-owned hidden fields and use the captured `action=Search` submit
 control. A Show All request comes only from the result-owned form and preserves
 its exact query fields and `showall=showall` control.
 
-Result parsing accepts only references from planning-result links. It recognizes
-the portal's explicit empty message and its `First 20 results shown, there are N
-in total` count. A query is complete only when the number of unique references
-equals the reported total. Counts at or above 200 fail closed.
+Result parsing accepts only references from exact same-host planning-result
+links. It recognizes the portal's explicit empty message, its `First 20 results
+shown, there are N in total` count, and the source-owned single-result page
+whose exact result table is paired with its `Back to Search page` control. It
+does not infer a total from link count. A query is complete only when an
+explicit source-owned completion marker exists and the number of unique
+references equals the reported total. Counts at or above 200 fail closed.
 
 ## Application and document boundary
 
@@ -76,8 +84,8 @@ the official detail route does not expose a bounded text collection contract.
 
 ## Qualification receipt
 
-The command writes only after all checks pass and replaces its versioned receipt
-atomically. The receipt proves:
+The command writes only after all checks pass and replaces its typed,
+schema-version-2 receipt atomically. The receipt proves:
 
 - the exact inclusive scope and exact 60-query inventory;
 - a terminal checkpoint whose seen-reference set equals the durable discovery
@@ -86,9 +94,13 @@ atomically. The receipt proves:
   reference sets;
 - zero retries, failed current sections, unmapped records, and attachment-body
   requests;
-- database integrity and recomputed evidence-digest integrity;
+- database integrity and recomputed application and search-evidence-digest
+  integrity, including reparsing every retained result capture against its
+  recorded query membership;
 - complete current application and document sections for every retained record;
-- two successful runs with a byte-for-byte semantic fingerprint match; and
+- a successful completed run plus an immediate successful rerun with a
+  byte-for-byte semantic fingerprint match; all historical run outcomes and
+  aggregate bootstrap costs remain visible; and
 - zero requests, zero transferred bytes, and zero attachment-body requests on
   the immediate terminal rerun.
 
@@ -98,11 +110,12 @@ Two weekly refresh targets remain explicitly pending. The registry stays
 
 ## Test seams
 
-Tests cover canonical plan construction, exact form payloads, Show All replay,
-count/cap failure, mid-query resume, terminal zero-I/O behavior, reference
-identity, document metadata without attachment fetches, receipt set agreement,
-evidence tampering, pending cycles, atomic replacement, and rerun semantic
-stability.
+Tests cover canonical plan construction and scope clipping, exact form payloads,
+Show All replay, explicit single-result completion, count/cap failure,
+mid-query resume, terminal zero-network-I/O behavior, exact same-host routing,
+reference identity, document metadata without attachment fetches, receipt set
+agreement, application and search-evidence tampering, pending cycles, atomic
+replacement, and rerun semantic stability.
 
 ## Architecture arena
 

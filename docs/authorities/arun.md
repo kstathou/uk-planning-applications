@@ -39,13 +39,18 @@ without repeating completed partitions.
 The result parser reconciles the reported total with the exact enumerated
 references, rejects duplicates within a response, and de-duplicates overlaps
 across received, decided, and older-open searches by application reference.
+It accepts an uncounted result only when the official page contains exactly one
+result row with the expected headings and its source-owned `Back to Search page`
+control. It never manufactures a count from the number of links. All search
+form and result HTML used for the qualification is retained by digest, and the
+receipt reparses it against the exact per-query reference membership.
 
 ## Application and document records
 
 The detail page exposes the reference, native status, proposal, location,
-optional parish, officer, received and validated dates, target and comment
-dates, decision, applicant, and agent. The application reference contains
-slashes and is URL encoded when routed.
+optional parish, officer, received and validated dates, decision-by, target
+committee, comment-by and decision dates, decision, applicant, and agent. The
+application reference contains slashes and is URL encoded when routed.
 
 The exact document action posts to
 `showDocuments?reference=...&module=pl`. The index is an official headerless
@@ -68,19 +73,32 @@ partitions into 648 unique references. All 648 applications were materialised
 with two evidence captures each (detail and document index), for 1,296 verified
 content digests.
 
-The first pass made 1,329 official-page requests and transferred 11,248,979
-bytes. It recorded zero pending retries, failed current sections, unmapped
-records, and attachment-body requests. SQLite integrity, evidence paths and
-digests, terminal checkpoint state, exact reference-set equality, current
-section completeness, and the source cap were checked before the versioned
-receipt was atomically published. The immediate terminal rerun made zero
-requests, transferred zero bytes, and produced the same durable snapshot and
-semantic fingerprint.
+The completed schema-version-2 qualification accounts for 1,373 official-page
+requests and 11,499,963 transferred bytes across the whole bootstrap history.
+That total deliberately includes two fail-closed development attempts whose
+stable `ArunParseError` diagnostics remain in SQLite; neither attempt published
+an incomplete receipt. The final resume attempt made 963 requests and
+transferred 8,536,426 bytes. The completed snapshot has zero pending retries,
+failed current sections, unmapped records, and attachment-body requests.
+
+The 648 native rows retain 648 received dates, 395 validated dates, 396
+decision-by dates, 323 comment-by dates, 38 target-committee dates, 119 decision
+dates, and 648 native decision statuses. The receipt records 73 search captures
+and 1,296 application captures with their exact digests. It reparses every
+result capture, checks its exact query membership, and also verifies SQLite
+integrity, evidence paths, terminal checkpoint state, exact reference-set
+equality, current section completeness, the source cap, and the durable
+discovery-only registry status before publication. The immediate terminal rerun
+made zero requests, transferred zero bytes, requested zero attachment bodies,
+and produced the same durable snapshot and semantic fingerprint.
 
 The local receipt is
-`.yimby/qualification-arun-2026-09-16/arun-qualification-v1.json`. It contains
-the full query inventory, exact reference sets, counts, evidence digest
-inventory, costs, checks, and pending weekly-cycle dates.
+`.yimby/qualification-arun-2026-09-16/arun-qualification-v2.json`. It contains
+the typed full query inventory, exact per-query evidence and membership, exact
+durable reference sets, counts, separate search and application evidence digest
+inventories, full-run and final-resume costs, check results, run outcomes, and
+pending weekly-cycle dates. The superseded pre-v2 snapshot is preserved at
+`.yimby/qualification-arun-2026-09-16-pre-v2` for diagnosis only.
 
 ## Remaining operational limit
 
