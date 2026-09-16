@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from html import unescape
 from typing import TYPE_CHECKING, Literal, NoReturn
@@ -105,6 +106,32 @@ _CASE_TYPES = (
     ("TWA", "Transport and Works Act 1992"),
     ("TR", "Tree Works"),
     ("UNK", "Unknown"),
+)
+_ADVANCED_FORM_FIELD_NAMES = (
+    "_csrf",
+    "searchCriteria.reference",
+    "searchCriteria.description",
+    "searchCriteria.applicantName",
+    "searchCriteria.ward",
+    "searchCriteria.parish",
+    "searchCriteria.conservationArea",
+    "searchCriteria.agent",
+    "searchCriteria.caseDecision",
+    "searchCriteria.developmentType",
+    "searchCriteria.address",
+    "date(applicationValidatedStart)",
+    "date(applicationValidatedEnd)",
+    "date(applicationCommitteeStart)",
+    "date(applicationCommitteeEnd)",
+    "date(applicationDecisionStart)",
+    "date(applicationDecisionEnd)",
+    "searchCriteria.caseType",
+    "searchCriteria.caseStatus",
+    "searchCriteria.appealStatus",
+    "caseAddressType",
+    "searchType",
+    "tag",
+    "tag",
 )
 
 
@@ -639,32 +666,6 @@ def _parse_advanced_form(body: bytes) -> Tag:
         or action != _ADVANCED_RESULTS_URL
     ):
         _raise_parse("advanced form")
-    required_fields = {
-        "_csrf",
-        "searchCriteria.reference",
-        "searchCriteria.description",
-        "searchCriteria.applicantName",
-        "searchCriteria.caseType",
-        "searchCriteria.ward",
-        "searchCriteria.parish",
-        "searchCriteria.conservationArea",
-        "searchCriteria.agent",
-        "searchCriteria.caseStatus",
-        "searchCriteria.caseDecision",
-        "searchCriteria.appealStatus",
-        "searchCriteria.developmentType",
-        "caseAddressType",
-        "searchCriteria.address",
-        "date(applicationValidatedStart)",
-        "date(applicationValidatedEnd)",
-        "date(applicationCommitteeStart)",
-        "date(applicationCommitteeEnd)",
-        "date(applicationDecisionStart)",
-        "date(applicationDecisionEnd)",
-        "searchType",
-    }
-    if not required_fields.issubset(field.name for field in _form_fields(form)):
-        _raise_parse("advanced form fields")
     _require_options(
         form,
         "searchCriteria.caseStatus",
@@ -693,8 +694,15 @@ def _parse_advanced_form(body: bytes) -> Tag:
         (("", "All"), *_CASE_TYPES),
         "case type",
     )
-    values = {field.name: field.value for field in _form_fields(form)}
-    if values["caseAddressType"] != "Application" or not values["searchType"]:
+    fields = _form_fields(form)
+    if Counter(field.name for field in fields) != Counter(_ADVANCED_FORM_FIELD_NAMES):
+        _raise_parse("advanced form fields")
+    values = {field.name: field.value for field in fields}
+    if (
+        not values["_csrf"]
+        or values["caseAddressType"] != "Application"
+        or values["searchType"] != "Application"
+    ):
         _raise_parse("advanced form discriminators")
     return form
 

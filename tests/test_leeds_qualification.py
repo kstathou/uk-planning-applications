@@ -330,8 +330,49 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
             ),
             "advanced case status",
         ),
+        (
+            _advanced_form().replace(
+                b'<input name="searchCriteria.reference" value="">',
+                (
+                    b'<input name="searchCriteria.reference" value="">'
+                    b'<input name="searchCriteria.unseen" value="narrow">'
+                ),
+            ),
+            "advanced form fields",
+        ),
+        (
+            _advanced_form().replace(
+                b'<input type="hidden" name="caseAddressType" value="Application">',
+                (
+                    b'<input type="hidden" name="caseAddressType" '
+                    b'value="Application">'
+                    b'<input type="hidden" name="caseAddressType" '
+                    b'value="Application">'
+                ),
+            ),
+            "advanced form fields",
+        ),
+        (
+            _advanced_form().replace(
+                b'<input type="hidden" name="tag" value="two">',
+                (
+                    b'<input type="hidden" name="tag" value="two">'
+                    b'<input type="hidden" name="tag" value="three">'
+                ),
+            ),
+            "advanced form fields",
+        ),
     ],
-    ids=("missing", "method", "field", "discriminator", "select"),
+    ids=(
+        "missing",
+        "method",
+        "field",
+        "discriminator",
+        "select",
+        "unknown-filter",
+        "duplicate-discriminator",
+        "extra-opaque",
+    ),
 )
 def test_leeds_rejects_advanced_form_boundary_drift(
     body: bytes,

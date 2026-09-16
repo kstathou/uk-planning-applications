@@ -62,7 +62,14 @@ For 18 August through 16 September 2026, the exact ordered inventory has 43 quer
 
 The official unpartitioned `Current` query returned `Too many results found. Please enter some more parameters.` A cap is a distinct failure. It is never empty or complete. A capped case-type partition blocks qualification because no second exhaustive partition is proven.
 
-The advanced parser requires the exact action, `POST` method, enabled control inventory, status values, appeal values, and the 30 investigated case-type value and label pairs. It preserves every enabled named control in DOM order. It replaces only fields owned by the active query and preserves `caseAddressType=Application`, `_csrf`, `searchType`, blank defaults, and repeated opaque fields. Taxonomy drift fails closed.
+The advanced parser requires the exact action, `POST` method, enabled control
+inventory and cardinality, status values, appeal values, and the 30 investigated
+case-type value and label pairs. The two captured `tag` controls are the only
+allowlisted repeated opaque fields. It preserves every enabled named control in
+DOM order. It replaces only fields owned by the active query and preserves
+`caseAddressType=Application`, the nonblank `_csrf`,
+`searchType=Application`, blank defaults, and both opaque fields. Unknown or
+duplicate controls and taxonomy drift fail closed.
 
 ## Checkpoint
 

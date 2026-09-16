@@ -30,8 +30,10 @@ The unpartitioned current search exceeds the portal result cap. A capped query
 is a qualification failure, never an empty result. The adapter therefore
 requires the exact observed case-type taxonomy, exhausts every page, reconciles
 displayed totals, binds every response to its requested page, and fails closed
-if the form, taxonomy, or pagination identity drifts. A repeated first page
-cannot advance a resumed checkpoint.
+if the form, taxonomy, or pagination identity drifts. Its exact named-control
+inventory and cardinality allow only the two captured repeated opaque fields,
+so an unknown filter or duplicate discriminator cannot silently narrow the
+search. A repeated first page cannot advance a resumed checkpoint.
 
 The clean live run completed all ten weekly partitions with totals
 `116, 162, 154, 140, 102, 101, 156, 140, 0, 93`. It then reached page 10 and
@@ -39,9 +41,9 @@ row 90 of the first advanced validated-date partition. At that checkpoint,
 1,148 unique references exactly matched 1,148 retained applications, with zero
 failed current sections and zero pending retries.
 
-The first page-10 attempt returned an unparseable portal response. Three
-bounded resumed sessions then failed with `SourceUnavailableError`. The
-checkpoint remains resumable at
+The first page-10 attempt returned an unparseable portal response. Four bounded
+resume commands then each exhausted three no-progress sessions with
+`SourceUnavailableError`. The checkpoint remains resumable at
 `advanced|validated|2026-08-18|2026-09-16`, page 10, row 90. Because only 10 of
 43 queries are complete, no qualification receipt exists and the live
 bootstrap remains blocked.
