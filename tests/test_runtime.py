@@ -630,6 +630,46 @@ def test_http_session_retains_allowed_redirect_destination() -> None:
     asyncio.run(exercise())
 
 
+def test_http_session_rate_limits_each_physical_redirect_hop() -> None:
+    """Each request in an allowed redirect chain receives the host gap."""
+    current = [10.0]
+    sleeps: list[float] = []
+    paths: list[str] = []
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+        current[0] += delay
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/allowed"})
+        return httpx.Response(200, content=b"allowed")
+
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        limiter=HostRateLimiter(2.0, clock=lambda: current[0], sleep=sleep),
+    )
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/start", "/allowed"),
+    )
+
+    async def exercise() -> None:
+        await session.fetch(
+            PortalRequest(
+                url=HttpUrl("https://example.test/start"),
+                intent=RequestIntent.SEARCH,
+                redirect_boundary=boundary,
+            )
+        )
+        await session.aclose()
+
+    asyncio.run(exercise())
+    assert paths == ["/start", "/allowed"]
+    assert sleeps == [2.0]
+
+
 def test_http_session_rejects_initial_url_outside_redirect_boundary() -> None:
     """A boundary also constrains the first URL before transport."""
     calls = 0

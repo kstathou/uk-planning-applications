@@ -691,6 +691,23 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
             "outstanding:planning:true",
         )
     )
+    assert audit.query_summaries == (
+        devon.DevonQuerySummaryV1(
+            query_key="received:2026-08-18:2026-09-16",
+            row_count=3,
+            page_count=1,
+        ),
+        devon.DevonQuerySummaryV1(
+            query_key="determined:2026-08-18:2026-09-16",
+            row_count=1,
+            page_count=1,
+        ),
+        devon.DevonQuerySummaryV1(
+            query_key="outstanding:planning:true",
+            row_count=55,
+            page_count=6,
+        ),
+    )
     assert len(audit.references) == 58
 
     with pytest.raises(devon.DevonCheckpointError, match="replay"):
@@ -1017,6 +1034,14 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         result_page="live",
         live_scope=scope,
         completed_queries=devon._query_keys(scope),
+        query_summaries=tuple(
+            devon.DevonQuerySummaryV1(
+                query_key=query_key,
+                row_count=1,
+                page_count=1,
+            )
+            for query_key in devon._query_keys(scope)
+        ),
         seen_references=(
             SourceReference(
                 source_id=devon.SOURCE,
@@ -1050,6 +1075,13 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         devon._parse_discovery_page(b"<p>Unknown</p>", expected_page=1)
     with pytest.raises(devon.DevonParseError, match="page-one singleton"):
         devon._parse_discovery_page(_devon_detail(), expected_page=2)
+    pager = _devon_results(
+        tuple(f"DCC/{number}/2026" for number in range(1, 11)),
+        total_pages=2,
+    )
+    pager_only = pager[pager.index(b'<ul class="pagination">') :]
+    with pytest.raises(devon.DevonPaginationError, match="singleton-detail-pager"):
+        devon._parse_discovery_page(_devon_detail() + pager_only, expected_page=1)
     with pytest.raises(devon.DevonPaginationError):
         devon._parse_discovery_page(
             _devon_results(tuple(f"DCC/{number}/2026" for number in range(10))),
@@ -1096,12 +1128,21 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
         numbered_links=links,
         next_locator=HttpUrl(f"{devon._RESULTS_URL}/2"),
     )
+    completed_summaries = tuple(
+        devon.DevonQuerySummaryV1(
+            query_key=query_key,
+            row_count=1,
+            page_count=1,
+        )
+        for query_key in keys[:2]
+    )
 
     def rejected(code: str, **changes: Any) -> None:
         values: dict[str, Any] = {
             "result_page": "live",
             "live_scope": scope,
             "completed_queries": keys[:2],
+            "query_summaries": completed_summaries,
             "active_query": keys[2],
             "next_page": 2,
             "active_pages": (proof,),
@@ -1115,6 +1156,7 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
     rejected("live-scope-required", live_scope=None)
     rejected("live-result-cursor-required", result_page="fixture")
     rejected("completed-query-prefix", completed_queries=(keys[1],))
+    rejected("completed-query-summaries", query_summaries=completed_summaries[:1])
     rejected("seen-references", seen_references=(*references, references[0]))
     rejected(
         "seen-references",
@@ -1153,6 +1195,14 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
         result_page="live",
         live_scope=terminal_scope,
         completed_queries=devon._query_keys(terminal_scope),
+        query_summaries=tuple(
+            devon.DevonQuerySummaryV1(
+                query_key=query_key,
+                row_count=1,
+                page_count=1,
+            )
+            for query_key in devon._query_keys(terminal_scope)
+        ),
         seen_references=references,
         live_complete=True,
     )
@@ -1166,6 +1216,7 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
         result_page="live",
         live_scope=scope,
         completed_queries=keys[:2],
+        query_summaries=completed_summaries,
         active_query=keys[2],
         next_page=2,
         active_pages=(proof,),
@@ -1193,6 +1244,7 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
                 result_page="live",
                 live_scope=scope,
                 completed_queries=keys[:2],
+                query_summaries=completed_summaries,
                 seen_references=references,
             ),
             query=query,
@@ -1435,6 +1487,22 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
         devon._parse_documents(
             _devon_detail().replace(b"/Document/Download", b"/changed")
         )
+    with pytest.raises(devon.DevonParseError, match="document locator"):
+        devon._parse_documents(
+            _devon_detail().replace(
+                b'href="/Document/Download',
+                b'href="https://evil.test/Document/Download',
+                1,
+            )
+        )
+    with pytest.raises(devon.DevonParseError, match="document locator"):
+        devon._parse_documents(
+            _devon_detail().replace(
+                b"/Document/Download?",
+                b"/Document/DownloadExtra?",
+                1,
+            )
+        )
 
 
 def test_devon_qualification_requires_exact_safe_scope(tmp_path: Path) -> None:
@@ -1503,10 +1571,10 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         == 0
     )
     output = json.loads(capsys.readouterr().out)
-    receipt_path = data_dir / "devon-qualification-v1.json"
+    receipt_path = data_dir / "devon-qualification-v2.json"
     receipt = json.loads(receipt_path.read_text())
     assert output == receipt
-    assert receipt["schema_version"] == 1
+    assert receipt["schema_version"] == 2
     assert receipt["authority_id"] == "devon"
     assert receipt["scope"] == {
         "start": "2026-08-18",
@@ -1520,6 +1588,23 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     ]
     assert receipt["expected_queries"] == expected_queries
     assert receipt["completed_queries"] == expected_queries
+    assert receipt["query_summaries"] == [
+        {
+            "query_key": expected_queries[0],
+            "row_count": 3,
+            "page_count": 1,
+        },
+        {
+            "query_key": expected_queries[1],
+            "row_count": 1,
+            "page_count": 1,
+        },
+        {
+            "query_key": expected_queries[2],
+            "row_count": 55,
+            "page_count": 6,
+        },
+    ]
     assert receipt["counts"] == {
         "applications": 58,
         "discovered_references": 58,
@@ -1563,7 +1648,7 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     assert len(sessions) == 2
     assert sessions[0].requested_urls
     assert sessions[1].requested_urls == ()
-    assert not (data_dir / ".devon-qualification-v1.json.tmp").exists()
+    assert not (data_dir / ".devon-qualification-v2.json.tmp").exists()
 
     resumed_sessions: list[_Session] = []
 
@@ -1609,6 +1694,15 @@ def test_devon_qualification_reconciles_registered_evidence(
 
     assert module.main(arguments, session_factory=session_factory) == 0
     capsys.readouterr()
+
+    residual = data_dir / "evidence" / "interrupted.tmp"
+    residual.write_bytes(b"partial")
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["evidence-integrity"],
+    }
+    residual.unlink()
 
     body = b"unregistered evidence"
     digest = sha256(body).hexdigest()
