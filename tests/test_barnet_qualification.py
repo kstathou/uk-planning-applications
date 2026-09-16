@@ -454,7 +454,7 @@ def test_barnet_qualification_reports_source_failures_without_masking_defects(
 
 @pytest.mark.parametrize(
     "corruption",
-    ["evidence", "locator", "checkpoint-locator"],
+    ["evidence", "historical-evidence", "locator", "checkpoint-locator"],
 )
 def test_barnet_qualification_invalidates_stale_receipt_on_corruption(
     corruption: str,
@@ -474,6 +474,27 @@ def test_barnet_qualification_invalidates_stale_receipt_on_corruption(
     if corruption == "evidence":
         evidence_path = next((data_dir / "evidence").rglob("*.gz"))
         evidence_path.write_bytes(b"not-gzip")
+        expected_check = "evidence-integrity"
+    elif corruption == "historical-evidence":
+        digest = "f" * 64
+        relative_path = f"ff/{digest}.gz"
+        evidence_path = data_dir / "evidence" / relative_path
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_bytes(b"corrupt historical capture")
+        with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+            connection.execute(
+                """
+                INSERT INTO evidence(digest, path, source_url, media_type)
+                VALUES (?, ?, ?, ?)
+                """,
+                (
+                    digest,
+                    relative_path,
+                    "https://publicaccess.barnet.gov.uk/online-applications/legacy",
+                    "text/html",
+                ),
+            )
+            connection.commit()
         expected_check = "evidence-integrity"
     elif corruption == "locator":
         with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
