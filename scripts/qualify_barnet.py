@@ -39,7 +39,7 @@ from yimby.domain import (
     RunStatus,
 )
 from yimby.evidence import EvidenceStore
-from yimby.http_transport import HttpxPortalSession
+from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
@@ -59,6 +59,8 @@ _THIRTY_DAY_WINDOW_REQUIRED = "thirty-day-window-required"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
+_BARNET_MINIMUM_GAP_SECONDS = 10.0
+_BARNET_MAX_ATTEMPTS = 1
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -458,7 +460,10 @@ def _write_receipt(
 
 
 def _default_session() -> HttpxPortalSession:
-    return HttpxPortalSession()
+    return HttpxPortalSession(
+        limiter=HostRateLimiter(_BARNET_MINIMUM_GAP_SECONDS),
+        max_attempts=_BARNET_MAX_ATTEMPTS,
+    )
 
 
 def _default_clock() -> datetime:

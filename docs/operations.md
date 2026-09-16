@@ -105,6 +105,11 @@ matching durable references and locators, healthy sections, SQLite integrity,
 zero attachment-body requests, and an immediate zero-I/O rerun. The two weekly
 refresh entries remain pending until their real future dates.
 
+The Barnet qualification command leaves at least ten seconds between live
+requests and makes no automatic retry after a 429. If the source rate-limits a
+run, let the official site recover and then resume the same target. Do not run
+parallel Barnet collectors or rotate clients to evade the source limit.
+
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 
 ```sh

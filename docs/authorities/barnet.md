@@ -121,6 +121,12 @@ bootstrap. The safe resume target is
 `.yimby/qualification-barnet-2026-09-16` and must be reused with `--resume`
 only after the official portal recovers.
 
+The qualification transport now enforces a Barnet-specific ten-second minimum
+gap and stops on the first 429 instead of retrying. This reduces load while
+preserving the exact page, query, retry, and application state needed for a
+later resume. It cannot clear the source's server-side cooldown, so a resume is
+allowed only after an ordinary official page is healthy again.
+
 The partial state also exposed Barnet's live card layout for comments. Public
 cards contain a distinct comment-body element plus separately displayed name
 and address fields. The adapter now retains only the comment body. Consultee
