@@ -33,6 +33,7 @@ from yimby.domain import (
     DiscoveryState,
     DocumentRecord,
     DurableDiscoveryBatch,
+    EvidenceCapture,
     EvidenceDigest,
     FrozenModel,
     NormalisedObservation,
@@ -1170,6 +1171,21 @@ class SqliteStore:
             except EvidenceIntegrityError:
                 invalid.append(row["path"])
         return tuple(invalid)
+
+    def retained_evidence(self) -> tuple[EvidenceCapture, ...]:
+        """Rehydrate every retained evidence row in digest order."""
+        return tuple(
+            self._evidence.read_capture(
+                EvidenceDigest(row["digest"]),
+                row["path"],
+                row["source_url"],
+                row["media_type"],
+            )
+            for row in self._connection.execute(
+                "SELECT digest, path, source_url, media_type "
+                "FROM evidence ORDER BY digest"
+             )
+         )
 
     def migration_versions(self) -> tuple[int, ...]:
         """Return applied migration versions in order."""
