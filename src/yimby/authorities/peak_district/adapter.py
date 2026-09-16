@@ -79,7 +79,9 @@ _STATUS_FIELD: Literal["AdvanceSearch.SelectedApplicationStatus"] = (
     "AdvanceSearch.SelectedApplicationStatus"
 )
 _APPLICATION_NUMBER_PATTERN = re.compile(
-    r"Application\s+No\s*:\s*(.*?)\s*\|\s*Registered\s*:", re.IGNORECASE
+    r"Application\s+No\s*:\s*(.*?)\s*\|\s*"
+    r"(?:Registered|Received|Validated|Decided)\s*:",
+    re.IGNORECASE,
 )
 _TOTAL_PATTERN = re.compile(r"Total\s+record\(s\)\s*:\s*(\d+)", re.IGNORECASE)
 _PAGE_PATTERN = re.compile(r"PagingClick\(['\"]?(\d+)['\"]?\)")
