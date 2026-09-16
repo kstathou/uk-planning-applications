@@ -87,6 +87,7 @@ WINDOW = DiscoveryWindow(
 )
 CAMDEN_FIXTURE_EASTING = 530748
 PILOT_AUTHORITY_COUNT = 15
+LIVE_READY_AUTHORITY_COUNT = 2
 UNCHANGED_AND_REBUILT_VERSIONS = 2
 BARNET_REQUEST_COUNT = 3
 REPEATED_RETRY_ATTEMPTS = 2
@@ -786,7 +787,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     dashboard = dashboard_snapshot(store, pilot_registry())
     assert dashboard.coverage_implemented == PILOT_AUTHORITY_COUNT
     assert dashboard.coverage_denominator == PILOT_AUTHORITY_COUNT
-    assert dashboard.live_ready == 1
+    assert dashboard.live_ready == LIVE_READY_AUTHORITY_COUNT
     assert dashboard.live_readiness_denominator == PILOT_AUTHORITY_COUNT
     assert dashboard.application_count == 1
     assert dashboard.request_count == BARNET_REQUEST_COUNT

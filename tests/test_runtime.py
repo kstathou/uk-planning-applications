@@ -124,7 +124,7 @@ def _live_status(
 
 
 def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
-    """Only receipt-qualified OPDC is live-ready; other gaps stay explicit."""
+    """Only receipt-qualified authorities are live-ready; other gaps stay explicit."""
     registry = pilot_registry()
     readiness_by_authority = {
         manifest.id: manifest.live_status.readiness for manifest in registry.manifests()
@@ -156,8 +156,10 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         readiness=LiveReadiness.LIVE_READY,
         reason="official Agile API bootstrap and immediate idempotent rerun qualified",
         evidence=(
-            "docs/evidence/opdc-qualification-2026-09-16.json records "
-            "55 complete applications",
+            (
+                "docs/evidence/opdc-qualification-2026-09-16.json records "
+                "55 complete applications"
+            ),
         ),
         transport=LiveTransportKind.HTTP,
     )
