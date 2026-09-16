@@ -36,6 +36,10 @@ _GENERAL_SEARCH_PATHS = {
     "/NECSWS/PlanningExplorer/GeneralSearch.aspx",
     "/Northgate/PlanningExplorer17/GeneralSearch.aspx",
 }
+_RESULT_PATHS = {
+    "/NECSWS/PlanningExplorer/Generic/StdResults.aspx",
+    "/Northgate/PlanningExplorer17/Generic/StdResults.aspx",
+}
 _RESULT_PAGE_SIZE = 10
 _EMPTY_RESULTS = "No Records Found. Please resubmit search with different criteria."
 CAMDEN_SOURCE = SourceId("camden-jsf-search")
@@ -810,6 +814,12 @@ def _next_result_url(
             base="https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer/Generic/",
         )
         parts = urlsplit(normalized)
+        if (
+            parts.scheme != "https"
+            or parts.hostname != "planningrecords.camden.gov.uk"
+            or parts.path not in _RESULT_PATHS
+        ):
+            _raise_discovery_parse("forward pager origin")
         parameters = parse_qsl(parts.query, keep_blank_values=True)
         offsets = [value for name, value in parameters if name == "p"]
         if len(offsets) != 1 or not offsets[0].isdigit():
