@@ -142,6 +142,8 @@ def _result_page(query: str, page: int, fault: str | None = None) -> bytes:
         page_rows[-1] = _Result(page_rows[-1].reference, page_rows[0].recno)
     if fault == "underfull" and query == "received-valid" and page == 1:
         page_rows.pop()
+    if fault == "outstanding-repeat" and query == "outstanding" and page == 2:
+        page_rows[0] = OUTSTANDING[0]
     rendered_rows = "".join(
         f"""
         <div class="result">
@@ -1023,6 +1025,54 @@ def test_dorset_qualification_restarts_stale_partial_discovery(tmp_path: Path) -
     assert receipt.reference_agreement.count == 21
     assert receipt.counts.pending_retries == 0
     assert receipt.run_statuses == ("succeeded", "succeeded")
+
+
+def test_dorset_qualification_restarts_only_unstable_outstanding_query(
+    tmp_path: Path,
+) -> None:
+    """A contradicted open scan preserves the completed bounded query."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+    mocks: list[_DorsetMock] = []
+
+    def failing_factory() -> HttpxPortalSession:
+        mock = _DorsetMock(fault="outstanding-repeat")
+        mocks.append(mock)
+        return _session(mock)
+
+    assert module.main(arguments, session_factory=failing_factory) == 1
+
+    def recovered_factory() -> HttpxPortalSession:
+        mock = _DorsetMock()
+        mocks.append(mock)
+        return _session(mock)
+
+    assert (
+        module.main(
+            [*arguments, "--resume", "--restart-discovery"],
+            session_factory=recovered_factory,
+        )
+        == 0
+    )
+
+    recovered_searches = _pairs(mocks[1], ADVANCED_PATH)
+    assert len(recovered_searches) == 1
+    assert {
+        name for name, _value in recovered_searches[0]
+    } >= {"ctl00$ContentPlaceHolder1$btnSearch2"}
+    assert "ctl00$ContentPlaceHolder1$btnSearch3" not in {
+        name for name, _value in recovered_searches[0]
+    }
+    receipt = module.DorsetQualificationReceiptV1.model_validate_json(
+        (tmp_path / "dorset-qualification-v1.json").read_text()
+    )
+    assert receipt.reference_agreement.count == 21
+    assert receipt.costs.initial.fetch_calls == 15
 
 
 def test_dorset_qualification_explicitly_restarts_terminal_discovery(
