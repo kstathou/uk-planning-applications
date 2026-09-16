@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal, Never, Self
+from typing import Literal, Never, Self, cast
 from urllib.parse import parse_qs, urlsplit
 
 from pydantic import Field, HttpUrl, ValidationError, field_validator, model_validator
@@ -34,6 +34,8 @@ from yimby.transport import (
 
 _RECEIPT_NAME = "cheshire-east-qualification-blocker-v2.json"
 _JOURNAL_NAME = "cheshire-east-qualification-journal-v1.json"
+_JOURNAL_TEMP_NAME = f".{_JOURNAL_NAME}.tmp"
+_LOCK_NAME = "qualification.lock"
 _DETAIL_REFERENCE = "26/3335/PRIOR-1A"
 _DETAIL_LOCATOR = "406569"
 _HISTORICAL_WEEK = date(2024, 1, 1)
@@ -547,10 +549,21 @@ def _config(argv: Sequence[str]) -> _Config:
     data_dir = Path(arguments.data_dir).expanduser()
     if data_dir.exists() and not data_dir.is_dir():
         raise _QualificationConfigError(_DATA_DIR_NOT_DIRECTORY)
-    if data_dir.exists() and any(data_dir.iterdir()) and not arguments.resume:
+    entries = (
+        {entry.name for entry in data_dir.iterdir()} if data_dir.exists() else set()
+    )
+    initial_crash_state = bool(entries) and entries <= {
+        _LOCK_NAME,
+        _JOURNAL_TEMP_NAME,
+    }
+    if entries and not arguments.resume and not initial_crash_state:
         raise _QualificationConfigError(_RESUME_REQUIRED)
-    if arguments.resume and not any(
-        (data_dir / name).is_file() for name in (_RECEIPT_NAME, _JOURNAL_NAME)
+    if (
+        arguments.resume
+        and not any(
+            (data_dir / name).is_file() for name in (_RECEIPT_NAME, _JOURNAL_NAME)
+        )
+        and not initial_crash_state
     ):
         raise _QualificationConfigError(_RECEIPT_REQUIRED)
     return _Config(data_dir=data_dir, scope=scope, resume=arguments.resume)
@@ -606,10 +619,11 @@ class _ProbeJournal:
 
     @property
     def retained_evidence(self) -> tuple[RetainedEvidenceV1, ...]:
-        evidence = tuple(stage.evidence for stage in self._journal.stages)
-        if any(item is None for item in evidence):
-            _raise_invariant("journal-stage-incomplete")
-        return tuple(item for item in evidence if item is not None)
+        return _completed_stage_evidence(self._journal.stages)
+
+    @property
+    def consumed_evidence(self) -> tuple[RetainedEvidenceV1, ...]:
+        return _completed_stage_evidence(self._journal.stages[: self._index])
 
     def _replace_stages(
         self,
@@ -620,6 +634,15 @@ class _ProbeJournal:
             stages=stages,
         )
         _write_model(self._path, self._journal)
+
+
+def _completed_stage_evidence(
+    stages: Sequence[QualificationJournalStageV1],
+) -> tuple[RetainedEvidenceV1, ...]:
+    evidence = tuple(stage.evidence for stage in stages)
+    if any(item is None for item in evidence):
+        _raise_invariant("journal-stage-incomplete")
+    return cast("tuple[RetainedEvidenceV1, ...]", evidence)
 
 
 def _open_probe_journal(config: _Config) -> _ProbeJournal:
@@ -1321,14 +1344,14 @@ def main(
     except _QualificationConfigError as error:
         return _error(str(error), 2)
     try:
-        with ProcessLock(config.data_dir / "qualification.lock"):
+        with ProcessLock(config.data_dir / _LOCK_NAME):
             receipt_path = config.data_dir / _RECEIPT_NAME
             if config.resume and receipt_path.is_file():
                 receipt = _verify_receipt(config.data_dir, config.scope)
             else:
                 journal = _open_probe_journal(config)
                 probe = asyncio.run(_run_probe(config.scope, session_factory, journal))
-                evidence = journal.retained_evidence
+                evidence = journal.consumed_evidence
                 receipt = _receipt(config.scope, probe, evidence, now())
                 _write_receipt(receipt_path, receipt)
     except (

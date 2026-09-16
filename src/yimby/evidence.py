@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gzip
+import os
 from typing import TYPE_CHECKING
 
 from pydantic import HttpUrl
@@ -30,8 +31,16 @@ class EvidenceStore:
             return path
         directory.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_bytes(gzip.compress(capture.body, mtime=0))
+        with temporary.open("wb") as output:
+            output.write(gzip.compress(capture.body, mtime=0))
+            output.flush()
+            os.fsync(output.fileno())
         temporary.replace(path)
+        descriptor = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
         return path
 
     def relative_path(self, path: Path) -> str:

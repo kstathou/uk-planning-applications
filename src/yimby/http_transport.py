@@ -13,7 +13,7 @@ from hashlib import sha256
 from pathlib import PurePosixPath
 from time import monotonic
 from typing import TYPE_CHECKING
-from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from pydantic import HttpUrl
@@ -133,7 +133,7 @@ class HttpxPortalSession:
         """Fetch one HTML or JSON response without reading attachments."""
         raw_url = str(request.url)
         split = urlsplit(raw_url)
-        if _is_attachment_path(split.path):
+        if _is_attachment_url(raw_url):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
         body, media_type, final_url = await self._read_source(
@@ -217,8 +217,8 @@ class HttpxPortalSession:
                         if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
                             raise _status_error(safe_url, response.status_code)
                         final_url = urlsplit(str(response.url))
-                        if _is_attachment_path(
-                            final_url.path
+                        if _is_attachment_url(
+                            str(response.url)
                         ) or _response_is_forbidden(response):
                             self._attachment_body_requests += 1
                             raise _attachment_error(final_url.hostname or host)
@@ -257,7 +257,7 @@ class HttpxPortalSession:
         if target is None:
             return None
         target_parts = urlsplit(target)
-        if _is_attachment_path(target_parts.path):
+        if _is_attachment_url(target):
             self._attachment_body_requests += 1
             raise _attachment_error(target_parts.hostname)
         return target
@@ -357,6 +357,16 @@ def _is_attachment_path(path: str) -> bool:
     lowered = path.casefold()
     return PurePosixPath(path).suffix.lower() in _ATTACHMENT_SUFFIXES or any(
         fragment in lowered for fragment in _ATTACHMENT_PATH_FRAGMENTS
+    )
+
+
+def _is_attachment_url(url: str) -> bool:
+    split = urlsplit(url)
+    query = parse_qs(split.query)
+    return _is_attachment_path(split.path) or any(
+        name.casefold() == "fa"
+        and any(value.casefold() == "downloaddocument" for value in values)
+        for name, values in query.items()
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime
 from html import unescape
+from math import isfinite
 from typing import TYPE_CHECKING, NoReturn, cast
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
@@ -43,6 +44,8 @@ _SEARCH_URL = f"{BASE_URL}/index.html?fa=search"
 _SEARCH_POST_URL = f"{BASE_URL}/index.html"
 _WEEKLY_RECEIVED_URL = f"{BASE_URL}/index.html?fa=getReceivedWeeklyList"
 _DETAIL_URL = f"{BASE_URL}/index.html?fa=getApplication&id={{locator}}"
+_MAX_BNG_EASTING = 700_000
+_MAX_BNG_NORTHING = 1_300_000
 
 
 class CheshireEastCheckpointV1(FrozenModel):
@@ -259,7 +262,14 @@ def parse_search_form(body: bytes) -> Tag:
         _raise_parse("search form encoding")
     if form.get("name") != "form":
         _raise_parse("search form name")
-    if urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _SEARCH_POST_URL:
+    if (
+        _source_url(
+            f"{BASE_URL}/",
+            str(form.get("action", "")),
+            "search form action",
+        )
+        != _SEARCH_POST_URL
+    ):
         _raise_parse("search form action")
     controls = {
         name: _enabled_named_control(form, name)
@@ -427,7 +437,12 @@ def parse_weekly_form(body: bytes) -> Tag:
     if (
         str(form.get("method", "get")).casefold() != "post"
         or _effective_form_enctype(form) != "application/x-www-form-urlencoded"
-        or urljoin(f"{BASE_URL}/", str(form.get("action", ""))) != _WEEKLY_RECEIVED_URL
+        or _source_url(
+            f"{BASE_URL}/",
+            str(form.get("action", "")),
+            "weekly received form",
+        )
+        != _WEEKLY_RECEIVED_URL
     ):
         _raise_parse("weekly received form")
     week = _enabled_named_control(form, "week")
@@ -675,7 +690,7 @@ def _parse_weekly_rows(
 
 
 def _detail_locator(href: str) -> str:
-    split = urlsplit(urljoin(f"{BASE_URL}/", href))
+    split = urlsplit(_source_url(f"{BASE_URL}/", href, "weekly received detail link"))
     values = parse_qs(split.query)
     if (
         split.scheme != "https"
@@ -771,7 +786,15 @@ def _grid_reference(value: str) -> tuple[float, float]:
     match = re.fullmatch(pattern, value)
     if match is None:
         _raise_parse("grid reference")
-    return float(match.group(1)), float(match.group(2))
+    easting, northing = float(match.group(1)), float(match.group(2))
+    if (
+        not isfinite(easting)
+        or not isfinite(northing)
+        or not 0 <= easting <= _MAX_BNG_EASTING
+        or not 0 <= northing <= _MAX_BNG_NORTHING
+    ):
+        _raise_parse("grid reference")
+    return easting, northing
 
 
 def _parse_document_metadata(
@@ -846,7 +869,11 @@ def _parse_document_metadata(
         links = cells[-1].select("a[href]")
         if len(links) != 1 or _has_hidden_ancestor(links[0]):
             _raise_parse("document metadata link")
-        url = urljoin(f"{BASE_URL}/", str(links[0]["href"]))
+        url = _source_url(
+            f"{BASE_URL}/",
+            str(links[0]["href"]),
+            "document metadata link",
+        )
         _assert_document_url(url, expected_locator)
         documents.append(
             CheshireEastDocumentMetadataV1(
@@ -887,6 +914,13 @@ def _assert_document_url(url: str, expected_locator: str) -> None:
         or set(values) != {"fa", "id", "public_record_id"}
     ):
         _raise_parse("document metadata link")
+
+
+def _source_url(base: str, value: str, field: str) -> str:
+    try:
+        return urljoin(base, value)
+    except ValueError:
+        _raise_parse(field)
 
 
 def _parse_result_table(
