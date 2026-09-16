@@ -305,8 +305,9 @@ def _summary(
     *,
     reference: str = "26/05177/TR",
     blank_optional: bool = False,
+    validated_date: str = "16/09/2026",
 ) -> bytes:
-    optional = "" if blank_optional else "16/09/2026"
+    optional = "" if blank_optional else validated_date
     address = "" if blank_optional else "1 Park Row, Leeds"
     appeal_status = "" if blank_optional else "Appeal lodged"
     appeal_decision = "" if blank_optional else "Unknown"
@@ -349,12 +350,14 @@ class _LeedsDetailMock:
         *,
         reference: str = "26/05177/TR",
         blank_optional: bool = False,
+        validated_date: str = "16/09/2026",
         header_only: bool = False,
         malformed_documents: bool = False,
         failed_documents: bool = False,
     ) -> None:
         self.reference = reference
         self.blank_optional = blank_optional
+        self.validated_date = validated_date
         self.header_only = header_only
         self.malformed_documents = malformed_documents
         self.failed_documents = failed_documents
@@ -371,6 +374,7 @@ class _LeedsDetailMock:
                     content=_summary(
                         reference=self.reference,
                         blank_optional=self.blank_optional,
+                        validated_date=self.validated_date,
                     ),
                 )
             if tab == "documents":
@@ -446,6 +450,13 @@ def test_leeds_accepts_blank_optional_summary_and_header_only_documents() -> Non
     assert snapshot.payload.appeal_decision is None
     assert snapshot.payload.documents == ()
     assert isinstance(snapshot.completeness.documents, EmptySection)
+
+
+def test_leeds_accepts_observed_weekday_date_rendering() -> None:
+    """The official summary's weekday-prefixed date remains typed."""
+    snapshot = asyncio.run(_fetch(_LeedsDetailMock(validated_date="Wed 19 Aug 2026")))
+
+    assert snapshot.payload.validated_date == date(2026, 8, 19)
 
 
 @pytest.mark.parametrize("failure", ["malformed", "unavailable"])
