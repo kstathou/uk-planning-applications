@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: C901, E501, EM102, PERF401, PLR0911, PLR0912, PLR0913, PLR2004, PT012, SLF001, TRY003
+# ruff: noqa: C901, E501, EM102, PLR0911, PLR0912, PLR0913, PLR2004, SLF001, TRY003
 
 """Barnet authority-native IDOX live-boundary behaviour."""
 
@@ -25,8 +25,6 @@ from yimby.authorities.barnet.adapter import (
     BarnetCheckpointError,
     BarnetCheckpointV1,
     BarnetCountMismatchError,
-    BarnetOpenEnumerationUnsupportedError,
-    BarnetOpenListLimitError,
     BarnetParseError,
     BarnetReferenceMismatchError,
     BarnetRoutingError,
@@ -72,15 +70,38 @@ WEEKLY_FORM = b"""
 </form></body></html>
 """
 
-CURRENT_FORM = b"""
+OPEN_CASE_STATUSES = (
+    "Application Received",
+    "Valid Application Received",
+    "Pending Consideration",
+    "Pending Decision",
+)
+ACTIVE_APPEAL_STATUSES = (
+    "Appeal in progress",
+    "Appeal lodged",
+    "Appeal Valid",
+    "High Court Appeal Lodged",
+    "Remitted to Secretary of State",
+)
+ADVANCED_FORM = f"""
 <!doctype html><html><body>
-<form action="currentListResults.do?action=firstPage" method="post">
-  <input type="hidden" name="_csrf" value="sanitised-current-csrf">
-  <input type="hidden" name="searchCriteria.ward" value="">
-  <select name="dateType"><option value="DC_Validated" selected>Validated</option></select>
-  <input type="hidden" name="searchType" value="Current List">
+<form id="advancedSearchForm"
+      action="advancedSearchResults.do?action=firstPage" method="post">
+  <input type="hidden" name="_csrf" value="">
+  <select name="searchCriteria.caseStatus">
+    <option value="" selected>All</option>
+    {"".join(f'<option value="{value}">{value}</option>' for value in OPEN_CASE_STATUSES)}
+  </select>
+  <select name="searchCriteria.appealStatus">
+    <option value="" selected>All</option>
+    {"".join(f'<option value="{value}">{value}</option>' for value in ACTIVE_APPEAL_STATUSES)}
+  </select>
+  <input type="hidden" name="caseAddressType" value="">
+  <input type="hidden" name="searchType" value="">
+  <input type="hidden" name="tag" value="one">
+  <input type="hidden" name="tag" value="two">
 </form></body></html>
-"""
+""".encode()
 
 SUMMARY = b"""
 <!doctype html><html><body><table id="simpleDetailsTable">
@@ -165,6 +186,7 @@ class _BarnetMock:
         child_failure: bool = False,
         child_unavailable: bool = False,
         summary: bytes = SUMMARY,
+        advanced_multi_page: bool = False,
     ) -> None:
         self.multi_page = multi_page
         self.count_mismatch = count_mismatch
@@ -172,6 +194,8 @@ class _BarnetMock:
         self.child_failure = child_failure
         self.child_unavailable = child_unavailable
         self.summary = summary
+        self.advanced_multi_page = advanced_multi_page
+        self.active_advanced: tuple[str, str] | None = None
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
 
@@ -223,6 +247,17 @@ class _BarnetMock:
                 200,
                 content=_result_page((("TCP/0001/26", "KEY-1"),), count=1),
             )
+        if path.endswith("/pagedSearchResults.do") and self.active_advanced is not None:
+            _field, value = self.active_advanced
+            index = (*OPEN_CASE_STATUSES, *ACTIVE_APPEAL_STATUSES).index(value) + 1
+            return httpx.Response(
+                200,
+                content=_result_page(
+                    ((f"ADV/{index:04d}/26-B", f"ADV-{index}-B"),),
+                    count=2,
+                    pages=2,
+                ),
+            )
         if path.endswith("/pagedSearchResults.do"):
             return httpx.Response(
                 200,
@@ -232,17 +267,32 @@ class _BarnetMock:
                     pages=2,
                 ),
             )
-        if path.endswith("/search.do") and action == "currentList":
-            return httpx.Response(200, content=CURRENT_FORM)
-        if path.endswith("/currentListResults.do"):
+        if path.endswith("/search.do") and action == "advanced":
+            return httpx.Response(200, content=ADVANCED_FORM)
+        if path.endswith("/advancedSearchResults.do"):
             submitted = dict(fields)
-            assert submitted == {
-                "_csrf": "sanitised-current-csrf",
-                "searchCriteria.ward": "",
-                "dateType": "DC_Validated",
-                "searchType": "Current List",
-            }
-            return httpx.Response(200, content=self.open_message)
+            selected = tuple(
+                (field, submitted[field])
+                for field in (
+                    "searchCriteria.caseStatus",
+                    "searchCriteria.appealStatus",
+                )
+                if submitted[field]
+            )
+            assert len(selected) == 1
+            self.active_advanced = selected[0]
+            _field, value = selected[0]
+            index = (*OPEN_CASE_STATUSES, *ACTIVE_APPEAL_STATUSES).index(value) + 1
+            reference = "TCP/0001/26" if index == 1 else f"ADV/{index:04d}/26"
+            locator = "KEY-1" if index == 1 else f"ADV-{index}"
+            return httpx.Response(
+                200,
+                content=_result_page(
+                    ((reference, locator),),
+                    count=(2 if self.advanced_multi_page and index == 1 else 1),
+                    pages=(2 if self.advanced_multi_page and index == 1 else 1),
+                ),
+            )
         if path.endswith("/applicationDetails.do"):
             active_tab = request.url.params["activeTab"]
             assert request.url.params["keyVal"] == "KEY-1"
@@ -343,8 +393,8 @@ def test_live_discovery_pages_deduplicates_and_resumes() -> None:
     )
 
 
-def test_live_discovery_rejects_count_mismatch_and_open_cap() -> None:
-    """Displayed totals and the current-list cap cannot become completeness."""
+def test_live_discovery_rejects_count_mismatch() -> None:
+    """Displayed totals cannot become completeness when their rows disagree."""
     mismatch_session = _session(_BarnetMock(multi_page=True, count_mismatch=True))
 
     async def mismatch() -> None:
@@ -359,37 +409,107 @@ def test_live_discovery_rejects_count_mismatch_and_open_cap() -> None:
 
     asyncio.run(mismatch())
 
-    open_mock = _BarnetMock()
-    open_session = _session(open_mock)
 
-    async def open_cap() -> None:
-        with pytest.raises(BarnetOpenListLimitError, match="Too many results"):
-            async for _batch in BarnetAdapter().discover(
-                open_session,
+def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
+    """One complete run proves each Barnet-native active partition exactly once."""
+    mock = _BarnetMock()
+    session = _session(mock)
+
+    async def discover() -> list[DiscoveryBatch[BarnetCheckpointV1]]:
+        batches = [
+            batch
+            async for batch in BarnetAdapter().discover(
+                session,
                 WEEK_WITH_OPEN,
                 None,
-            ):
-                pass
-        await open_session.aclose()
+            )
+        ]
+        await session.aclose()
+        return batches
 
-    asyncio.run(open_cap())
-    assert any(
-        path.endswith("/currentListResults.do") for _, path, _ in open_mock.requests
+    batches = asyncio.run(discover())
+    checkpoint = batches[-1].next_checkpoint
+    scope = barnet_adapter.BarnetDiscoveryScope(
+        start=WEEK.start,
+        end=WEEK.end,
+        include_open=True,
     )
+    expected = barnet_adapter.expected_live_query_keys(scope)
+    assert checkpoint.completed_queries == expected
+    assert checkpoint.live_scope == scope
+    assert checkpoint.live_complete
+    assert len(expected) == 11
+    assert expected[-9:] == tuple(
+        f"advanced|{field}|{value}"
+        for field, values in (
+            ("searchCriteria.caseStatus", OPEN_CASE_STATUSES),
+            ("searchCriteria.appealStatus", ACTIVE_APPEAL_STATUSES),
+        )
+        for value in values
+    )
+    assert [
+        reference.reference for batch in batches for reference in batch.references
+    ] == ["TCP/0001/26", *(f"ADV/{index:04d}/26" for index in range(2, 10))]
+    advanced_posts = [
+        fields
+        for method, path, fields in mock.requests
+        if method == "POST" and path.endswith("/advancedSearchResults.do")
+    ]
+    assert len(advanced_posts) == 9
+    assert [
+        value for fields in advanced_posts for name, value in fields if name == "tag"
+    ] == ["one", "two"] * 9
 
-    unsupported_session = _session(_BarnetMock(open_message=b"unexpected success"))
 
-    async def unsupported() -> None:
-        with pytest.raises(BarnetOpenEnumerationUnsupportedError):
-            async for _batch in BarnetAdapter().discover(
-                unsupported_session,
+def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
+    """An advanced page checkpoint recreates source session state before page two."""
+    adapter = BarnetAdapter()
+    first_session = _session(_BarnetMock(advanced_multi_page=True))
+
+    async def stop_on_advanced_page() -> DiscoveryBatch[BarnetCheckpointV1]:
+        stream = cast(
+            "AsyncGenerator[DiscoveryBatch[BarnetCheckpointV1]]",
+            adapter.discover(first_session, WEEK_WITH_OPEN, None),
+        )
+        await anext(stream)
+        await anext(stream)
+        batch = await anext(stream)
+        await stream.aclose()
+        await first_session.aclose()
+        return batch
+
+    first = asyncio.run(stop_on_advanced_page())
+    assert first.next_checkpoint.active_query == (
+        "advanced|searchCriteria.caseStatus|Application Received"
+    )
+    assert first.next_checkpoint.next_page == 2
+
+    resumed_mock = _BarnetMock(advanced_multi_page=True)
+    resumed_session = _session(resumed_mock)
+
+    async def resume() -> list[DiscoveryBatch[BarnetCheckpointV1]]:
+        batches = [
+            batch
+            async for batch in adapter.discover(
+                resumed_session,
                 WEEK_WITH_OPEN,
-                None,
-            ):
-                pass
-        await unsupported_session.aclose()
+                first.next_checkpoint,
+            )
+        ]
+        await resumed_session.aclose()
+        return batches
 
-    asyncio.run(unsupported())
+    resumed = asyncio.run(resume())
+    assert resumed[0].references[0].reference == "ADV/0001/26-B"
+    requests = [
+        path
+        for method, path, _fields in resumed_mock.requests
+        if method in {"GET", "POST"}
+    ]
+    advanced_post = requests.index("/online-applications/advancedSearchResults.do")
+    advanced_page = requests.index("/online-applications/pagedSearchResults.do")
+    assert advanced_post < advanced_page
+    assert resumed[-1].complete
 
 
 def test_live_collection_persists_locator_metadata_and_child_failures(
@@ -517,17 +637,28 @@ def test_live_fetch_requires_locator_and_form_transport_preserves_pairs() -> Non
 
 
 def test_live_discovery_checkpoint_edges_are_explicit() -> None:
-    """Terminal, stale, and empty-window checkpoints never imply hidden work."""
+    """Only an exact-scope terminal checkpoint can suppress live requests."""
     adapter = BarnetAdapter()
 
     async def exercise() -> None:
+        scope = barnet_adapter.BarnetDiscoveryScope(
+            start=WEEK.start,
+            end=WEEK.end,
+            include_open=False,
+        )
         terminal_session = _session(_BarnetMock())
         terminal = [
             batch
             async for batch in adapter.discover(
                 terminal_session,
                 WEEK,
-                BarnetCheckpointV1(cursor="live", live_complete=True),
+                BarnetCheckpointV1(
+                    cursor="live",
+                    live_scope=scope,
+                    completed_queries=barnet_adapter.expected_live_query_keys(scope),
+                    seen_references=("TCP/0001/26",),
+                    live_complete=True,
+                ),
             )
         ]
         assert len(terminal) == 1
@@ -542,38 +673,38 @@ def test_live_discovery_checkpoint_edges_are_explicit() -> None:
                 WEEK,
                 BarnetCheckpointV1(
                     cursor="live",
-                    active_query="01/01/2000|DC_Validated",
+                    live_scope=scope,
+                    active_query="weekly|2000-01-03|DC_Validated",
                 ),
             ):
                 pass
         await stale_session.aclose()
 
-        outside = DiscoveryWindow(
-            start=date(2027, 1, 4),
-            end=date(2027, 1, 10),
+        wrong_scope = barnet_adapter.BarnetDiscoveryScope(
+            start=date(2026, 9, 7),
+            end=date(2026, 9, 13),
             include_open=False,
         )
-        empty_session = _session(_BarnetMock())
-        empty = [
-            batch async for batch in adapter.discover(empty_session, outside, None)
-        ]
-        assert len(empty) == 1
-        assert empty[0].complete
-        assert empty[0].references == ()
-        await empty_session.aclose()
-
-        open_session = _session(_BarnetMock())
-        yielded = []
-        with pytest.raises(BarnetOpenListLimitError):
+        restarted_session = _session(_BarnetMock())
+        restarted = [
+            batch
             async for batch in adapter.discover(
-                open_session,
-                outside.model_copy(update={"include_open": True}),
-                None,
-            ):
-                yielded.append(batch)
-        assert len(yielded) == 1
-        assert not yielded[0].complete
-        await open_session.aclose()
+                restarted_session,
+                WEEK,
+                BarnetCheckpointV1(
+                    cursor="live",
+                    live_scope=wrong_scope,
+                    completed_queries=barnet_adapter.expected_live_query_keys(
+                        wrong_scope
+                    ),
+                    live_complete=True,
+                ),
+            )
+        ]
+        assert restarted[-1].complete
+        assert restarted[-1].next_checkpoint.live_scope == scope
+        assert restarted_session.requested_urls
+        await restarted_session.aclose()
 
     asyncio.run(exercise())
 
@@ -618,6 +749,13 @@ def test_barnet_form_and_search_boundary_variants() -> None:
         barnet_adapter._parse_form(b"<html></html>")
     with pytest.raises(BarnetParseError, match="_csrf"):
         barnet_adapter._parse_form(b'<form><input name="week"></form>')
+    with pytest.raises(BarnetParseError, match="advanced form status options"):
+        barnet_adapter._parse_advanced_form(
+            ADVANCED_FORM.replace(
+                b'<option value="Appeal Valid">Appeal Valid</option>',
+                b"",
+            )
+        )
 
     soup = BeautifulSoup(
         '<form><input name="skip" type="submit"><select name="empty"></select>'
