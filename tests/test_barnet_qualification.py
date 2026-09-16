@@ -99,8 +99,14 @@ def _result(reference: str, locator: str) -> bytes:
 
 
 class _BarnetQualificationMock:
-    def __init__(self, *, failed_documents: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        failed_documents: bool = False,
+        rate_limited_summary: bool = False,
+    ) -> None:
         self.failed_documents = failed_documents
+        self.rate_limited_summary = rate_limited_summary
         self.references: dict[str, str] = {}
         self.attachment_paths: list[str] = []
 
@@ -137,6 +143,8 @@ class _BarnetQualificationMock:
             reference = self.references[locator]
             active_tab = request.url.params["activeTab"]
             if active_tab == "summary":
+                if self.rate_limited_summary:
+                    return httpx.Response(429)
                 return httpx.Response(
                     200,
                     content=(
@@ -435,6 +443,41 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert refresh_sessions[1].requested_urls == ()
     assert refreshed["created_at"] == "2026-09-16T12:00:00Z"
     assert refreshed["weekly_refreshes"] == receipt["weekly_refreshes"]
+
+    store = SqliteStore(
+        data_dir / "yimby.sqlite3",
+        EvidenceStore(data_dir / "evidence"),
+    )
+    store.enqueue_retry(AuthorityId("barnet"), refresh_reference, "scheduled-refresh")
+    store.close()
+    refresh_mock.rate_limited_summary = True
+    refresh_sessions.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=refresh_session_factory,
+            now=lambda: now + timedelta(days=8),
+        )
+        == 1
+    )
+    failure = json.loads(capsys.readouterr().err)
+    assert failure["error"] == "source-unavailable"
+    assert "HTTP 429" in failure["detail"]
+    assert not receipt_path.exists()
+
+    refresh_mock.rate_limited_summary = False
+    refresh_sessions.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=refresh_session_factory,
+            now=lambda: now + timedelta(days=9),
+        )
+        == 0
+    )
+    recovered = json.loads(capsys.readouterr().out)
+    assert recovered["created_at"] == "2026-09-16T12:00:00Z"
+    assert recovered["weekly_refreshes"] == receipt["weekly_refreshes"]
 
     invalid_receipts = (
         None,
