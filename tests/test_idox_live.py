@@ -163,18 +163,53 @@ def _weekly_form(search_type: str = "Application") -> bytes:
     """.encode()
 
 
-def _advanced_form(*, malformed: bool = False) -> bytes:
+def _advanced_form(
+    *,
+    malformed: bool = False,
+    missing_option: bool = False,
+    missing_form: bool = False,
+    wrong_action: bool = False,
+    wrong_method: bool = False,
+    missing_hidden: bool = False,
+) -> bytes:
+    if missing_form:
+        return b"<p>Advanced search unavailable</p>"
+    high_court_option = (
+        ""
+        if missing_option
+        else '<option value="High Court Appeal Lodged">High Court</option>'
+    )
     status_fields = (
         ""
         if malformed
-        else """
-      <select name="searchCriteria.caseStatus"><option value="" selected>All</option></select>
-      <select name="searchCriteria.appealStatus"><option value="" selected>All</option></select>
+        else f"""
+      <select name="searchCriteria.caseStatus">
+        <option value="" selected>All</option>
+        <option value="Pending Consideration">Pending Consideration</option>
+        <option value="Pending Decision">Pending Decision</option>
+        <option value="Received Awaiting Registration">Awaiting Registration</option>
+        <option value="Pending Appeal Decision">Pending Appeal Decision</option>
+      </select>
+      <select name="searchCriteria.appealStatus">
+        <option value="" selected>All</option>
+        <option value="Appeal lodged">Appeal lodged</option>
+        <option value="Appeal Remitted to Secretary of State">Remitted</option>
+        {high_court_option}
+        <option value="Pending Appeal Decision">Pending Appeal Decision</option>
+      </select>
         """
     )
+    action = (
+        "/online-applications/unknown.do"
+        if wrong_action
+        else "/online-applications/advancedSearchResults.do?action=firstPage"
+    )
+    method = "get" if wrong_method else "post"
+    hidden_fields = (
+        "" if missing_hidden else '<input type="hidden" name="searchType" value="">'
+    )
     return f"""
-    <form id="advancedSearchForm" method="post"
-          action="/online-applications/advancedSearchResults.do?action=firstPage">
+    <form id="advancedSearchForm" method="{method}" action="{action}">
       <input type="hidden" name="_csrf" value="">
       <input name="searchCriteria.reference" value="">
       {status_fields}
@@ -189,7 +224,7 @@ def _advanced_form(*, malformed: bool = False) -> bytes:
       <input name="date(applicationDecisionEnd)" value="">
       <input name="date(appealDecisionStart)" value="">
       <input name="date(appealDecisionEnd)" value="">
-      <input type="hidden" name="searchType" value="">
+      {hidden_fields}
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="submit" value="Search">
@@ -347,14 +382,31 @@ def _summary(reference: str, authority_id: AuthorityId) -> bytes:
     ).encode()
 
 
-def _advanced_detail_redirect(*, ambiguous: bool = False) -> bytes:
+def _advanced_detail_redirect(*, fault: str | None = None) -> bytes:
     reference, locator = _WEST_SUFFOLK_OPEN_REFERENCES[3]
-    other_locator = "WEST-OPEN-OTHER" if ambiguous else locator
+    other_locator = "WEST-OPEN-OTHER" if fault == "ambiguous-detail" else locator
+    first_link = (
+        "applicationDetails.do?activeTab=summary"
+        if fault == "invalid-detail-link"
+        else f"applicationDetails.do?keyVal={locator}&amp;activeTab=summary"
+    )
+    extra_table = (
+        '<table id="simpleDetailsTable"><tr><th>Reference</th>'
+        "<td>OTHER</td></tr></table>"
+        if fault == "multiple-detail-tables"
+        else ""
+    )
+    mixed_result = (
+        '<li class="searchresult">Unexpected result row</li>'
+        if fault == "mixed-detail"
+        else ""
+    )
+    no_results = "<p>No results found.</p>" if fault == "empty-detail" else ""
     return (
         '<table id="simpleDetailsTable">'
         f"<tr><th>Reference</th><td>{reference}</td></tr></table>"
-        f'<a href="applicationDetails.do?keyVal={locator}&amp;activeTab=summary">'
-        "Summary</a>"
+        f"{extra_table}{mixed_result}{no_results}"
+        f'<a href="{first_link}">Summary</a>'
         f'<a href="applicationDetails.do?keyVal={other_locator}&amp;activeTab=documents">'
         "Documents</a>"
     ).encode()
@@ -379,6 +431,8 @@ def _west_suffolk_open_page(
                     ("Showing 1-2 of 3", "Showing 1-2 of 3"),
                     current_page="",
                 )
+            if fault == "detail-on-page-two":
+                return _advanced_detail_redirect()
             rows = () if fault == "stalled-pagination" else (open_rows[1],)
             if not rows:
                 return _result_page(rows, count=3)
@@ -396,7 +450,7 @@ def _west_suffolk_open_page(
         if value == "Received Awaiting Registration":
             return b"<p>No results found.</p>"
         if value == "Pending Appeal Decision":
-            return _advanced_detail_redirect(ambiguous=fault == "ambiguous-detail")
+            return _advanced_detail_redirect(fault=fault)
     if field == "searchCriteria.appealStatus":
         if value == "Appeal lodged":
             return _uncounted_result_page(
@@ -536,7 +590,12 @@ class _IdoxMock:
             return httpx.Response(
                 200,
                 content=_advanced_form(
-                    malformed=self.west_suffolk_open_fault == "malformed-form"
+                    malformed=self.west_suffolk_open_fault == "malformed-form",
+                    missing_option=self.west_suffolk_open_fault == "missing-option",
+                    missing_form=self.west_suffolk_open_fault == "missing-form",
+                    wrong_action=self.west_suffolk_open_fault == "wrong-action",
+                    wrong_method=self.west_suffolk_open_fault == "wrong-method",
+                    missing_hidden=self.west_suffolk_open_fault == "missing-hidden",
                 ),
             )
         if path.endswith("/weeklyListResults.do"):
@@ -1130,9 +1189,8 @@ def test_west_suffolk_open_discovery_resumes_without_duplicate_references() -> N
     assert resumed[-1].complete
     advanced_requests = [
         (method, path)
-        for method, path, fields in resumed_mock.requests
+        for method, path, _fields in resumed_mock.requests
         if path.endswith(("/advancedSearchResults.do", "/pagedSearchResults.do"))
-        and (fields or resumed_mock.current_open_query is not None)
     ]
     assert advanced_requests[:2] == [
         ("POST", "/online-applications/advancedSearchResults.do"),
@@ -1164,11 +1222,68 @@ def test_west_suffolk_open_discovery_resumes_without_duplicate_references() -> N
     assert terminal_session.requested_urls == ()
 
 
+def test_west_suffolk_open_discovery_recovers_completed_progress() -> None:
+    """Completed partitions converge when a prior crash missed the terminal flag."""
+    package = pilot_registry().get(AuthorityId("west-suffolk"))
+    window = WEEK.model_copy(update={"include_open": True})
+    checkpoint = west_suffolk_adapter.WestSuffolkCheckpointV1(
+        result_page="live",
+        live_scope=west_suffolk_adapter.WestSuffolkDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=True,
+        ),
+        completed_queries=(
+            "14/09/2026|DC_Validated",
+            "14/09/2026|DC_Decided",
+            "advanced|searchCriteria.caseStatus|Pending Consideration",
+            "advanced|searchCriteria.caseStatus|Pending Decision",
+            "advanced|searchCriteria.caseStatus|Received Awaiting Registration",
+            "advanced|searchCriteria.caseStatus|Pending Appeal Decision",
+            "advanced|searchCriteria.appealStatus|Appeal lodged",
+            "advanced|searchCriteria.appealStatus|Appeal Remitted to Secretary of State",
+            "advanced|searchCriteria.appealStatus|High Court Appeal Lodged",
+            "advanced|searchCriteria.appealStatus|Pending Appeal Decision",
+        ),
+    )
+    session = _session(_IdoxMock(_WEST_SUFFOLK_CASE))
+
+    async def discover_all() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(
+                session,
+                window,
+                StoredCheckpoint(
+                    schema_version=1,
+                    payload_json=checkpoint.model_dump_json(),
+                ),
+            )
+        ]
+        await session.aclose()
+        return batches
+
+    batches = asyncio.run(discover_all())
+    assert len(batches) == 1
+    assert batches[0].references == ()
+    assert batches[0].complete
+
+
 @pytest.mark.parametrize(
     ("fault", "message"),
     [
         ("malformed-form", "advanced form"),
+        ("missing-form", "advanced form"),
+        ("wrong-action", "advanced form"),
+        ("wrong-method", "advanced form"),
+        ("missing-hidden", "advanced form"),
+        ("missing-option", "advanced form status options"),
         ("ambiguous-detail", "advanced detail"),
+        ("multiple-detail-tables", "advanced detail"),
+        ("mixed-detail", "advanced detail"),
+        ("empty-detail", "advanced detail"),
+        ("invalid-detail-link", "advanced detail keyVal"),
+        ("detail-on-page-two", "advanced detail"),
         ("count-mismatch", "expected 1 actual 2"),
         ("stalled-pagination", "expected 3 actual 2"),
     ],
@@ -1534,13 +1649,25 @@ def test_authority_checkpoint_and_empty_window_boundaries(case: _Case) -> None:
             ),
             live_complete=True,
         )
-        with pytest.raises(RuntimeError, match="older-open"):
-            async for _batch in adapter.discover(
-                terminal_open_session,
-                open_window,
-                terminal_open_checkpoint,
-            ):
-                pass
+        if case.authority_id == AuthorityId("west-suffolk"):
+            terminal_open = [
+                batch
+                async for batch in adapter.discover(
+                    terminal_open_session,
+                    open_window,
+                    terminal_open_checkpoint,
+                )
+            ]
+            assert terminal_open[0].complete
+            assert terminal_open_session.requested_urls == ()
+        else:
+            with pytest.raises(RuntimeError, match="older-open"):
+                async for _batch in adapter.discover(
+                    terminal_open_session,
+                    open_window,
+                    terminal_open_checkpoint,
+                ):
+                    pass
         await terminal_open_session.aclose()
 
         stale_session = _session(_IdoxMock(case))
