@@ -120,9 +120,10 @@ crash, or receipt-write failure during refresh cannot erase it. A missing or
 malformed receipt is regenerated from that lineage. A target with a lineage row
 whose scope or timestamp is invalid fails with `receipt-anchor-required`
 before the receipt is removed or any source request is made. It never falls
-back from a present invalid lineage to the receipt. A terminal first-bootstrap
-checkpoint with no lineage may still finish qualification and establish its
-initial anchor.
+back from a present invalid lineage to the receipt, and timestamps are decoded
+as strict ISO datetimes rather than permissive numeric Unix values. A terminal
+first-bootstrap checkpoint with no lineage may still finish qualification and
+establish its initial anchor.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 

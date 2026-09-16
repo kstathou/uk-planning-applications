@@ -83,9 +83,9 @@ def _qualification_lineage_from_row(
             qualification=qualification,
             phase=row["phase"],
             scope_json=row["scope_json"],
-            created_at=row["created_at"],
+            created_at=datetime.fromisoformat(row["created_at"]),
         )
-    except ValueError as error:
+    except (TypeError, ValueError) as error:
         raise QualificationLineageCorruptError from error
 
 
