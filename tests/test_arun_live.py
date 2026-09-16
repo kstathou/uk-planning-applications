@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: D103, PLR2004, SLF001
+# ruff: noqa: C901, D103, PLR2004, SLF001
 
 """Arun live discovery and qualification contracts."""
 
@@ -463,10 +463,14 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
                 for name, value in values.items()
                 if name != "action"
             )
-            return _partial_results(fields).replace(
-                b"there are 2 in total",
-                b"there are 3 in total",
-            ).replace(b"BR/1/26/PL", b"NEW/1")
+            return (
+                _partial_results(fields)
+                .replace(
+                    b"there are 2 in total",
+                    b"there are 3 in total",
+                )
+                .replace(b"BR/1/26/PL", b"NEW/1")
+            )
         return b"No applications found for entered search criteria"
 
     resumed = asyncio.run(
@@ -480,6 +484,58 @@ def test_arun_active_query_resume_adopts_a_new_exact_first_page() -> None:
     assert isinstance(terminal, arun.ArunLiveCursor)
     assert isinstance(terminal.progress, arun.ArunComplete)
     assert terminal.progress.completed[0].reported_count == 3
+
+    def changed_to_exact(request: PortalRequest) -> bytes:
+        if request.method == RequestMethod.GET:
+            return _search_form()
+        values = {field.name: field.value for field in request.form}
+        if values.get("receivedFrom") == "18-08-26":
+            return _complete_results(("NEW/1",))
+        return b"No applications found for entered search criteria"
+
+    exact = asyncio.run(
+        _batches(adapter, _Session(changed_to_exact), window, first.next_checkpoint)
+    )
+    assert [
+        reference.reference for batch in exact for reference in batch.references
+    ] == ["NEW/1"]
+    assert exact[-1].complete
+
+    def changed_exact_with_show_all(request: PortalRequest) -> bytes:
+        if request.method == RequestMethod.GET:
+            return _search_form()
+        values = {field.name: field.value for field in request.form}
+        fields = "".join(
+            f'<input type="hidden" name="{name}" value="{value}">'
+            for name, value in values.items()
+            if name != "action"
+        )
+        return _partial_results(fields).replace(b"there are 2", b"there are 1")
+
+    with pytest.raises(arun.ArunQueryReplayError):
+        asyncio.run(
+            _batches(
+                adapter,
+                _Session(changed_exact_with_show_all),
+                window,
+                first.next_checkpoint,
+            )
+        )
+
+    def changed_without_show_all(request: PortalRequest) -> bytes:
+        if request.method == RequestMethod.GET:
+            return _search_form()
+        return b'<p data-result-count="3">3 records</p>' + _complete_results(("NEW/1",))
+
+    with pytest.raises(arun.ArunCountMismatchError):
+        asyncio.run(
+            _batches(
+                adapter,
+                _Session(changed_without_show_all),
+                window,
+                first.next_checkpoint,
+            )
+        )
 
 
 def test_arun_live_checkpoint_rejects_a_different_scope() -> None:
@@ -689,20 +745,6 @@ def test_arun_active_query_replay_and_ambiguous_exact_results_fail_closed() -> N
     )
     scope = arun.ArunDiscoveryScope.model_validate(window.model_dump())
     plan = arun._canonical_query_plan(scope)
-    replay = arun.ArunCheckpointV1(
-        cursor=arun.ArunLiveCursor(
-            scope=scope,
-            plan=plan,
-            progress=arun.ArunAwaitingShowAll(
-                next_query=0,
-                reported_count=2,
-                initial_references=("DIFFERENT",),
-                seen_references=("DIFFERENT",),
-            ),
-        )
-    )
-    with pytest.raises(arun.ArunQueryReplayError):
-        asyncio.run(_batches(adapter, _Session(_DiscoveryResponder()), window, replay))
 
     def ambiguous(request: PortalRequest) -> bytes:
         if request.method == RequestMethod.GET:

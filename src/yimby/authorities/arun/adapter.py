@@ -363,7 +363,7 @@ class ArunAdapter:
             complete=next_row == "complete",
         )
 
-    async def _discover_live(  # noqa: C901, PLR0912
+    async def _discover_live(  # noqa: C901, PLR0912, PLR0915
         self,
         session: PortalSession,
         window: DiscoveryWindow,
@@ -405,12 +405,55 @@ class ArunAdapter:
             if len(initial.references) > initial.reported:
                 raise ArunCountMismatchError(initial.reported, len(initial.references))
             if isinstance(progress, ArunAwaitingShowAll):
-                if (
+                replay_changed = (
                     initial.reported != progress.reported_count
                     or tuple(reference.reference for reference in initial.references)
                     != progress.initial_references
-                ):
-                    raise ArunQueryReplayError
+                )
+                if replay_changed:
+                    fresh, seen = _fresh(
+                        initial.references,
+                        progress.seen_references,
+                    )
+                    if len(initial.references) == initial.reported:
+                        if initial.has_show_all:
+                            raise ArunQueryReplayError
+                        cursor = _complete_query(
+                            cursor,
+                            query,
+                            initial.reported,
+                            seen,
+                        )
+                        yield DiscoveryBatch(
+                            references=fresh,
+                            next_checkpoint=ArunCheckpointV1(cursor=cursor),
+                            complete=isinstance(cursor.progress, ArunComplete),
+                        )
+                        continue
+                    if not initial.has_show_all:
+                        raise ArunCountMismatchError(
+                            initial.reported,
+                            len(initial.references),
+                        )
+                    progress = ArunAwaitingShowAll(
+                        next_query=progress.next_query,
+                        completed=progress.completed,
+                        reported_count=initial.reported,
+                        initial_references=tuple(
+                            reference.reference for reference in initial.references
+                        ),
+                        seen_references=seen,
+                    )
+                    cursor = ArunLiveCursor(
+                        scope=cursor.scope,
+                        plan=cursor.plan,
+                        progress=progress,
+                    )
+                    yield DiscoveryBatch(
+                        references=fresh,
+                        next_checkpoint=ArunCheckpointV1(cursor=cursor),
+                        complete=False,
+                    )
             else:
                 fresh, seen = _fresh(
                     initial.references,
