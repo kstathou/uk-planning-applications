@@ -514,9 +514,15 @@ def _result_page(reference: str, locator: str) -> bytes:
 
 
 class _LeedsQualificationMock(_LeedsSearchMock):
-    def __init__(self, *, failed_documents: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        failed_documents: bool = False,
+        summary_shell: bool = False,
+    ) -> None:
         super().__init__()
         self.failed_documents = failed_documents
+        self.summary_shell = summary_shell
         self.emitted_reference = False
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -524,6 +530,14 @@ class _LeedsQualificationMock(_LeedsSearchMock):
             self.requests.append((request.method, request.url.path, ()))
             tab = request.url.params["activeTab"]
             if tab == "summary":
+                if self.summary_shell:
+                    return httpx.Response(
+                        200,
+                        content=(
+                            b"<p>Unable to perform this task. "
+                            b"A remote exception occurred.</p>"
+                        ),
+                    )
                 return httpx.Response(200, content=_summary())
             if tab == "documents":
                 return httpx.Response(
@@ -642,3 +656,27 @@ def test_leeds_qualification_rejects_failed_current_sections(tmp_path: Path) -> 
         module.main(_qualification_args(data_dir), session_factory=session_factory) == 1
     )
     assert not (data_dir / "leeds-qualification-v1.json").exists()
+
+
+def test_leeds_qualification_recovers_a_bounded_transient_detail(
+    tmp_path: Path,
+) -> None:
+    """A fresh session resumes one durable transient failure before receipt proof."""
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    sessions = 0
+
+    def session_factory() -> HttpxPortalSession:
+        nonlocal sessions
+        sessions += 1
+        return _session(_LeedsQualificationMock(summary_shell=sessions == 1))
+
+    assert (
+        module.main(_qualification_args(data_dir), session_factory=session_factory) == 0
+    )
+    receipt = module.LeedsQualificationReceiptV1.model_validate_json(
+        (data_dir / "leeds-qualification-v1.json").read_text(encoding="utf-8")
+    )
+    assert receipt.run_statuses[-2:] == ("succeeded", "succeeded")
+    assert "failed" in receipt.run_statuses
+    assert all(check.ok for check in receipt.checks)
