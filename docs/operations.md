@@ -143,12 +143,14 @@ The command derives the inclusive 30-day start date, refuses a non-empty target
 without `--resume`, and rejects a changed scope in an existing qualification
 store before opening a network session. It writes
 `opdc-qualification-proof-v1.json` before it publishes
-`opdc-qualification-v1.json`. The private proof records the original bootstrap
-cost and the complete identity inventory. A terminal `--resume` validates that
-proof against the current store and performs no source requests. If public
-receipt publication fails, the next resume republishes the validated proof. A
-terminal store without a valid private or legacy public proof fails with
-`bootstrap-provenance` instead of recording a zero-cost bootstrap.
+`opdc-qualification-v1.json`. The private proof records the cumulative
+bootstrap request and byte cost plus the complete identity inventory. A
+terminal `--resume` validates that cost against the authority's durable run
+rows and checks the proof against the current store. It performs no source
+requests. If public receipt publication fails, the next resume republishes the
+validated proof. A terminal store without a valid private or legacy public
+proof fails with `bootstrap-provenance` instead of recording a zero-cost
+bootstrap.
 
 The command creates the proof only after the exact query inventory, reference
 agreement, complete application evidence, SQLite integrity, zero retry and
