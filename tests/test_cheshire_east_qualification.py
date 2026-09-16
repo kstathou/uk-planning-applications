@@ -261,10 +261,15 @@ class _NonHtmlQualificationSession(_QualificationSession):
 
 @pytest.mark.parametrize(
     "media_type",
-    ["application/x-pdf", "Application/X-PDF; charset=binary", "application/x-bin"],
+    [
+        None,
+        "application/x-pdf",
+        "Application/X-PDF; charset=binary",
+        "application/x-bin",
+    ],
 )
 def test_cheshire_http_transport_rejects_unknown_media_before_body_read(
-    media_type: str,
+    media_type: str | None,
 ) -> None:
     body_reads = 0
 
@@ -274,15 +279,21 @@ def test_cheshire_http_transport_rejects_unknown_media_before_body_read(
             body_reads += 1
             yield b"must not be read"
 
-    def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            headers={"content-type": media_type},
-            stream=ForbiddenStream(),
-        )
+    class ForbiddenTransport(httpx.AsyncBaseTransport):
+        async def handle_async_request(
+            self,
+            request: httpx.Request,
+        ) -> httpx.Response:
+            headers = {} if media_type is None else {"content-type": media_type}
+            return httpx.Response(
+                200,
+                headers=headers,
+                stream=ForbiddenStream(),
+                request=request,
+            )
 
     session = HttpxPortalSession(
-        client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        client=httpx.AsyncClient(transport=ForbiddenTransport()),
         limiter=HostRateLimiter(0),
     )
 
