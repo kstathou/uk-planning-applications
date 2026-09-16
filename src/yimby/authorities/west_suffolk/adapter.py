@@ -486,7 +486,6 @@ def _weekly_request(form: Tag, week: str, date_type: str, page: int) -> PortalRe
                     "searchCriteria.ward": "",
                     "week": week,
                     "dateType": date_type,
-                    "searchType": "Weekly List",
                 },
             ),
         )

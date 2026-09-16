@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
 
-    from yimby.domain import EvidenceCapture, TransportMode
+    from yimby.domain import EvidenceCapture
     from yimby.transport import PortalRequest
 
 WEEK = DiscoveryWindow(
@@ -113,8 +113,8 @@ def _member(case: _Case, suffix: str) -> Any:
     return getattr(case.module, f"{_PREFIXES[case.authority_id]}{suffix}")
 
 
-def _weekly_form() -> bytes:
-    return b"""
+def _weekly_form(search_type: str = "Application") -> bytes:
+    return f"""
     <form action="weeklyListResults.do?action=firstPage" method="post">
       <input type="hidden" name="_csrf" value="sanitised-token">
       <select name="searchCriteria.parish"><option value="" selected>All</option></select>
@@ -126,12 +126,12 @@ def _weekly_form() -> bytes:
         <option value="21/09/2026">Following Monday</option>
       </select>
       <input type="hidden" name="dateType" value="DC_Validated">
-      <input type="hidden" name="searchType" value="Application">
+      <input type="hidden" name="searchType" value="{search_type}">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="submit" value="Search">
     </form>
-    """
+    """.encode()
 
 
 def _result_page(
@@ -203,6 +203,7 @@ class _IdoxMock:
         comments_nonzero: bool = False,
         summary_mismatch: bool = False,
         leeds_unexpected_detail: bool = False,
+        search_type: str = "Application",
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -214,6 +215,7 @@ class _IdoxMock:
         self.comments_nonzero = comments_nonzero
         self.summary_mismatch = summary_mismatch
         self.leeds_unexpected_detail = leeds_unexpected_detail
+        self.search_type = search_type
         self.current_date_type = ""
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
@@ -227,7 +229,7 @@ class _IdoxMock:
             return httpx.Response(
                 200,
                 headers={"set-cookie": "JSESSIONID=sanitised; Path=/"},
-                content=_weekly_form(),
+                content=_weekly_form(self.search_type),
             )
         if path.endswith("/weeklyListResults.do"):
             assert request.headers.get("cookie") == "JSESSIONID=sanitised"
@@ -350,37 +352,18 @@ def _session(mock: _IdoxMock) -> HttpxPortalSession:
     )
 
 
-class _PortalRequestSpy:
-    def __init__(self, inner: HttpxPortalSession) -> None:
-        self.inner = inner
+class _PortalRequestSpy(HttpxPortalSession):
+    def __init__(self, mock: _IdoxMock) -> None:
+        super().__init__(
+            client=httpx.AsyncClient(transport=httpx.MockTransport(mock)),
+            limiter=HostRateLimiter(0),
+            max_attempts=1,
+        )
         self.requests: list[PortalRequest] = []
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
-        return await self.inner.fetch(request)
-
-    @property
-    def requested_urls(self) -> tuple[str, ...]:
-        return self.inner.requested_urls
-
-    @property
-    def attachment_body_requests(self) -> int:
-        return self.inner.attachment_body_requests
-
-    @property
-    def transferred_bytes(self) -> int:
-        return self.inner.transferred_bytes
-
-    @property
-    def browser_time_ms(self) -> int:
-        return self.inner.browser_time_ms
-
-    @property
-    def mode(self) -> TransportMode:
-        return self.inner.mode
-
-    async def aclose(self) -> None:
-        await self.inner.aclose()
+        return await super().fetch(request)
 
 
 def _store(root: Path) -> SqliteStore:
@@ -388,12 +371,14 @@ def _store(root: Path) -> SqliteStore:
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize("search_type", ["Application", "PortalOwnedSentinel"])
 def test_weekly_request_preserves_authoritative_hidden_form_fields(
     case: _Case,
+    search_type: str,
 ) -> None:
-    """Weekly search changes its query fields but preserves portal-owned state."""
-    mock = _IdoxMock(case)
-    session = _PortalRequestSpy(_session(mock))
+    """Treat form-owned search discriminators as opaque portal state."""
+    mock = _IdoxMock(case, search_type=search_type)
+    session = _PortalRequestSpy(mock)
     package = pilot_registry().get(case.authority_id)
 
     async def discover_first_page() -> None:
@@ -414,7 +399,7 @@ def test_weekly_request_preserves_authoritative_hidden_form_fields(
         ("searchCriteria.ward", ""),
         ("week", "14/09/2026"),
         ("dateType", "DC_Validated"),
-        ("searchType", "Application"),
+        ("searchType", search_type),
         ("tag", "one"),
         ("tag", "two"),
     )
