@@ -1441,6 +1441,23 @@ def test_west_suffolk_count_rejects_invalid_visible_page_markers(
         getattr(west_suffolk_adapter, "_parse_search_page")(body)
 
 
+def test_west_suffolk_count_rejects_visible_page_outside_displayed_range() -> None:
+    """A false visible page number cannot conceal a forward result link."""
+    page = _result_page_with_showing_markers(
+        (("DC/26/0001/FUL", "KEY1"),),
+        ("Showing 1-1 of 1", "Showing 1-1 of 1"),
+        current_page="1",
+        numbered_page=2,
+        visible_page="999",
+    )
+
+    with pytest.raises(
+        west_suffolk_adapter.WestSuffolkParseError,
+        match="reported result count",
+    ):
+        getattr(west_suffolk_adapter, "_parse_search_page")(page)
+
+
 async def _collect_live_case(
     case: _Case,
     root: Path,
