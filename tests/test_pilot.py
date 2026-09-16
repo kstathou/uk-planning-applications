@@ -401,11 +401,10 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
 
 
 def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:
-    """Blocked and map-only source shells retain unknown live capabilities."""
+    """Unimplemented and map-only source shells retain unknown capabilities."""
     registry = pilot_registry()
     unresolved = {
         AuthorityId("dorset"),
-        AuthorityId("blackburn-with-darwen"),
         AuthorityId("birmingham"),
     }
     assert {

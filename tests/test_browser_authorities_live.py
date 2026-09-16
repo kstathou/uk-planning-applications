@@ -1066,3 +1066,8 @@ def test_registry_statuses_remain_truthful() -> None:
         registry.manifest(AuthorityId("haringey")).live_status.readiness.value
         == "browser-only"
     )
+    blackburn = registry.manifest(AuthorityId("blackburn-with-darwen"))
+    assert blackburn.live_status.readiness.value == "browser-only"
+    assert blackburn.live_status.transport is not None
+    assert blackburn.live_status.transport.value == "browser"
+    assert blackburn.capabilities.discovery.value == "supported"
