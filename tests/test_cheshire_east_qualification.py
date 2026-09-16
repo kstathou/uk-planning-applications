@@ -1632,8 +1632,8 @@ def test_cheshire_current_live_search_contract_is_journalled_end_to_end(
         field.name: field.value for field in receipt.attempted_requests[1].form
     }
     assert recent_fields["fa"] == ""
-    assert receipt.source_contract.recent.row_count == 1
-    assert receipt.source_contract.recent.references == ("26/3335/PRIOR-1A",)
+    assert len(receipt.source_contract.recent.results) == 1
+    assert receipt.source_contract.recent.visible_references == ("26/3335/PRIOR-1A",)
     assert tuple(blocker.code for blocker in receipt.blockers) == (
         "recent-window-terminality-unproven",
         "weekly-list-terminality-unproven",

@@ -991,7 +991,7 @@ def _validate_attempted_request_shapes(
         if (
             recent.method != RequestMethod.POST
             or str(recent.url) != "https://pa.cheshireeast.gov.uk/planning/index.html"
-            or fields.get("fa") != "search"
+            or fields.get("fa") not in {"", "search"}
             or fields.get("valid_date_from") != scope.start.strftime("%d-%m-%Y")
             or fields.get("valid_date_to") != scope.end.strftime("%d-%m-%Y")
         ):
