@@ -617,6 +617,11 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         ),
         _search_form().replace(
             b'<input name="valid_date_from" value="">',
+            b'<select name="valid_date_from">'
+            b'<option selected value="fixed">Fixed</option></select>',
+        ),
+        _search_form().replace(
+            b'<input name="valid_date_from" value="">',
             b'<fieldset disabled><input name="valid_date_from" value=""></fieldset>',
         ),
         _search_form().replace(b'type="hidden" name="fa"', b'type="submit" name="fa"'),
@@ -700,6 +705,11 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
             b'<input type="text" id="week" name="week" value="14-09-2026">',
             b'<fieldset disabled><input type="text" id="week" name="week" '
             b'value="14-09-2026"></fieldset>',
+        ),
+        _weekly_form().replace(
+            b'<input type="text" id="week" name="week" value="14-09-2026">',
+            b'<select id="week" name="week">'
+            b'<option selected value="fixed">Fixed</option></select>',
         ),
         _weekly_form().replace(
             b'<input type="hidden" name="fa" value="">',
