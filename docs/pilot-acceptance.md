@@ -80,3 +80,17 @@ reported by the council register as `Decision Made` on 28 November 2023. With
 no published inclusion rule proving that all open cases are present despite
 decided and stale records, Haringey remains fail-closed and no qualification
 receipt exists.
+
+The official legacy lite-map configuration subsequently exposed a separate
+`curr_planning_apps_solo` layer alongside its decided layer. Its whole-borough
+WFS and shape counts reconciled at 826 unique PKIDs, while the newer current
+layer remained independently countable. This makes the union of the legacy and
+Arcus current layers a credible cross-era discovery boundary. It does not make
+the bootstrap collectable: the 826 legacy links target a council host that no
+longer resolves, the layer publishes no HGY reference, the current register
+does not search by PKID, and the public Arcus detail payload exposes no legacy
+identifier. Exact address/proposal samples resolve to decided Arcus records,
+confirming that the legacy layer is a stale cutover snapshot rather than an
+active-status set, but content matching is not an identity crosswalk. Until all
+legacy PKIDs have an official zero-ambiguity mapping, live bootstrap and the two
+later weekly cycles remain open.

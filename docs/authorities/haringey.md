@@ -172,3 +172,50 @@ The source subsequently returned its maintenance page again. No production
 adapter expansion, persisted bootstrap, qualification receipt, or readiness
 promotion follows from this map investigation. The two genuinely later weekly
 cycles remain pending.
+
+## Legacy cutover-map follow-up on 16 September 2026
+
+The map service also exposes the older `mapsources/WebTeam` configuration used
+by Haringey's official lite-map client. That client defaults to
+`curr_planning_apps_solo`; the same map source separately names
+`decided_planning_apps_solo`. The WFS capabilities likewise separate current
+and decided layer families. Together with the newer Arcus-backed
+`planning_current_apps` layer, this is credible first-party evidence for an
+exhaustive *discovery* boundary spanning both portal eras, provided each named
+layer is reconciled independently and the counts are read live rather than
+hardcoded.
+
+At 10:51:50 Europe/London, WFS advertised 826 legacy-current features. A
+whole-borough shape request independently returned 826 feature identifiers and
+826 unique legacy PKIDs. Its 905,495-byte response had SHA-256 digest
+`674aa270bdee2ed262be44d5933c962395a1cc912319559e53042450aee752b3`.
+The newer current-layer WFS count was 1,442 at 10:52:10, down from 1,445 during
+the earlier observation, confirming that these are volatile live counts.
+
+The legacy-current layer is itself a stale cutover-era superset. PKID `19085`
+publishes address `70 Tetherdown` and the satellite-dish proposal; an exact
+register search finds `HGY/1999/0250`, now `Decision Made` and disposed on 9
+January 2023. Near the other end of the layer, PKID `442757` publishes the
+larger-home-extension proposal at `59 Creighton Road`; the exact matching Arcus
+record is `HGY/2022/2811`, `Decision Made`, refused on 5 December 2022. These
+content matches diagnose the stale snapshot but are not accepted as identity
+crosswalks.
+
+Every legacy feature links only to
+`www.planningservices.haringey.gov.uk/portal/servlets/ApplicationSearchServlet?PKID=...`.
+That official host no longer resolves. The map metadata exposes only address,
+proposal, and the dead link; its WFS schema is geometry-only. Searching the
+current Arcus register for PKID `19085` returns no result. The rendered detail,
+the public record payload, and the configured detail sections expose the HGY
+reference and Salesforce record ID but no legacy PKID. The only external-ID
+field published in the detail contract is the Planning Portal reference, which
+is empty for both sampled historic records.
+
+The result is narrower than the earlier map conclusion: older-open discovery
+now has a credible union strategy, but complete collection does not. All 826
+legacy PKIDs would need an official deterministic PKID-to-HGY-to-Salesforce
+crosswalk, with zero missing or ambiguous mappings, before their current
+status, detail, comments, and file metadata could be fetched and reconciled.
+Joining by address or proposal would be a content guess even when an exact
+sample happens to be unique. Qualification therefore remains fail-closed, the
+adapter stays `BROWSER_ONLY`, and no receipt or weekly-cycle credit is emitted.
