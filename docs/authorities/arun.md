@@ -83,9 +83,12 @@ failed current sections, unmapped records, and attachment-body requests.
 
 The 648 native rows retain 648 received dates, 395 validated dates, 396
 decision-by dates, 323 comment-by dates, 38 target-committee dates, 119 decision
-dates, and 648 native decision statuses. The receipt records 73 search captures
-and 1,296 application captures with their exact digests. It reparses every
-result capture, checks its exact query membership, and also verifies SQLite
+dates, and 648 native decision statuses. Decision-by, comment-by, and
+target-committee values are also normalised as 396 `decision-due`, 323
+`comment-deadline`, and 38 `target-committee` events with detail-page
+provenance. The receipt records 73 search captures and 1,296 application
+captures with their exact digests. It reparses every result capture, checks its
+exact query membership, and also verifies SQLite
 integrity, evidence paths, terminal checkpoint state, exact reference-set
 equality, current section completeness, the source cap, and the durable
 discovery-only registry status before publication. The immediate terminal rerun

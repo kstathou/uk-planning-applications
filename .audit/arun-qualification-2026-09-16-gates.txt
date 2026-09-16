@@ -1,0 +1,53 @@
+Arun live qualification verification
+Date: 2026-09-16
+Qualification directory: .yimby/qualification-arun-2026-09-16
+Receipt: arun-qualification-v2.json
+
+Receipt and store
+PASS  Pydantic ArunQualificationReceiptV2 validation
+      schema=2 authority=arun applications=648 discovered_references=648 queries=60
+PASS  Receipt checks: 21/21
+PASS  Exact reference sets: discovered=648 retained_native=648 applications=648
+PASS  Evidence: search=73 application=1296; every listed digest verified
+PASS  Bootstrap cost: 1373 requests, 11499963 transferred bytes, 0 attachment-body requests
+PASS  Immediate rerun: 0 requests, 0 transferred bytes, 0 attachment-body requests
+PASS  PRAGMA integrity_check: ok
+PASS  Current state: pending_retries=0 failed_sections=0 unmapped_records=0
+PASS  Registry state: discovery-only; 2026-09-23 and 2026-09-30 cycles pending
+
+Persisted field coverage
+PASS  Native: received=648 validated=395 decision_by=396 comment_by=323
+      target_committee=38 decision=119 decision_status=648
+PASS  Normalised events: decision-due=396 comment-deadline=323 target-committee=38
+
+Repository gates
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv lock --check
+      Resolved 73 packages
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --output-format=github .
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff format --check .
+      119 files already formatted
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen mypy
+      Success: no issues found in 80 source files
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen pytest
+      376 passed; 6182 statements and 1554 branches; 100% coverage
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv build --no-sources
+      Built source distribution and wheel
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --all-files
+      All configured commit-stage hooks passed
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --hook-stage pre-push --all-files
+      All configured pre-push hooks, including pytest, passed
+PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python scripts/verify_pilot.py
+
+Cleanup
+PASS  git diff --check
+PASS  Manual task-diff, worktree, TODO/FIXME/debug-marker, receipt, ignored-artifact,
+      and SQLite-integrity inspection; no cleanup finding
+      The two print calls in qualify_arun.py are intentional CLI output.
+
+Notes
+- A targeted Arun-only pytest invocation passed all 38 selected tests but was not
+  accepted as a gate because repository-wide coverage enforcement correctly
+  requires the complete suite.
+- Two earlier fail-closed live attempts remain visible as ArunParseError
+  diagnostics. They did not publish a receipt and are included in the aggregate
+  request and byte costs above.
