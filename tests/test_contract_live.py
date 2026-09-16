@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import date
+from datetime import date, datetime
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlsplit
@@ -815,6 +815,45 @@ def test_camden_search_and_parser_boundaries() -> None:
     assert camden._parse_date(None) is None
     with pytest.raises(camden.CamdenParseError, match="document date"):
         camden._parse_date("bad")
+
+
+def test_camden_official_detail_and_document_shapes() -> None:
+    detail = b"""
+    <div class="dataview"><h1>Details Page</h1></div>
+    <div class="dataview"><h2>Documents</h2></div>
+    <div class="dataview"><h2>Application Details</h2><ul>
+      <li><div><span>Application Number</span>TP/TP/12531/180693</div></li>
+      <li><div><span>Proposal</span>Historic proposal</div></li>
+      <li><div><span>Current Status</span>REGISTERED</div></li>
+      <li><div><span>Location Co ordinates</span>Easting 530748 Northing 182755</div></li>
+    </ul></div>
+    """
+    fields = camden._parse_dataview(detail)
+    assert fields["application number"] == "TP/TP/12531/180693"
+    assert camden._coordinate_pair(fields) == (530748, 182755)
+    assert camden._coordinate_pair(
+        {
+            "application number": "TP/TP/12531/180693",
+            "proposal": "Historic proposal",
+        }
+    ) == (None, None)
+    with pytest.raises(camden.CamdenParseError, match="coordinate pair"):
+        camden._coordinate_pair({"location co ordinates": "Easting 530748"})
+
+    documents = camden._parse_documents(
+        b"""
+        <table id="casefilesummary"><tr><td><label>Application No:</label></td><td>A/1</td></tr>
+          <tr><td><label>Records:</label></td><td>1</td></tr></table>
+        <table id="recordtable"><thead><tr><th>Date Created</th><th>Title</th><th>Document Type</th></tr></thead>
+          <tbody><tr><td>12/07/2014 16:25:45</td>
+            <td><a href="/CMWebDrawer/Record/1/file/document?inline">Application Form</a></td>
+            <td><a href="/CMWebDrawer/Record/1/file/document?inline">Application Form</a></td>
+          </tr></tbody></table>
+        """
+    )
+    assert documents[0].created_at == datetime(2014, 7, 12, 16, 25, 45)
+    assert documents[0].created_date == date(2014, 7, 12)
+    assert documents[0].document_type == "Application Form"
 
 
 async def _batches(
