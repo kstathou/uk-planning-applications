@@ -72,6 +72,7 @@ _DATE_FORMATS = (
 )
 _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_CELL_COUNT = 6
+_COMPACT_DOCUMENT_CELL_COUNT = 4
 _DETAIL_BODY_ATTEMPTS = 3
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
 _CASE_TYPES = (
@@ -979,40 +980,52 @@ def _parse_documents(
         "description",
         "view",
     )
+    compact_headers = (
+        "date published",
+        "document type",
+        "description",
+        "view",
+    )
     header_cells = rows[0].find_all(["th", "td"], recursive=False)
     headers = tuple(
         _normalise_label(cell.get_text(" ", strip=True)) for cell in header_cells
     )
-    if headers != expected_headers:
+    compact = headers == compact_headers
+    if headers != expected_headers and not compact:
         _raise_parse("documents table header")
     if table.select_one('a[href*="pagedSearchResults.do"]') is not None:
         _raise_parse("documents pagination")
-    documents = [_parse_document_row(row) for row in rows[1:]]
+    documents = [_parse_document_row(row, compact=compact) for row in rows[1:]]
     return tuple(documents), collection_state(len(documents))
 
 
-def _parse_document_row(row: Tag) -> LeedsDocumentV1:
+def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
     cells = row.find_all("td", recursive=False)
-    if len(cells) != _DOCUMENT_CELL_COUNT:
+    expected_count = _COMPACT_DOCUMENT_CELL_COUNT if compact else _DOCUMENT_CELL_COUNT
+    if len(cells) != expected_count:
         _raise_parse("document metadata row")
-    selection_control = cells[0].select_one(
-        'label.hide + input[type="checkbox"][name="file"][value]'
+    if not compact:
+        selection_control = cells[0].select_one(
+            'label.hide + input[type="checkbox"][name="file"][value]'
+        )
+        if cells[0].get_text(" ", strip=True) and selection_control is None:
+            _raise_parse("document metadata row")
+    published_index, type_index, description_index, view_index = (
+        (0, 1, 2, 3) if compact else (1, 2, 4, 5)
     )
-    if cells[0].get_text(" ", strip=True) and selection_control is None:
-        _raise_parse("document metadata row")
     links = tuple(
         HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))
-        for link in cells[5].select("a[href]")
+        for link in cells[view_index].select("a[href]")
     )
     if not links:
         _raise_parse("document metadata link")
-    published = cells[1].get_text(" ", strip=True)
+    published = cells[published_index].get_text(" ", strip=True)
     published_date = _parse_date(published) if published else None
     if published and published_date is None:
         _raise_parse("document published date")
-    document_type = cells[2].get_text(" ", strip=True) or None
-    drawing_number = cells[3].get_text(" ", strip=True) or None
-    description = cells[4].get_text(" ", strip=True) or None
+    document_type = cells[type_index].get_text(" ", strip=True) or None
+    drawing_number = None if compact else cells[3].get_text(" ", strip=True) or None
+    description = cells[description_index].get_text(" ", strip=True) or None
     return LeedsDocumentV1(
         title=description or document_type or "Document",
         url=links[-1],

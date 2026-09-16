@@ -419,10 +419,14 @@ def _documents(
     if malformed:
         return b"<h2>Documents</h2><p>Unexpected response</p>"
     if compact:
-        row = "" if header_only else """
+        row = (
+            ""
+            if header_only
+            else """
       <tr><td>15/09/2026</td><td>Plan</td>
       <td>Tree location plan</td><td><a href="files/tree-plan.pdf">View</a></td></tr>
     """
+        )
         header = """
       <tr><th>Date Published</th><th>Document Type</th>
       <th>Description</th><th>View</th></tr>
