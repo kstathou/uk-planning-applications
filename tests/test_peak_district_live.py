@@ -525,6 +525,29 @@ def test_peak_district_discovers_bounded_and_older_open_with_exact_pagination() 
         )
         == 1
     )
+    first_pages = [batch for batch in batches if batch.evidence_page == 1]
+    assert len(first_pages) == 5
+    assert all(
+        [
+            (str(capture.request_url), capture.request_method)
+            for capture in batch.evidence
+        ]
+        == [
+            (peak._SEARCH_URL, "GET"),
+            (peak._ADVANCED_FORM_URL, "GET"),
+            (peak._RESULTS_URL, "POST"),
+        ]
+        for batch in first_pages
+    )
+    paginated = [batch for batch in batches if batch.evidence_page == 2]
+    assert len(paginated) == 1
+    assert [
+        (str(capture.request_url), capture.request_method)
+        for capture in paginated[0].evidence
+    ] == [(peak._PAGINATION_URL, "POST")]
+    assert paginated[0].evidence_key == (
+        "bounded-date|Received|18/08/2026..16/09/2026"
+    )
 
 
 def test_peak_district_restarts_active_query_and_terminal_rerun_is_zero_io() -> None:
@@ -708,11 +731,27 @@ def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
     assert all(
         "OnlineDisplayDocument" not in str(request.url) for request in session.requests
     )
-    assert [document.title for document in normalised.documents] == [
-        "Application Form.pdf",
-        "Design Statement.pdf",
-        "Site Plan.pdf",
+    assert [document.model_dump(mode="json") for document in normalised.documents] == [
+        {
+            "title": "Application Form.pdf",
+            "url": str(snapshot.payload.documents[0].url),
+            "category": "Application Forms",
+            "published_date": "2026-09-14",
+        },
+        {
+            "title": "Design Statement.pdf",
+            "url": str(snapshot.payload.documents[1].url),
+            "category": "Design and Access Statement",
+            "published_date": "2026-09-14",
+        },
+        {
+            "title": "Site Plan.pdf",
+            "url": str(snapshot.payload.documents[2].url),
+            "category": "Plans and Drawings Planning Application",
+            "published_date": "2026-09-15",
+        },
     ]
+    assert normalised.normaliser_version == "peak-district-v5"
     assert normalised.metadata.officer_name == "Officer One"
     assert normalised.metadata.published_parties == (
         "Applicant One",
