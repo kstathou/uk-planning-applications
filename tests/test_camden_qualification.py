@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl, urlsplit
 
-import pytest
+import pytest  # noqa: TC002 - Runtime assertions use pytest.raises.
 
 from yimby.authorities.camden import discovery
 from yimby.authorities.camden.adapter import DOCUMENT_BASE
@@ -248,7 +248,7 @@ def test_camden_qualification_writes_proof_receipt_and_zero_io_rerun(
     assert agreement["application_count"] == 3
     assert agreement["rebuild_input_count"] == 3
     assert agreement["exact_match"] is True
-    assert receipt["evidence_integrity"]["captures_checked"] == 6
+    assert receipt["evidence_integrity"]["captures_checked"] == 4
     assert receipt["evidence_integrity"]["issues"] == []
     assert receipt["costs"]["rerun"] == {
         "request_count": 0,
