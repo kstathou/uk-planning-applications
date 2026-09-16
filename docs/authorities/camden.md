@@ -42,7 +42,8 @@ The exact-reference walkthrough covered one decided record. The later live
 qualification proved the first ten rows of a 331-record received-date query and
 four matching detail and document-index paths, but Cloudflare repeatedly blocked
 the next ordinary Northgate detail navigation. Complete date-window discovery,
-older-open enumeration, comments, immediate rerun behavior, and later weekly
+older-open enumeration, comments, the separate linked child pages, immediate
+refresh behavior, and later weekly
 cycles therefore remain unqualified.
 
 ## Request contract capture
@@ -67,7 +68,8 @@ The document service query
 created date, title, document type, and an inline source link. The capture read
 that index only and did not retrieve any attachment body. Exact-reference
 extraction and the observed document index are now verified at request level;
-bounded discovery, comments, pagination, and incremental changes remain open.
+bounded live completion, comments, the linked child pages, and incremental
+changes remain open.
 
 ## Implemented boundary
 
@@ -82,7 +84,10 @@ scripts, blocks attachment paths and image or media bodies, and emits a specific
 error when a challenge does not clear within 60 seconds. Published empty
 proposal values and the portal's explicit no-public-documents result remain
 distinguishable from parse or retrieval failure. Public comments remain
-unavailable.
+unavailable. Discovery result pages are now retained as canonical, content-
+addressed evidence containing the exact query, source-reported total, page
+offset, ordered reference/locator membership, and source-body hash, with portal
+session tokens excluded.
 
 ## Live qualification attempt
 
@@ -94,13 +99,17 @@ document-index extraction. The database contains four native, application, and
 document versions, no failed current sections, one pending retry, and no
 unmapped records.
 
-Across those bounded attempts the transport recorded 12 successful top-level
-requests, 528,696 transferred bytes, 257,849 ms of browser time, and zero
-attachment-body requests. SQLite integrity is `ok`; all eight compressed
-evidence captures passed registration, gzip, and digest checks. The final run
+Across those bounded attempts the historical transport recorded 12 successful
+top-level captures, 528,696 bytes of retained rendered HTML, 257,849 ms of
+browser time, and zero attachment-body requests. It did not separately count
+failed boundary attempts or network transfer bytes. SQLite integrity is `ok`;
+all eight compressed application detail/document-index captures passed
+registration, gzip, and digest checks. Discovery pages were not retained by the
+version used for this run, so the checkpoint's 331 total and ten identities are
+not claimed as independently reproducible evidence. The final run
 failed with `CamdenChallengeTimeoutError` after a normal visible-Chrome detail
 navigation remained on Camden's Cloudflare managed challenge for 60 seconds.
-The terminal checkpoint and immediate zero-I/O rerun are not claimed. The two
+The terminal checkpoint and genuine immediate refresh are not claimed. The two
 later weekly cycles due 23 and 30 September remain pending behind the incomplete
 bootstrap. The sanitized receipt is
 `.audit/camden-live-blocker-2026-09-16.json`; raw HTML and the resumable database

@@ -186,6 +186,18 @@ class _Session:
         return self._bytes
 
     @property
+    def attempted_request_count(self) -> int:
+        return len(self.requests)
+
+    @property
+    def successful_capture_count(self) -> int:
+        return len(self.requests)
+
+    @property
+    def retained_html_bytes(self) -> int:
+        return self._bytes
+
+    @property
     def attachment_body_requests(self) -> int:
         return 0
 
@@ -265,7 +277,7 @@ def test_camden_qualification_writes_proof_receipt_and_immediate_refresh(
     assert len(sessions[0].requested_urls) == 16
     assert len(sessions[1].requested_urls) == 6
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["schema_version"] == 1
+    assert receipt["schema_version"] == 2
     assert receipt["authority_id"] == "camden"
     assert [item["reported_count"] for item in receipt["query_results"]] == [
         1,
@@ -290,8 +302,9 @@ def test_camden_qualification_writes_proof_receipt_and_immediate_refresh(
     assert receipt["evidence_integrity"]["captures_checked"] == 9
     assert receipt["evidence_integrity"]["issues"] == []
     assert receipt["costs"]["rerun"] == {
-        "request_count": 6,
-        "transferred_bytes": sessions[1].transferred_bytes,
+        "attempted_request_count": 6,
+        "successful_capture_count": 6,
+        "retained_html_bytes": sessions[1].retained_html_bytes,
         "attachment_body_requests": 0,
     }
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
@@ -301,10 +314,10 @@ def test_camden_qualification_writes_proof_receipt_and_immediate_refresh(
     ]
     assert all(check["ok"] for check in receipt["checks"])
     stored = json.loads(
-        (data_dir / "camden-qualification-v1.json").read_text(encoding="utf-8")
+        (data_dir / "camden-qualification-v2.json").read_text(encoding="utf-8")
     )
     assert stored == receipt
-    assert not (data_dir / ".camden-qualification-v1.json.tmp").exists()
+    assert not (data_dir / ".camden-qualification-v2.json.tmp").exists()
 
 
 def test_camden_qualification_refuses_failed_document_sections(
@@ -325,7 +338,7 @@ def test_camden_qualification_refuses_failed_document_sections(
     assert error["error"] == "qualification-failed"
     assert "failed-sections" in error["failed_checks"]
     assert len(sessions) == 1
-    assert not (data_dir / "camden-qualification-v1.json").exists()
+    assert not (data_dir / "camden-qualification-v2.json").exists()
 
 
 def test_camden_qualification_refuses_unavailable_comments(
@@ -347,4 +360,4 @@ def test_camden_qualification_refuses_unavailable_comments(
     assert error["error"] == "qualification-failed"
     assert "required-sections-complete" in error["failed_checks"]
     assert "exposed-child-sections-verified" in error["failed_checks"]
-    assert not (data_dir / "camden-qualification-v1.json").exists()
+    assert not (data_dir / "camden-qualification-v2.json").exists()

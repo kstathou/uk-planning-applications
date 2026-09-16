@@ -111,6 +111,9 @@ def test_camden_browser_session_is_lazy_counted_and_reusable() -> None:
         "https://planningrecords.camden.gov.uk/NECSWS/PlanningExplorer/GeneralSearch.aspx",
     )
     assert session.transferred_bytes == 2 * len(payload.body)
+    assert session.attempted_request_count == 2
+    assert session.successful_capture_count == 2
+    assert session.retained_html_bytes == 2 * len(payload.body)
     assert session.attachment_body_requests == 0
     assert session.browser_time_ms >= 0
     assert session.mode == TransportMode.BROWSER
@@ -157,8 +160,12 @@ def test_camden_browser_session_fails_closed_on_response(
     payload: CamdenBrowserPayload,
     error: type[Exception],
 ) -> None:
+    session = _session(_Boundary(payload))
     with pytest.raises(error):
-        asyncio.run(_session(_Boundary(payload)).fetch(_request()))
+        asyncio.run(session.fetch(_request()))
+    assert session.attempted_request_count == 1
+    assert session.successful_capture_count == 0
+    assert session.retained_html_bytes == 0
 
 
 def test_camden_browser_session_blocks_attachment_paths_before_browser_io() -> None:

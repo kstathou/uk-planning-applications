@@ -23,7 +23,7 @@ requirement.
 | Authority | Fixture package | Recorded source evidence | Real adapter boundary | Live bootstrap | Two weekly cycles |
 |---|---|---|---|---|---|
 | Barnet | Verified | Weekly, detail, and child routes recorded; older-open result cap recorded | Bounded weekly adapter; smoke reached paged discovery before HTTP 429 | Open | Open |
-| Camden | Verified | Detail and 16-row document index recorded; comments open | Exact-reference JSF, Northgate detail, and document-index adapter; bounded discovery explicitly unavailable | Open | Open |
+| Camden | Verified | Detail and 16-row document index recorded; live blocker receipt identifies the missing discovery capture; comments and linked child pages open | Typed five-query bounded discovery, Northgate detail, and document-index browser adapter; managed challenge blocked completion after 10 of 331 first-query identities | Blocked | Open |
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
 | Peak District National Park Authority | Verified | AssureLive form, five-query discovery, detail, and windowed search and document pagination recorded | Exact 30-day Received, Validated, and Decided queries plus any-time REGISTERED and APPEAL LODGED; complete detail and document metadata; public comments unavailable | Verified on 16 September 2026 with 377 references and applications | Pending for 23 and 30 September 2026 |
@@ -67,6 +67,13 @@ The Barnet smoke is incomplete because the source returned HTTP 429 during
 pagination; its saved checkpoint permits a later bounded resume without
 repeating completed pages. Blocked and partial authorities remain in coverage
 denominators and failure reporting until their checks succeed.
+
+Camden's bounded live attempt is also incomplete: visible Chrome persisted four
+applications before the next ordinary detail navigation remained on the
+source's managed challenge for 60 seconds. Its non-terminal checkpoint is at
+offset 10 of 331 on the first query. The eight retained application captures
+are valid, but that historical run predates discovery-evidence persistence, so
+its first-page total and membership are not promoted to source-evidence proof.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds

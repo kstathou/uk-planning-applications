@@ -246,8 +246,9 @@ class CamdenBrowserPortalSession:
         self._limiter = limiter or HostRateLimiter()
         self._clock = clock
         self._requested_urls: list[str] = []
+        self._attempted_request_count = 0
         self._attachment_body_requests = 0
-        self._transferred_bytes = 0
+        self._retained_html_bytes = 0
         self._browser_time_ms = 0
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
@@ -263,6 +264,7 @@ class CamdenBrowserPortalSession:
                 self._attachment_body_requests += 1
                 raise _attachment_error(parts.hostname)
             raise _source_error(raw_url, "request origin is not Camden")
+        self._attempted_request_count += 1
         boundary = await self._get_boundary()
         started = self._clock()
         try:
@@ -286,7 +288,7 @@ class CamdenBrowserPortalSession:
             raise _attachment_error(final.hostname)
         safe_url = _safe_url(raw_url)
         self._requested_urls.append(safe_url)
-        self._transferred_bytes += len(payload.body)
+        self._retained_html_bytes += len(payload.body)
         return EvidenceCapture(
             url=HttpUrl(safe_url),
             media_type=payload.media_type,
@@ -310,9 +312,24 @@ class CamdenBrowserPortalSession:
         return self._attachment_body_requests
 
     @property
+    def attempted_request_count(self) -> int:
+        """Return allowed top-level requests sent or attempted at the boundary."""
+        return self._attempted_request_count
+
+    @property
+    def successful_capture_count(self) -> int:
+        """Return successful top-level captures retained by the session."""
+        return len(self._requested_urls)
+
+    @property
+    def retained_html_bytes(self) -> int:
+        """Return bytes in retained rendered top-level HTML captures."""
+        return self._retained_html_bytes
+
+    @property
     def transferred_bytes(self) -> int:
-        """Return retained top-level HTML bytes."""
-        return self._transferred_bytes
+        """Expose retained rendered HTML bytes through the common legacy metric."""
+        return self._retained_html_bytes
 
     @property
     def browser_time_ms(self) -> int:

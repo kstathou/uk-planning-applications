@@ -40,15 +40,18 @@
   },
   "costs": {
     "attempts": 5,
-    "request_count": 12,
-    "transferred_bytes": 528696,
+    "attempted_request_count": null,
+    "successful_capture_count": 12,
+    "retained_rendered_html_bytes": 528696,
+    "metric_note": "The historical transport counted successful top-level captures and retained page.content() bytes. It did not separately count failed boundary attempts or network transfer bytes.",
     "duration_ms": 271589,
     "browser_time_ms": 257849,
     "storage_growth_bytes": 595868,
     "attachment_body_requests": 0,
     "last_attempt": {
-      "request_count": 2,
-      "transferred_bytes": 47726,
+      "attempted_request_count": null,
+      "successful_capture_count": 2,
+      "retained_rendered_html_bytes": 47726,
       "duration_ms": 64683,
       "browser_time_ms": 62495,
       "storage_growth_bytes": 160543,
@@ -63,17 +66,23 @@
     "failed"
   ],
   "database_integrity": "ok",
-  "evidence_integrity": {
+  "application_evidence_integrity": {
     "captures_checked": 8,
     "compressed_bytes": 47908,
     "uncompressed_bytes": 183822,
     "manifest_sha256": "2f2aa14ce967e5bbc6c5624a3a9eaa088c61a3a0c017e30e1dd9ebad4bc587de",
-    "issues": []
+    "issues": [],
+    "scope": "The eight captures are the four retained detail/document-index pairs. This historical run did not retain discovery result pages."
+  },
+  "discovery_evidence": {
+    "retained": false,
+    "reason": "Discovery evidence persistence was added after this live attempt; the reported 331 total and first ten references remain checkpoint facts, not independently retained source captures."
   },
   "checks": {
     "attachment_policy": true,
     "database_integrity": true,
-    "evidence_integrity": true,
+    "application_evidence_integrity": true,
+    "discovery_evidence_retained": false,
     "terminal_checkpoint": false,
     "no_pending_retries": false,
     "immediate_rerun_validated": false

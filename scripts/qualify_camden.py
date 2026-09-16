@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -48,7 +48,7 @@ from yimby.store import SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("camden")
-_RECEIPT_NAME = "camden-qualification-v1.json"
+_RECEIPT_NAME = "camden-qualification-v2.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -89,8 +89,9 @@ class QualificationCounts(FrozenModel):
 class QualificationCost(FrozenModel):
     """Observable transport cost for one pass."""
 
-    request_count: int = Field(ge=0)
-    transferred_bytes: int = Field(ge=0)
+    attempted_request_count: int = Field(ge=0)
+    successful_capture_count: int = Field(ge=0)
+    retained_html_bytes: int = Field(ge=0)
     attachment_body_requests: int = Field(ge=0)
 
 
@@ -139,10 +140,10 @@ class CamdenWeeklyRefreshV1(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class CamdenQualificationReceiptV1(FrozenModel):
+class CamdenQualificationReceiptV2(FrozenModel):
     """Versioned proof of Camden's complete same-day live qualification."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     authority_id: Literal["camden"] = "camden"
     created_at: datetime
     scope: QualificationScope
@@ -178,6 +179,18 @@ class _QualificationPass(FrozenModel):
 
 class QualificationConfigError(ValueError):
     """One required safety option or scope value is invalid."""
+
+
+@runtime_checkable
+class _MeasuredCamdenSession(Protocol):
+    @property
+    def attempted_request_count(self) -> int: ...
+
+    @property
+    def successful_capture_count(self) -> int: ...
+
+    @property
+    def retained_html_bytes(self) -> int: ...
 
     def __init__(self, code: str) -> None:
         """Retain the stable error code emitted by the command."""
@@ -239,10 +252,19 @@ async def _collect_once(
     session = session_factory()
     try:
         report = await collector.collect(_AUTHORITY_ID, window, session)
+        if isinstance(session, _MeasuredCamdenSession):
+            attempted_request_count = session.attempted_request_count
+            successful_capture_count = session.successful_capture_count
+            retained_html_bytes = session.retained_html_bytes
+        else:
+            attempted_request_count = len(report.requested_urls)
+            successful_capture_count = len(report.requested_urls)
+            retained_html_bytes = session.transferred_bytes
         return _QualificationPass(
             cost=QualificationCost(
-                request_count=len(report.requested_urls),
-                transferred_bytes=session.transferred_bytes,
+                attempted_request_count=attempted_request_count,
+                successful_capture_count=successful_capture_count,
+                retained_html_bytes=retained_html_bytes,
                 attachment_body_requests=report.attachment_body_requests,
             ),
             applications=report.applications,
@@ -456,7 +478,7 @@ async def _qualify(
     session_factory: SessionFactory,
     now: Clock,
     section_verifier: SectionVerifier,
-) -> CamdenQualificationReceiptV1:
+) -> CamdenQualificationReceiptV2:
     collector = Collector(AuthorityRegistry((CAMDEN_PACKAGE,)), store)
     window = DiscoveryWindow(
         start=config.scope.start,
@@ -540,7 +562,8 @@ async def _qualify(
                 bool(expected_refreshes)
                 and set(rerun_pass.applications) == set(expected_refreshes)
                 and len(rerun_pass.applications) == len(expected_refreshes)
-                and rerun.request_count > 0
+                and rerun.attempted_request_count > 0
+                and rerun.successful_capture_count > 0
                 and rerun.attachment_body_requests == 0
             ),
         ),
@@ -551,7 +574,7 @@ async def _qualify(
     )
     _require(final_checks)
     final_checkpoint = _require_checkpoint(final_checkpoint)
-    return CamdenQualificationReceiptV1(
+    return CamdenQualificationReceiptV2(
         created_at=now(),
         scope=config.scope,
         query_inventory=final_checkpoint.query_inventory,
@@ -595,7 +618,7 @@ def _resume_scope_matches(store: SqliteStore, scope: QualificationScope) -> bool
     )
 
 
-def _write_receipt(path: Path, receipt: CamdenQualificationReceiptV1) -> None:
+def _write_receipt(path: Path, receipt: CamdenQualificationReceiptV2) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:
