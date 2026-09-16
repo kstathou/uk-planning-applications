@@ -806,6 +806,11 @@ def test_dorset_qualification_persists_exact_terminal_receipt(tmp_path: Path) ->
     ]
     assert receipt.readiness == "discovery-only"
     assert receipt.http_max_attempts == 1
+    manifest = pilot_registry().manifest(AuthorityId("dorset"))
+    assert manifest.capabilities.discovery.value == "supported"
+    assert manifest.live_status.readiness.value == "discovery-only"
+    assert manifest.live_status.transport is not None
+    assert manifest.live_status.transport.value == "http"
     assert len(mocks) == 2
     assert mocks[0].requests
     assert mocks[1].requests == []

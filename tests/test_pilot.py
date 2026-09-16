@@ -325,7 +325,6 @@ def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:
     registry = pilot_registry()
     unresolved = {
         AuthorityId("opdc"),
-        AuthorityId("dorset"),
         AuthorityId("blackburn-with-darwen"),
         AuthorityId("birmingham"),
     }
