@@ -10,6 +10,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -154,6 +155,7 @@ def _arcgis_bodies() -> tuple[bytes, ...]:
     fields = (
         "OBJECTID",
         "REFERENCE",
+        "application_type_code",
         "TYPE",
         "Received",
         "LOCATION",
@@ -226,7 +228,7 @@ def _arcgis_bodies() -> tuple[bytes, ...]:
         _json_bytes(
             {"features": recent_features[25:50], "exceededTransferLimit": True}
         ),
-        _json_bytes({"features": recent_features[50:], "exceededTransferLimit": False}),
+        _json_bytes({"features": recent_features[50:]}),
         _json_bytes(
             {
                 "features": [
@@ -619,11 +621,18 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
 
     _assert_query_inventory(receipt, bodies, data_dir, sessions[0])
 
-    with sqlite3.connect(data_dir / "yimby.sqlite3") as connection:
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
     replay = module.replay_persisted_state(data_dir)
     assert replay.model_dump(mode="json") == receipt["offline_replay"]
     assert len(sessions) == 1
+
+    receipt["recent_discovery"]["reported_count"] = 69
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(
+        module.QualificationInvariantError, match="offline-replay-mismatch"
+    ):
+        module.replay_persisted_state(data_dir)
 
 
 @pytest.mark.parametrize("failure", ["recent-total", "layer-schema"])
