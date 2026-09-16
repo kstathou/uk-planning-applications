@@ -1062,9 +1062,9 @@ def test_dorset_qualification_restarts_only_unstable_outstanding_query(
 
     recovered_searches = _pairs(mocks[1], ADVANCED_PATH)
     assert len(recovered_searches) == 1
-    assert {
-        name for name, _value in recovered_searches[0]
-    } >= {"ctl00$ContentPlaceHolder1$btnSearch2"}
+    assert {name for name, _value in recovered_searches[0]} >= {
+        "ctl00$ContentPlaceHolder1$btnSearch2"
+    }
     assert "ctl00$ContentPlaceHolder1$btnSearch3" not in {
         name for name, _value in recovered_searches[0]
     }

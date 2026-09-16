@@ -524,7 +524,46 @@ def _restart_discovery_checkpoint(
     )
     if current.live_scope != expected_scope:
         raise QualificationFailedError(("restart-checkpoint",))
-    reset = DorsetCheckpointV1(object_offset="live", live_scope=expected_scope)
+    if (
+        current.completed_queries == ("received-valid",)
+        and current.active_query in {None, "outstanding"}
+        and not current.live_complete
+    ):
+        active_new = {
+            (reference.source_id, reference.reference, reference.locator)
+            for reference in current.active_new_references
+        }
+        seen = {
+            (reference.source_id, reference.reference, reference.locator)
+            for reference in current.seen_references
+        }
+        if (
+            len(active_new) != len(current.active_new_references)
+            or len(seen) != len(current.seen_references)
+            or not active_new.issubset(seen)
+        ):
+            raise QualificationFailedError(("restart-checkpoint",))
+        reset = current.model_copy(
+            update={
+                "active_query": None,
+                "next_page": 1,
+                "total_pages": None,
+                "active_references": (),
+                "active_new_references": (),
+                "seen_references": tuple(
+                    reference
+                    for reference in current.seen_references
+                    if (
+                        reference.source_id,
+                        reference.reference,
+                        reference.locator,
+                    )
+                    not in active_new
+                ),
+            }
+        )
+    else:
+        reset = DorsetCheckpointV1(object_offset="live", live_scope=expected_scope)
     run_id = store.begin_run(_AUTHORITY_ID)
     store.commit_discovery(
         run_id,
