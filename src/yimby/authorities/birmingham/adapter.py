@@ -29,6 +29,7 @@ from yimby.domain import (
     SourceDefinition,
     SourceId,
     SourceReference,
+    TransportMode,
     UnavailableSection,
 )
 from yimby.transport import PortalRequest, RequestIntent
@@ -40,6 +41,11 @@ if TYPE_CHECKING:
 
 SOURCE = SourceId("birmingham-northgate-explorer")
 BASE_URL = "https://eplanning.birmingham.gov.uk/Northgate/PlanningExplorer"
+ARCGIS_SOURCE = SourceId("birmingham-mybrummap-planning")
+ARCGIS_LAYER_URL = (
+    "https://maps.birmingham.gov.uk/server/rest/services/mybrummap/"
+    "mybrummap_Planning_OGCServices/MapServer/12"
+)
 
 
 class BirminghamCheckpointV1(FrozenModel):
@@ -66,6 +72,10 @@ class BirminghamParseError(ValueError):
         super().__init__(f"missing Birmingham field {field}")
 
 
+class BirminghamLiveContractUnavailableError(RuntimeError):
+    """The fixture routes are not evidence for a live portal contract."""
+
+
 class BirminghamAdapter:
     """Keep Birmingham's Northgate record shape independent."""
 
@@ -73,7 +83,10 @@ class BirminghamAdapter:
         id=AuthorityId("birmingham"),
         name="Birmingham City Council",
         kind=AuthorityKind.METROPOLITAN,
-        sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),),
+        sources=(
+            SourceDefinition(id=SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),
+            SourceDefinition(id=ARCGIS_SOURCE, base_url=HttpUrl(ARCGIS_LAYER_URL)),
+        ),
         capabilities=AuthorityCapabilities(discovery=CapabilityState.UNKNOWN),
     )
 
@@ -84,6 +97,8 @@ class BirminghamAdapter:
         checkpoint: BirminghamCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[BirminghamCheckpointV1]]:
         """Read a captured result rather than treating HTTP 503 as empty."""
+        if session.mode != TransportMode.FIXTURE:
+            raise BirminghamLiveContractUnavailableError
         page = "1" if checkpoint is None else checkpoint.result_page
         url = (
             f"{BASE_URL}/search?from={window.start.isoformat()}"
@@ -114,6 +129,8 @@ class BirminghamAdapter:
         reference: SourceReference,
     ) -> NativeSnapshot[BirminghamApplicationV1]:
         """Read the sanitised Planning Explorer detail capture."""
+        if session.mode != TransportMode.FIXTURE:
+            raise BirminghamLiveContractUnavailableError
         encoded = quote(reference.reference, safe="")
         url = f"{BASE_URL}/application/{encoded}"
         detail = await session.fetch(

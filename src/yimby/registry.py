@@ -117,8 +117,10 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("birmingham"): _status(
         LiveReadiness.BLOCKED,
-        "the investigated public portal returned HTTP 503",
-        "portal inventory records an HTTP 503 boundary",
+        "ArcGIS recent discovery is bounded, but older-open semantics, active "
+        "appeals, and required child sections are not proven",
+        "captured Birmingham ArcGIS layer schema, pagination, counts, and "
+        "semantic counterexamples",
     ),
     AuthorityId("leeds"): _status(
         LiveReadiness.DISCOVERY_ONLY,
