@@ -645,6 +645,8 @@ def _is_hidden_markup(element: Tag) -> bool:
     return (
         element.name
         in {
+            "canvas",
+            "datalist",
             "head",
             "input",
             "noscript",
@@ -657,6 +659,7 @@ def _is_hidden_markup(element: Tag) -> bool:
         }
         or (element.name == "dialog" and not element.has_attr("open"))
         or (element.name == "details" and not element.has_attr("open"))
+        or element.has_attr("popover")
         or element.has_attr("hidden")
         or bool(classes & {"d-none", "hide", "hidden", "invisible"})
         or ("collapse" in classes and not classes & {"in", "show"})
@@ -679,8 +682,11 @@ def _has_hidden_descendant(element: Tag) -> bool:
 
 
 def _style_declarations(element: Tag) -> dict[str, str]:
+    style = str(element.get("style", ""))
+    if any(marker in style for marker in ("/*", "*/", "\\")):
+        _raise_parse("ambiguous inline style syntax")
     declarations: dict[str, str] = {}
-    for declaration in str(element.get("style", "")).split(";"):
+    for declaration in style.split(";"):
         name, separator, value = declaration.partition(":")
         if separator:
             normalised_name = name.strip().casefold()
@@ -693,7 +699,7 @@ def _style_declarations(element: Tag) -> dict[str, str]:
 def _css_value(value: str | None) -> str | None:
     if value is None:
         return None
-    return re.sub(r"\s*!important\s*$", "", value).strip()
+    return re.sub(r"\s*!\s*important\s*$", "", value).strip()
 
 
 def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
