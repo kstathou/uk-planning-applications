@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import sqlite3
 from contextlib import closing
@@ -26,6 +27,7 @@ from yimby.domain import (
     AuthorityId,
     AuthorityManifest,
     AuthorityOperationalState,
+    AuthorityReferenceSets,
     CapabilityState,
     CollectedObservation,
     CommentRecord,
@@ -35,6 +37,8 @@ from yimby.domain import (
     DurableDiscoveryBatch,
     EvidenceCapture,
     EvidenceDigest,
+    EvidenceIntegrityIssue,
+    EvidenceIntegrityReport,
     FrozenModel,
     NormalisedObservation,
     QualificationSnapshot,
@@ -1066,6 +1070,144 @@ class SqliteStore:
             pending_retries=counts["pending_retries"],
             failed_sections=failed_sections,
             unmapped_records=counts["unmapped_records"],
+        )
+
+    def authority_reference_sets(
+        self,
+        authority_id: AuthorityId,
+    ) -> AuthorityReferenceSets:
+        """Return independent discovery, application, and rebuild identities."""
+
+        def references(table: str) -> tuple[SourceReference, ...]:
+            rows = self._connection.execute(
+                f"""
+                SELECT source_id, reference, locator FROM {table}
+                WHERE authority_id = ? ORDER BY source_id, reference
+                """,  # noqa: S608 - Table names are fixed below, never caller supplied.
+                (authority_id,),
+            )
+            return tuple(
+                SourceReference(
+                    source_id=SourceId(row["source_id"]),
+                    reference=row["reference"],
+                    locator=row["locator"],
+                )
+                for row in rows
+            )
+
+        return AuthorityReferenceSets(
+            discovery=references("discovery_queue"),
+            applications=references("applications"),
+            rebuild_inputs=references("native_rebuild_inputs"),
+        )
+
+    def evidence_integrity(
+        self,
+        authority_id: AuthorityId,
+    ) -> EvidenceIntegrityReport:
+        """Verify authority-linked evidence registration, gzip bodies, and digests."""
+        issues: list[EvidenceIntegrityIssue] = []
+        application_ids = tuple(
+            row["id"]
+            for row in self._connection.execute(
+                """
+                SELECT id FROM applications
+                WHERE authority_id = ? ORDER BY id
+                """,
+                (authority_id,),
+            )
+        )
+        rebuild_rows = {
+            row["application_id"]: row
+            for row in self._connection.execute(
+                """
+                SELECT application_id, evidence_digests_json
+                FROM native_rebuild_inputs
+                WHERE authority_id = ? ORDER BY application_id
+                """,
+                (authority_id,),
+            )
+        }
+        linked_digests: set[str] = set()
+        for application_id in application_ids:
+            row = rebuild_rows.get(application_id)
+            if row is None:
+                issues.append(
+                    EvidenceIntegrityIssue(
+                        digest=None,
+                        code="application-without-rebuild-input",
+                    )
+                )
+                continue
+            digests = tuple(
+                str(value) for value in json.loads(row["evidence_digests_json"])
+            )
+            if not digests:
+                issues.append(
+                    EvidenceIntegrityIssue(
+                        digest=None,
+                        code="application-without-evidence",
+                    )
+                )
+            linked_digests.update(digests)
+
+        manifest: list[tuple[str, str, int, int]] = []
+        captures_checked = 0
+        compressed_bytes = 0
+        uncompressed_bytes = 0
+        for digest in sorted(linked_digests):
+            captures_checked += 1
+            row = self._connection.execute(
+                "SELECT path FROM evidence WHERE digest = ?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                issues.append(
+                    EvidenceIntegrityIssue(
+                        digest=digest,
+                        code="unregistered-digest",
+                    )
+                )
+                continue
+            stored_path = str(row["path"])
+            expected_path = f"{digest[:2]}/{digest}.gz"
+            if stored_path != expected_path:
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="path-mismatch")
+                )
+                continue
+            path = self.evidence_root / stored_path
+            if not path.is_file():
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="missing-path")
+                )
+                continue
+            compressed = path.read_bytes()
+            compressed_bytes += len(compressed)
+            try:
+                body = gzip.decompress(compressed)
+            except (gzip.BadGzipFile, EOFError, OSError):
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="invalid-gzip")
+                )
+                continue
+            uncompressed_bytes += len(body)
+            manifest.append((digest, stored_path, len(compressed), len(body)))
+            if sha256(body).hexdigest() != digest:
+                issues.append(
+                    EvidenceIntegrityIssue(digest=digest, code="digest-mismatch")
+                )
+        manifest_payload = json.dumps(
+            manifest,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+        return EvidenceIntegrityReport(
+            captures_checked=captures_checked,
+            compressed_bytes=compressed_bytes,
+            uncompressed_bytes=uncompressed_bytes,
+            manifest_sha256=sha256(manifest_payload).hexdigest(),
+            issues=tuple(issues),
         )
 
     def metrics_totals(self) -> RunMetrics:

@@ -365,6 +365,39 @@ class DiscoveryState(FrozenModel):
     checkpoint: StoredCheckpoint | None
 
 
+class AuthorityReferenceSets(FrozenModel):
+    """Independent durable identity views used by qualification."""
+
+    discovery: tuple[SourceReference, ...]
+    applications: tuple[SourceReference, ...]
+    rebuild_inputs: tuple[SourceReference, ...]
+
+
+class EvidenceIntegrityIssue(FrozenModel):
+    """One authority-linked evidence registration or content failure."""
+
+    digest: str | None
+    code: Literal[
+        "application-without-rebuild-input",
+        "application-without-evidence",
+        "unregistered-digest",
+        "path-mismatch",
+        "missing-path",
+        "invalid-gzip",
+        "digest-mismatch",
+    ]
+
+
+class EvidenceIntegrityReport(FrozenModel):
+    """Deterministic proof over authority-linked compressed evidence."""
+
+    captures_checked: int = Field(ge=0)
+    compressed_bytes: int = Field(ge=0)
+    uncompressed_bytes: int = Field(ge=0)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    issues: tuple[EvidenceIntegrityIssue, ...]
+
+
 class QualificationSnapshot(FrozenModel):
     """Authority-scoped durable counts used by live qualification."""
 
