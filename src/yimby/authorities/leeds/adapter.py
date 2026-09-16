@@ -72,6 +72,7 @@ _DATE_FORMATS = (
 )
 _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_CELL_COUNT = 6
+_SUMMARY_BODY_ATTEMPTS = 3
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
 _CASE_TYPES = (
     ("DAG", "Agricultural Determination"),
@@ -468,14 +469,7 @@ class LeedsAdapter:
     ) -> NativeSnapshot[LeedsApplicationV1]:
         if reference.locator is None:
             raise LeedsRoutingError(reference.reference)
-        detail = await session.fetch(
-            _detail_request(reference.locator, "summary", RequestIntent.DETAIL)
-        )
-        message = detail.body.decode(errors="replace").casefold()
-        if "unable to perform this task" in message and "remote exception" in message:
-            raise LeedsDetailUnavailableError
-        if not BeautifulSoup(detail.body, "html.parser").select("#simpleDetailsTable"):
-            raise LeedsDetailUnverifiedError
+        detail = await _fetch_summary(session, reference.locator)
         fields = _parse_summary(detail.body)
         published_reference = _required_field(fields, "reference")
         if published_reference != reference.reference:
@@ -894,6 +888,26 @@ def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
     if page < 1:
         _raise_parse("advanced result page")
     return _parse_search_page(body)
+
+
+async def _fetch_summary(
+    session: PortalSession,
+    locator: str,
+) -> EvidenceCapture:
+    for attempt in range(_SUMMARY_BODY_ATTEMPTS):
+        capture = await session.fetch(
+            _detail_request(locator, "summary", RequestIntent.DETAIL)
+        )
+        soup = BeautifulSoup(capture.body, "html.parser")
+        if soup.select("#simpleDetailsTable"):
+            return capture
+        if attempt + 1 < _SUMMARY_BODY_ATTEMPTS:
+            continue
+        message = capture.body.decode(errors="replace").casefold()
+        if "unable to perform this task" in message and "remote exception" in message:
+            raise LeedsDetailUnavailableError
+        raise LeedsDetailUnverifiedError
+    raise LeedsDetailUnverifiedError
 
 
 def _parse_summary(body: bytes) -> dict[str, str]:
