@@ -777,3 +777,68 @@ COMMAND: git status --short
 EXIT STATUS: 0
 OUTPUT:
 <empty>
+
+Post-5d643ac verification record (summarized successful rerun)
+Recorded complete: 2026-09-16T15:52:32Z
+
+This section records every command and its material result, not a byte-for-byte
+terminal transcript. It supersedes the prior receipt identifiers; the earlier
+complete transcript remains unchanged above.
+
+COMMAND: PYTHONPATH=scripts .venv/bin/python -c '<run the same receipt-generation program recorded in full in the preceding block>'
+EXIT STATUS: 0
+OUTPUT:
+{"checks_ok": 25, "created_at": "2026-09-16T15:51:02.031236+00:00", "final_resume_attempt": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "provenance": {"code_revision": "5d643acd1841f053e19f9718057029a9946a2ca3", "immediate_follow_up": {"cost": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "finished_at": "2026-09-16T15:50:53.672860Z", "run_id": "f0ed2dcd-197f-42d2-948f-6388a2be6b7d", "started_at": "2026-09-16T15:50:53.638680Z"}, "publication": {"cost": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "finished_at": "2026-09-16T15:50:44.394705Z", "run_id": "113a08ed-5b40-4e0c-bc4c-2d19c3a192c0", "started_at": "2026-09-16T15:50:44.313408Z"}}, "rerun": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "run_count": 23}
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv lock --check
+EXIT STATUS: 0
+OUTPUT: Resolved 73 packages in 3ms
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --output-format=github .
+EXIT STATUS: 0
+OUTPUT: <empty>
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff format --check .
+EXIT STATUS: 0
+OUTPUT: 119 files already formatted
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen mypy
+EXIT STATUS: 0
+OUTPUT: Success: no issues found in 80 source files
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --no-cache --extend-select RUF100 .
+EXIT STATUS: 0
+OUTPUT: All checks passed!
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen pytest
+EXIT STATUS: 0
+OUTPUT: 404 passed in 22.50s; 6,357 statements and 1,616 branches at 100 percent coverage
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv build --no-sources
+EXIT STATUS: 0
+OUTPUT: source distribution and wheel built successfully
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --all-files
+EXIT STATUS: 0
+OUTPUT: all configured hooks passed
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --hook-stage pre-push --all-files
+EXIT STATUS: 0
+OUTPUT: all configured hooks, including pytest, passed
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python scripts/verify_pilot.py
+EXIT STATUS: 0
+OUTPUT: <empty>
+
+COMMAND: PYTHONPATH=scripts .venv/bin/python -c '<run the same typed receipt and SQLite assertion program recorded in full in the preceding block>'
+EXIT STATUS: 0
+OUTPUT:
+{"checks_ok": 25, "code_revision": "5d643acd1841f053e19f9718057029a9946a2ca3", "created_at": "2026-09-16T15:51:02.031236+00:00", "immediate_follow_up_run_id": "f0ed2dcd-197f-42d2-948f-6388a2be6b7d", "last_source_success_at": "2026-09-16T12:06:26.180505+00:00", "memberships": 736, "publication_run_id": "113a08ed-5b40-4e0c-bc4c-2d19c3a192c0", "unique_portal_records": 648}
+
+COMMAND: git diff --check
+EXIT STATUS: 0
+OUTPUT: <empty>
+
+COMMAND: git status --short
+EXIT STATUS: 0
+OUTPUT: <empty>
