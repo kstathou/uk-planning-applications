@@ -51,6 +51,21 @@ _MINIMUM_LABELLED_CELLS = 2
 _OPEN_HISTORY_START = date(1948, 1, 1)
 _OPEN_ANNUAL_END = date(2023, 12, 31)
 _DECEMBER = 12
+_RESULT_CAP = 200
+_QUERY_FIELDS = (
+    "reference",
+    "location",
+    "OcellaPlanningSearch.postcode",
+    "area",
+    "applicant",
+    "agent",
+    "undecided",
+    "type",
+    "receivedFrom",
+    "receivedTo",
+    "decidedFrom",
+    "decidedTo",
+)
 
 
 class ArunDiscoveryScope(FrozenModel):
@@ -166,6 +181,21 @@ class ArunApplicationV1(FrozenModel):
     case_officer: str | None = None
     applicant: str | None = None
     agent: str | None = None
+
+
+class ArunSearchForm(FrozenModel):
+    """Validated portal-owned search form."""
+
+    action: HttpUrl
+    fields: tuple[FormField, ...]
+    submit: FormField
+
+
+class ArunShowAllForm(FrozenModel):
+    """Validated result-owned expansion form."""
+
+    action: HttpUrl
+    fields: tuple[FormField, ...]
 
 
 class ArunAdapter:
@@ -435,15 +465,41 @@ class ArunAdapter:
 class _SearchResults(FrozenModel):
     references: tuple[SourceReference, ...]
     reported: int
-    has_show_all: bool
+    show_all_form: ArunShowAllForm | None = None
+
+    @property
+    def has_show_all(self) -> bool:
+        """Report whether the portal supplied an exact expansion form."""
+        return self.show_all_form is not None
 
 
-def _parse_search_form(body: bytes) -> Tag:
+def _parse_search_form(body: bytes) -> ArunSearchForm:
     soup = BeautifulSoup(body, "html.parser")
-    form = soup.select_one('form[action*="planningSearch"]') or soup.select_one("form")
-    if not isinstance(form, Tag):
+    forms = tuple(soup.select('form[action="planningSearch"]'))
+    if len(forms) != 1 or not isinstance(forms[0], Tag):
         _raise_parse("planning search form")
-    return form
+    form = forms[0]
+    if str(form.get("method", "")).casefold() != "post":
+        _raise_parse("planning search form method")
+    fields = _form_fields(form)
+    names = tuple(field.name for field in fields)
+    if any(names.count(name) != 1 for name in _QUERY_FIELDS):
+        _raise_parse("planning search controls")
+    submit_controls = tuple(
+        FormField(
+            name=str(control.get("name", "")),
+            value=str(control.get("value", "")),
+        )
+        for control in form.select('input[type="submit"]')
+        if control.get("name") == "action" and control.get("value") == "Search"
+    )
+    if len(submit_controls) != 1:
+        _raise_parse("planning search submit")
+    return ArunSearchForm(
+        action=HttpUrl(urljoin(f"{BASE_URL}/", str(form.get("action")))),
+        fields=fields,
+        submit=submit_controls[0],
+    )
 
 
 def _form_fields(form: Tag) -> tuple[FormField, ...]:
@@ -475,9 +531,7 @@ def _form_fields(form: Tag) -> tuple[FormField, ...]:
     return tuple(fields)
 
 
-def _search_request(
-    form: Tag, window: DiscoveryWindow, *, show_all: bool
-) -> PortalRequest:
+def _query_values(query: ArunQuery) -> dict[str, str]:
     values = {
         "reference": "",
         "location": "",
@@ -487,33 +541,104 @@ def _search_request(
         "agent": "",
         "undecided": "",
         "type": "",
-        "receivedFrom": window.start.strftime("%d-%m-%y"),
-        "receivedTo": window.end.strftime("%d-%m-%y"),
+        "receivedFrom": "",
+        "receivedTo": "",
         "decidedFrom": "",
         "decidedTo": "",
     }
-    if show_all:
-        values["showall"] = "Show all results"
-    existing = _form_fields(form)
-    names = {field.name for field in existing}
-    fields = tuple(
-        FormField(name=field.name, value=values.get(field.name, field.value))
-        for field in existing
-    ) + tuple(
-        FormField(name=name, value=value)
-        for name, value in values.items()
-        if name not in names
+    if isinstance(query, ArunDecidedQuery):
+        values["decidedFrom"] = query.start.strftime("%d-%m-%y")
+        values["decidedTo"] = query.end.strftime("%d-%m-%y")
+    else:
+        values["receivedFrom"] = query.start.strftime("%d-%m-%y")
+        values["receivedTo"] = query.end.strftime("%d-%m-%y")
+    if isinstance(query, ArunOpenReceivedQuery):
+        values["undecided"] = "Y"
+    return values
+
+
+def _initial_search_request(
+    form: ArunSearchForm,
+    query: ArunQuery,
+) -> PortalRequest:
+    values = _query_values(query)
+    fields = (
+        *(
+            FormField(name=field.name, value=values.get(field.name, field.value))
+            for field in form.fields
+        ),
+        form.submit,
     )
     return PortalRequest(
-        url=HttpUrl(urljoin(f"{BASE_URL}/", str(form.get("action", _SEARCH_URL)))),
+        url=form.action,
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
         form=fields,
     )
 
 
+def _show_all_request(
+    form: ArunShowAllForm | None,
+    query: ArunQuery,
+) -> PortalRequest:
+    if form is None:
+        raise ArunQueryReplayError
+    expected = _query_values(query)
+    actual: dict[str, str] = {}
+    for field in form.fields:
+        if field.name in actual:
+            raise ArunQueryReplayError
+        actual[field.name] = field.value
+    if any(actual.get(name) != value for name, value in expected.items()):
+        raise ArunQueryReplayError
+    if actual.get("action") != "Search" or actual.get("showall") != "showall":
+        raise ArunQueryReplayError
+    return PortalRequest(
+        url=form.action,
+        intent=RequestIntent.SEARCH,
+        method=RequestMethod.POST,
+        form=form.fields,
+    )
+
+
+def _search_request(
+    form: ArunSearchForm,
+    window: DiscoveryWindow,
+    *,
+    show_all: bool,
+) -> PortalRequest:
+    query = ArunReceivedQuery(start=window.start, end=window.end)
+    if show_all:
+        fields = (
+            FormField(name="action", value="Search"),
+            FormField(name="showall", value="showall"),
+            *tuple(
+                FormField(name=name, value=value)
+                for name, value in _query_values(query).items()
+            ),
+        )
+        return PortalRequest(
+            url=form.action,
+            intent=RequestIntent.SEARCH,
+            method=RequestMethod.POST,
+            form=fields,
+        )
+    return _initial_search_request(form, query)
+
+
 def _parse_search_results(body: bytes) -> _SearchResults:
     soup = BeautifulSoup(body, "html.parser")
+    found = _parse_result_references(soup)
+    text = soup.get_text(" ", strip=True)
+    reported = _parse_reported_count(soup, text, len(found))
+    return _SearchResults(
+        references=found,
+        reported=reported,
+        show_all_form=_parse_show_all_form(soup),
+    )
+
+
+def _parse_result_references(soup: BeautifulSoup) -> tuple[SourceReference, ...]:
     found = []
     seen = set()
     for link in soup.select('a[href*="planningDetails"]'):
@@ -531,26 +656,63 @@ def _parse_search_results(body: bytes) -> _SearchResults:
                     locator=urljoin(f"{BASE_URL}/", href),
                 )
             )
-    text = soup.get_text(" ", strip=True)
+    return tuple(found)
+
+
+def _parse_reported_count(
+    soup: BeautifulSoup,
+    text: str,
+    reference_count: int,
+) -> int:
+    if "retrieve more than 200 results" in text.casefold():
+        raise ArunResultCapError
     count_element = soup.select_one("[data-result-count]")
+    partial_match = re.search(
+        r"First\s+\d+\s+results\s+shown,\s+there\s+are\s+(\d+)\s+in\s+total",
+        text,
+        re.IGNORECASE,
+    )
     match = re.search(r"\b(\d+)\s+(?:records?|results?)\b", text, re.IGNORECASE)
     if isinstance(count_element, Tag):
         reported = int(str(count_element.get("data-result-count")))
+    elif partial_match is not None:
+        reported = int(partial_match.group(1))
     elif match is not None:
         reported = int(match.group(1))
-    elif "no records" in text.casefold() or "no results" in text.casefold():
+    elif (
+        "no applications found for entered search criteria" in text.casefold()
+        or "no records" in text.casefold()
+        or "no results" in text.casefold()
+    ):
         reported = 0
+    elif reference_count:
+        reported = reference_count
     else:
         _raise_parse("reported result count")
-    controls = (*soup.select("input, button"), *soup.select("button, a"))
-    show_all = any(
-        "show all"
-        in f"{item.get('value', '')} {item.get_text(' ', strip=True)}".casefold()
-        for item in controls
+    if reported >= _RESULT_CAP:
+        raise ArunResultCapError
+    return reported
+
+
+def _parse_show_all_form(soup: BeautifulSoup) -> ArunShowAllForm | None:
+    show_all_forms = tuple(
+        form
+        for form in soup.select("form")
+        if isinstance(form, Tag)
+        and form.select_one('input[name="showall"][value="showall"]') is not None
     )
-    return _SearchResults(
-        references=tuple(found), reported=reported, has_show_all=show_all
-    )
+    if len(show_all_forms) > 1:
+        _raise_parse("show all form")
+    show_all_form = None
+    if show_all_forms:
+        form = show_all_forms[0]
+        if str(form.get("method", "")).casefold() != "post":
+            _raise_parse("show all form method")
+        show_all_form = ArunShowAllForm(
+            action=HttpUrl(urljoin(f"{BASE_URL}/", str(form.get("action", "")))),
+            fields=_form_fields(form),
+        )
+    return show_all_form
 
 
 def _parse_labelled_fields(body: bytes) -> dict[str, str]:
@@ -645,6 +807,22 @@ class ArunCountMismatchError(ValueError):
     def __init__(self, expected: int, actual: int) -> None:
         """Report only counts."""
         super().__init__(f"Arun reported {expected} results but exposed {actual}")
+
+
+class ArunResultCapError(ValueError):
+    """One query reached the portal's non-enumerable result cap."""
+
+    def __init__(self) -> None:
+        """Expose a stable boundary failure without response content."""
+        super().__init__("Arun query reached the 200-result portal cap")
+
+
+class ArunQueryReplayError(ValueError):
+    """A result-owned Show All form does not match its active query."""
+
+    def __init__(self) -> None:
+        """Expose a stable replay failure without query content."""
+        super().__init__("Arun Show All form does not match the active query")
 
 
 class ArunCheckpointError(ValueError):

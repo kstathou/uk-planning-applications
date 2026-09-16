@@ -6,6 +6,8 @@
 from datetime import date, timedelta
 from itertools import pairwise
 
+import pytest
+
 import yimby.authorities.arun.adapter as arun
 from yimby.transport import RequestMethod
 
@@ -16,11 +18,13 @@ def _search_form() -> bytes:
       <input name="reference" value="stale">
       <input name="location" value="stale">
       <input name="OcellaPlanningSearch.postcode" value="stale">
-      <select name="area"><option value=""></option><option value="BR">BOGNOR REGIS</option></select>
+      <select name="area"><option value=""></option>
+        <option value="BR">BOGNOR REGIS</option></select>
       <input name="applicant" value="stale">
       <input name="agent" value="stale">
       <input type="checkbox" name="undecided" value="Y">
-      <select name="type"><option value=""></option><option value="PL">Planning Application</option></select>
+      <select name="type"><option value=""></option>
+        <option value="PL">Planning Application</option></select>
       <input name="receivedFrom" value="">
       <input name="receivedTo" value="">
       <input name="decidedFrom" value="">
@@ -34,7 +38,8 @@ def _search_form() -> bytes:
 def _partial_results(query_fields: str) -> bytes:
     return f"""
     <table><tr><th>Reference</th></tr>
-      <tr><td><a href="planningDetails?reference=BR/1/26/PL&amp;from=planningSearch">BR/1/26/PL</a></td></tr>
+      <tr><td><a href="planningDetails?reference=BR/1/26/PL&amp;from=planningSearch">
+        BR/1/26/PL</a></td></tr>
     </table>
     <strong>First 20 results shown, there are 2 in total</strong>
     <form method="post" action="planningSearch">
@@ -160,23 +165,15 @@ def test_arun_show_all_form_must_exactly_replay_the_active_query() -> None:
 
     wrong = fields.replace("18-08-26", "19-08-26")
     wrong_results = arun._parse_search_results(_partial_results(wrong))
-    try:
+    with pytest.raises(arun.ArunQueryReplayError):
         arun._show_all_request(wrong_results.show_all_form, query)
-    except arun.ArunQueryReplayError:
-        pass
-    else:
-        raise AssertionError("mismatched Show All query was accepted")
 
 
 def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
-    try:
+    with pytest.raises(arun.ArunResultCapError):
         arun._parse_search_results(
             b"Entered search criteria will retrieve more than 200 results"
         )
-    except arun.ArunResultCapError:
-        pass
-    else:
-        raise AssertionError("portal result cap was accepted")
 
     empty = arun._parse_search_results(
         b"No applications found for entered search criteria"
