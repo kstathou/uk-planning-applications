@@ -1,53 +1,159 @@
-Arun live qualification verification
-Date: 2026-09-16
-Qualification directory: .yimby/qualification-arun-2026-09-16
-Receipt: arun-qualification-v2.json
+Arun live qualification: final post-review verification transcript
+Working directory: /Users/kostasutil/.codex/worktrees/5291/uk-planning-applications
+Output below is the complete combined stdout/stderr returned by each command.
 
-Receipt and store
-PASS  Pydantic ArunQualificationReceiptV2 validation
-      schema=2 authority=arun applications=648 discovered_references=648 queries=60
-PASS  Receipt checks: 21/21
-PASS  Exact reference sets: discovered=648 retained_native=648 applications=648
-PASS  Evidence: search=73 application=1296; every listed digest verified
-PASS  Bootstrap cost: 1373 requests, 11499963 transferred bytes, 0 attachment-body requests
-PASS  Immediate rerun: 0 requests, 0 transferred bytes, 0 attachment-body requests
-PASS  PRAGMA integrity_check: ok
-PASS  Current state: pending_retries=0 failed_sections=0 unmapped_records=0
-PASS  Registry state: discovery-only; 2026-09-23 and 2026-09-30 cycles pending
+[2026-09-16T12:48:25.179Z -> 2026-09-16T12:48:25.393Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv lock --check
+EXIT STATUS: 0
+OUTPUT:
+Resolved 73 packages in 6ms
 
-Persisted field coverage
-PASS  Native: received=648 validated=395 decision_by=396 comment_by=323
-      target_committee=38 decision=119 decision_status=648
-PASS  Normalised events: decision-due=396 comment-deadline=323 target-committee=38
+[2026-09-16T12:48:25.179Z -> 2026-09-16T12:48:25.629Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --output-format=github .
+EXIT STATUS: 0
+OUTPUT:
+<empty>
 
-Repository gates
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv lock --check
-      Resolved 73 packages
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --output-format=github .
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff format --check .
-      119 files already formatted
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen mypy
-      Success: no issues found in 80 source files
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen pytest
-      376 passed; 6182 statements and 1554 branches; 100% coverage
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv build --no-sources
-      Built source distribution and wheel
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --all-files
-      All configured commit-stage hooks passed
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --hook-stage pre-push --all-files
-      All configured pre-push hooks, including pytest, passed
-PASS  UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python scripts/verify_pilot.py
+[2026-09-16T12:48:25.179Z -> 2026-09-16T12:48:25.621Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff format --check .
+EXIT STATUS: 0
+OUTPUT:
+119 files already formatted
 
-Cleanup
-PASS  git diff --check
-PASS  Manual task-diff, worktree, TODO/FIXME/debug-marker, receipt, ignored-artifact,
-      and SQLite-integrity inspection; no cleanup finding
-      The two print calls in qualify_arun.py are intentional CLI output.
+[2026-09-16T12:48:25.179Z -> 2026-09-16T12:48:26.311Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen mypy
+EXIT STATUS: 0
+OUTPUT:
+Success: no issues found in 80 source files
 
-Notes
-- A targeted Arun-only pytest invocation passed all 38 selected tests but was not
-  accepted as a gate because repository-wide coverage enforcement correctly
-  requires the complete suite.
-- Two earlier fail-closed live attempts remain visible as ArunParseError
-  diagnostics. They did not publish a receipt and are included in the aggregate
-  request and byte costs above.
+[2026-09-16T12:48:01.814Z -> 2026-09-16T12:48:14.695Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen pytest
+EXIT STATUS: 0
+OUTPUT:
+============================= test session starts ==============================
+platform darwin -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/kostasutil/.codex/worktrees/5291/uk-planning-applications
+configfile: pyproject.toml
+testpaths: tests
+plugins: cov-7.1.0, anyio-4.15.1
+collected 383 items
+
+tests/test_arun_live.py .............................................    [ 11%]
+tests/test_barnet_live.py .........                                      [ 14%]
+tests/test_browser_authorities_live.py ....................              [ 19%]
+tests/test_cli.py ...                                                    [ 20%]
+tests/test_collection.py .........                                       [ 22%]
+tests/test_contract_live.py ............                                 [ 25%]
+tests/test_idox_live.py ................................................ [ 38%]
+........................................................................ [ 56%]
+........................................................................ [ 75%]
+..................                                                       [ 80%]
+tests/test_operations.py ..............                                  [ 84%]
+tests/test_pilot.py ................................                     [ 92%]
+tests/test_runtime.py .............................                      [100%]
+
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.13.15-final-0 _______________
+
+Name    Stmts   Miss Branch BrPart  Cover   Missing
+---------------------------------------------------
+TOTAL    6197      0   1556      0   100%
+
+70 files skipped due to complete coverage.
+Coverage XML written to file coverage.xml
+Required test coverage of 100% reached. Total coverage: 100.00%
+============================= 383 passed in 12.19s =============================
+
+[2026-09-16T12:48:25.179Z -> 2026-09-16T12:48:25.753Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv build --no-sources
+EXIT STATUS: 0
+OUTPUT:
+Building source distribution...
+Building wheel from source distribution...
+Successfully built dist/yimby-0.1.0.tar.gz
+Successfully built dist/yimby-0.1.0-py3-none-any.whl
+
+[2026-09-16T12:48:34.534Z -> 2026-09-16T12:48:36.376Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --all-files
+EXIT STATUS: 0
+OUTPUT:
+check for added large files..............................................Passed
+check python ast.........................................................Passed
+check for case conflicts.................................................Passed
+check json...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check toml...............................................................Passed
+check yaml...............................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+fix end of files.........................................................Passed
+mixed line ending........................................................Passed
+trim trailing whitespace.................................................Passed
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+
+[2026-09-16T12:48:41.542Z -> 2026-09-16T12:48:55.496Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --hook-stage pre-push --all-files
+EXIT STATUS: 0
+OUTPUT:
+check for added large files..............................................Passed
+check python ast.........................................................Passed
+check for case conflicts.................................................Passed
+check json...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check toml...............................................................Passed
+check yaml...............................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+fix end of files.........................................................Passed
+mixed line ending........................................................Passed
+trim trailing whitespace.................................................Passed
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+pytest...................................................................Passed
+
+[2026-09-16T12:48:25.179Z -> 2026-09-16T12:48:26.215Z]
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python scripts/verify_pilot.py
+EXIT STATUS: 0
+OUTPUT:
+<empty>
+
+[2026-09-16T12:49:15.997Z -> 2026-09-16T12:49:16.631Z]
+COMMAND: PYTHONPATH=scripts UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python -c "from pathlib import Path; import json; from qualify_arun import ArunQualificationReceiptV3; r=ArunQualificationReceiptV3.model_validate_json(Path('.yimby/qualification-arun-2026-09-16/arun-qualification-v3.json').read_text()); q=r.query_inventory; union=set().union(*(set(x.references) for x in q)); assert len(q)==60 and sum(len(x.references) for x in q)==736 and union==set(r.references.discovered)==set(r.references.retained_native)==set(r.references.applications) and all(len(x.references)==x.enumerated_count and (x.source_reported_count is None or x.source_reported_count==x.enumerated_count) for x in q) and all(c.ok for c in r.checks); print(json.dumps({'schema':r.schema_version,'queries':len(q),'memberships':sum(len(x.references) for x in q),'unique_references':len(union),'source_reported_queries':sum(x.source_reported_count is not None for x in q),'explicit_complete_queries':sum(x.source_reported_count is None for x in q),'checks_ok':sum(c.ok for c in r.checks),'request_count':r.costs.bootstrap_total.request_count,'transferred_bytes':r.costs.bootstrap_total.transferred_bytes,'rerun_requests':r.costs.rerun.request_count,'rerun_bytes':r.costs.rerun.transferred_bytes},sort_keys=True))"
+EXIT STATUS: 0
+OUTPUT:
+{"checks_ok": 21, "explicit_complete_queries": 32, "memberships": 736, "queries": 60, "request_count": 1373, "rerun_bytes": 0, "rerun_requests": 0, "schema": 3, "source_reported_queries": 28, "transferred_bytes": 11499963, "unique_references": 648}
+
+[2026-09-16T12:49:15.997Z -> 2026-09-16T12:49:16.423Z]
+COMMAND: sqlite3 -header -column .yimby/qualification-arun-2026-09-16/yimby.sqlite3 "PRAGMA integrity_check; SELECT count(*) AS native_rows, sum(json_extract(payload_json,'$.received_date') IS NOT NULL) AS received, sum(json_extract(payload_json,'$.validated_date') IS NOT NULL) AS validated, sum(json_extract(payload_json,'$.decision_by_date') IS NOT NULL) AS decision_by, sum(json_extract(payload_json,'$.comment_by_date') IS NOT NULL) AS comment_by, sum(json_extract(payload_json,'$.target_committee_date') IS NOT NULL) AS target_committee, sum(json_extract(payload_json,'$.decision_date') IS NOT NULL) AS decided, sum(json_extract(payload_json,'$.decision_status') IS NOT NULL) AS decision_status FROM native_versions; SELECT event_type,count(*) AS count FROM application_events GROUP BY event_type ORDER BY event_type; SELECT sv.normaliser_version,count(*) AS count FROM section_current sc JOIN semantic_versions sv ON sv.id=sc.version_id JOIN applications a ON a.id=sc.application_id WHERE a.authority_id='arun' AND sc.section='application' GROUP BY sv.normaliser_version; SELECT json_extract(sv.payload_json,'$.status') AS status,count(*) AS count FROM section_current sc JOIN semantic_versions sv ON sv.id=sc.version_id JOIN applications a ON a.id=sc.application_id WHERE a.authority_id='arun' AND sc.section='application' AND json_extract(sv.payload_json,'$.status') LIKE 'undecided-%' GROUP BY status; SELECT count(*) AS pending_retries FROM retry_queue WHERE authority_id='arun' AND status='pending';"
+EXIT STATUS: 0
+OUTPUT:
+integrity_check
+---------------
+ok
+native_rows  received  validated  decision_by  comment_by  target_committee  decided  decision_status
+-----------  --------  ---------  -----------  ----------  ----------------  -------  ---------------
+648          648       395        396          323         38                119      648
+event_type        count
+----------------  -----
+comment-deadline  323
+decision-due      396
+target-committee  38
+normaliser_version  count
+------------------  -----
+arun-v4             648
+status               count
+-------------------  -----
+undecided-(on-hold)  253
+pending_retries
+---------------
+0
+
+Prior attempts
+- 2026-09-16T12:45:47.324Z: pytest exposed three stale synthetic Arun result
+  fixtures after the parser was narrowed; 380 tests passed and three failed.
+- 2026-09-16T12:47:00.845Z: all 383 tests passed, but the coverage gate exposed
+  one untested explicit-cap branch, one invalid-empty-form branch, and one
+  duplicate-marker branch. Tests were added before the successful run above.

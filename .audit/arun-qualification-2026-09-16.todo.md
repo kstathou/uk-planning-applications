@@ -13,8 +13,8 @@
 - [x] Record the official portal evidence or the exact fail-closed blocker.
 - [x] Run the unique persisted live qualification and prove the zero-network immediate rerun.
 - [x] Update the authority documentation, pilot ledger, and audit trail.
-- [x] Run tests, coverage, lint, format, configured mypy, build, and repository verification gates after the review remediation.
-- [x] Apply the documented cleanup checks because the deslop skill is not installed.
+- [x] Run tests, coverage, lint, format, configured mypy, build, and repository verification gates after the second review remediation.
+- [ ] Apply the documented cleanup checks because the deslop skill is not installed.
 - [ ] Obtain a fresh independent review whose clean final result is exactly `NO COMMENTS`.
 
 ## Throughput checkpoint

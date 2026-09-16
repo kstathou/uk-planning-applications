@@ -96,7 +96,7 @@ def _registry(package: Any) -> AuthorityRegistry:
 
 def _arun_form() -> bytes:
     return b"""
-    <form action="planningSearch" method="post">
+    <form action="planningSearch" method="post" name="OcellaPlanningSearch">
       <input type="text" name="reference" value="old">
       <input type="text" name="location" value="old">
       <input type="text" name="OcellaPlanningSearch.postcode" value="old">
@@ -121,7 +121,8 @@ def _arun_results(
     fields: dict[str, str],
 ) -> bytes:
     rows = "".join(
-        f'<tr><td><a href="planningDetails?reference={reference.replace("/", "%2F")}&amp;from=planningSearch">{reference}</a></td></tr>'
+        f'<tr><td><a href="planningDetails?reference={reference.replace("/", "%2F")}&amp;from=planningSearch">{reference}</a></td>'
+        "<td>Site</td><td>Proposal</td><td>Undecided</td></tr>"
         for reference in references
     )
     controls = "".join(
@@ -129,7 +130,7 @@ def _arun_results(
         for name, value in fields.items()
         if name != "action"
     )
-    control = (
+    show_all_control = (
         '<form method="post" action="planningSearch">'
         '<input type="hidden" name="action" value="Search">'
         '<input type="hidden" name="showall" value="showall">'
@@ -137,10 +138,32 @@ def _arun_results(
         if show_all
         else ""
     )
+    exact_control = (
+        '<form method="post" name="search" action="planningSearch">'
+        '<input type="submit" name="BackToSearch" value="Back to Search page">'
+        "</form>"
+        if not show_all and reported == len(references)
+        else ""
+    )
+    count = (
+        f"<strong>First 20 results shown, there are {reported} in total</strong>"
+        if show_all or reported != len(references)
+        else ""
+    )
     return (
-        f'<p data-result-count="{reported}">{reported} records</p>'
-        f"<table>{rows}</table>{control}"
+        f"{count}{exact_control}<table><tr><th>Reference</th><th>Location</th>"
+        f"<th>Proposal</th><th>Status</th></tr>{rows}</table>{show_all_control}"
     ).encode()
+
+
+def _arun_empty_results() -> bytes:
+    return _arun_form().replace(
+        b"</form>",
+        b'<strong><span style="color:maroon">'
+        b"No applications found for entered search criteria"
+        b"</span></strong></form>",
+        1,
+    )
 
 
 def _arun_detail(reference: str) -> bytes:
@@ -220,7 +243,7 @@ class _ArunMock:
                     show_all=self.first_show_all,
                     fields=fields,
                 )
-            return b"No applications found for entered search criteria"
+            return _arun_empty_results()
         if "planningDetails" in url:
             reference = parse_qs(urlsplit(url).query)["reference"][0]
             return _arun_detail("WRONG/1" if self.mismatch_detail else reference)
@@ -933,7 +956,7 @@ def test_arun_terminal_and_parser_boundaries() -> None:
             b'<a href="planningDetails?reference=A">A</a>'
             b'<a href="planningDetails?reference=A">A again</a><p>1 result</p>'
         )
-    assert arun._parse_search_results(b"<p>No results</p>").reported == 0
+    assert arun._parse_search_results(_arun_empty_results()).reported == 0
     with pytest.raises(arun.ArunParseError, match="reported result count"):
         arun._parse_search_results(b"<p>Unknown</p>")
     fields = arun._parse_labelled_fields(

@@ -41,7 +41,7 @@ requirement.
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
 As of 16 September 2026, Arun has completed a verified live bootstrap. Its
-schema-version-2 receipt reconciles 648 unique references and applications, 73
+schema-version-3 receipt reconciles 648 unique references and applications, 73
 search captures, 1,296 application captures, zero pending retries, zero failed
 current sections, zero unmapped records, and a zero-network-I/O immediate
 rerun. It remains discovery-only

@@ -36,14 +36,16 @@ are immutable in the versioned checkpoint. An interrupted active query is
 replayed before Show All so that a newly arrived first-page record is included
 without repeating completed partitions.
 
-The result parser reconciles the reported total with the exact enumerated
-references, rejects duplicates within a response, and de-duplicates overlaps
-across received, decided, and older-open searches by application reference.
-It accepts an uncounted result only when the official page contains exactly one
-result row with the expected headings and its source-owned `Back to Search page`
-control. It never manufactures a count from the number of links. All search
-form and result HTML used for the qualification is retained by digest, and the
-receipt reparses it against the exact per-query reference membership.
+The result parser reconciles a source-reported partial total with the exact
+expanded references, rejects duplicates within a response, and de-duplicates
+overlaps across received, decided, and older-open searches by application
+reference. Some complete portal responses publish no numeric total. Those are
+accepted only when the page has the exact four-column result table and its
+source-owned `Back to Search page` control; every row is enumerated, but the
+source-reported count remains null. It never labels a link count as a reported
+count. All search form and result HTML used for the qualification is retained
+by digest, and the receipt reparses it against the exact per-query reference
+membership.
 
 ## Application and document records
 
@@ -68,25 +70,31 @@ attachment was opened to infer comment text.
 
 The persisted qualification on 16 September 2026 used the inclusive window
 18 August through 16 September and the exact 60-query plan. It reconciled 89
-received rows, 118 decided rows, and 529 rows across the overlapping older-open
-partitions into 648 unique references. All 648 applications were materialised
+received rows, 118 decided rows, and 529 rows across the 58 non-overlapping
+older-open partitions into 648 unique references. The older-open population
+overlaps the received and decided populations. All 648 applications were materialised
 with two evidence captures each (detail and document index), for 1,296 verified
 content digests.
 
-The completed schema-version-2 qualification accounts for 1,373 official-page
+The completed schema-version-3 qualification accounts for 1,373 official-page
 requests and 11,499,963 transferred bytes across the whole bootstrap history.
 That total deliberately includes two fail-closed development attempts whose
 stable `ArunParseError` diagnostics remain in SQLite; neither attempt published
-an incomplete receipt. The final resume attempt made 963 requests and
-transferred 8,536,426 bytes. The completed snapshot has zero pending retries,
-failed current sections, unmapped records, and attachment-body requests.
+an incomplete receipt. The network-bearing completion resume made 963 requests
+and transferred 8,536,426 bytes. After a zero-transport offline normaliser
+rebuild, the schema-version-3 receipt publication pass and its immediate rerun
+each made zero requests and transferred zero bytes. The completed snapshot has
+zero pending retries, failed current sections, unmapped records, and
+attachment-body requests.
 
 The 648 native rows retain 648 received dates, 395 validated dates, 396
 decision-by dates, 323 comment-by dates, 38 target-committee dates, 119 decision
 dates, and 648 native decision statuses. Decision-by, comment-by, and
 target-committee values are also normalised as 396 `decision-due`, 323
 `comment-deadline`, and 38 `target-committee` events with detail-page
-provenance. The receipt records 73 search captures and 1,296 application
+provenance. All 648 current application sections use the `arun-v4` normaliser;
+the Unicode whitespace in the 253 `Undecided (On Hold)` source statuses is
+collapsed to the stable `undecided-(on-hold)` value. The receipt records 73 search captures and 1,296 application
 captures with their exact digests. It reparses every result capture, checks its
 exact query membership, and also verifies SQLite
 integrity, evidence paths, terminal checkpoint state, exact reference-set
@@ -95,12 +103,13 @@ discovery-only registry status before publication. The immediate terminal rerun
 made zero requests, transferred zero bytes, requested zero attachment bodies,
 and produced the same durable snapshot and semantic fingerprint.
 
-The local receipt is
-`.yimby/qualification-arun-2026-09-16/arun-qualification-v2.json`. It contains
-the typed full query inventory, exact per-query evidence and membership, exact
-durable reference sets, counts, separate search and application evidence digest
-inventories, full-run and final-resume costs, check results, run outcomes, and
-pending weekly-cycle dates. The superseded pre-v2 snapshot is preserved at
+The canonical local receipt is
+`.yimby/qualification-arun-2026-09-16/arun-qualification-v3.json`. It contains
+the typed full query inventory, the optional source-reported count, exact
+enumerated count and references for every query, exact durable reference sets,
+separate search and application evidence digest inventories, Arun-scoped costs
+and run outcomes, check results, and pending weekly-cycle dates. The superseded
+v2 receipt remains beside it for audit history, and the pre-v2 snapshot is preserved at
 `.yimby/qualification-arun-2026-09-16-pre-v2` for diagnosis only.
 
 ## Remaining operational limit

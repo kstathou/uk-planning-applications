@@ -917,6 +917,7 @@ def _parse_search_results(
     if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
         _raise_parse("result pagination")
     found = _parse_result_references(soup)
+    show_all_form = _parse_show_all_form(soup)
     text = soup.get_text(" ", strip=True)
     reported = _parse_reported_count(
         soup,
@@ -926,7 +927,7 @@ def _parse_search_results(
     return _SearchResults(
         references=found,
         reported=reported,
-        show_all_form=_parse_show_all_form(soup),
+        show_all_form=show_all_form,
     )
 
 

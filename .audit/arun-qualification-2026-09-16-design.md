@@ -21,10 +21,10 @@ This produces 60 ordered queries. The 58 older-open date partitions are
 mutually non-overlapping; the received, decided, and older-open populations
 intentionally overlap and are reconciled by exact application reference. The
 official portal returns an explicit empty result for the 1948-1999 open
-partition. Every later partition must expose fewer than 200 results and exact
-agreement between its reported and enumerated reference sets. A cap, unexpected
-pagination, missing or query-changing Show All form, or count disagreement
-fails closed.
+partition. Every later partition must expose fewer than 200 rows and, where the
+source reports a total, exact agreement between that total and the enumerated
+reference set. A cap, unexpected pagination, missing or query-changing Show All
+form, or count disagreement fails closed.
 
 Parish partitioning was rejected. The form exposes 34 official area values, but
 the portal does not state that every application has one of those values. Date
@@ -47,9 +47,9 @@ repeats the portal request; a crash after it resumes at the committed state.
 
 The canonical plan is also the source for checkpoint validation and the receipt
 query inventory. Completed query summaries retain the query key, exact
-reference membership, reported count, enumerated count, and initial and
-expanded result-evidence digests. The final receipt retains the full typed
-inventory and all exact durable reference sets rather than only aggregate
+reference membership, optional source-reported count, enumerated count, and
+initial and expanded result-evidence digests. The final receipt retains the full
+typed inventory and all exact durable reference sets rather than only aggregate
 counts or a digest.
 
 ## Portal form boundary
@@ -61,12 +61,13 @@ control. A Show All request comes only from the result-owned form and preserves
 its exact query fields and `showall=showall` control.
 
 Result parsing accepts only references from exact same-host planning-result
-links. It recognizes the portal's explicit empty message, its `First 20 results
-shown, there are N in total` count, and the source-owned single-result page
-whose exact result table is paired with its `Back to Search page` control. It
-does not infer a total from link count. A query is complete only when an
-explicit source-owned completion marker exists and the number of unique
-references equals the reported total. Counts at or above 200 fail closed.
+links. It recognizes the portal's explicit empty structure, its `First 20
+results shown, there are N in total` partial count, and the source-owned complete
+page whose exact four-column result table is paired with its `Back to Search
+page` control. A complete page may contain multiple rows and no numeric total;
+the receipt keeps its source-reported count null while retaining the exact
+enumerated membership. It never manufactures a reported count from link count.
+Counts or enumerations at or above 200 fail closed.
 
 ## Application and document boundary
 
@@ -85,7 +86,7 @@ the official detail route does not expose a bounded text collection contract.
 ## Qualification receipt
 
 The command writes only after all checks pass and replaces its typed,
-schema-version-2 receipt atomically. The receipt proves:
+schema-version-3 receipt atomically. The receipt proves:
 
 - the exact inclusive scope and exact 60-query inventory;
 - a terminal checkpoint whose seen-reference set equals the durable discovery
@@ -111,7 +112,7 @@ Two weekly refresh targets remain explicitly pending. The registry stays
 ## Test seams
 
 Tests cover canonical plan construction and scope clipping, exact form payloads,
-Show All replay, explicit single-result completion, count/cap failure,
+Show All replay, explicit multi-row completion, count/cap failure,
 mid-query resume, terminal zero-network-I/O behavior, exact same-host routing,
 reference identity, document metadata without attachment fetches, receipt set
 agreement, application and search-evidence tampering, pending cycles, atomic

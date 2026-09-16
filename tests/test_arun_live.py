@@ -433,10 +433,18 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         arun._parse_search_results(
             b"Entered search criteria will retrieve more than 200 results"
         )
+    with pytest.raises(arun.ArunResultCapError):
+        arun._parse_search_results(
+            _complete_results(tuple(f"REF/{index}" for index in range(200)))
+        )
 
     empty = arun._parse_search_results(_empty_results())
     assert empty.reported == 0
     assert empty.references == ()
+    with pytest.raises(arun.ArunParseError, match="reported result count"):
+        arun._parse_search_results(
+            _empty_results().replace(b'name="receivedTo"', b'name="wrong"')
+        )
 
     duplicate = (
         b'<table><tr><td><a href="planningDetails?reference=A">A</a></td></tr>'
@@ -451,6 +459,11 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         )
     with pytest.raises(arun.ArunParseError, match="reported result count"):
         arun._parse_search_results(b"The archive contains 7 records")
+    with pytest.raises(arun.ArunParseError, match="reported result count"):
+        arun._parse_search_results(
+            b"<strong>First 20 results shown, there are 2 in total</strong>"
+            b"<strong>First 20 results shown, there are 2 in total</strong>"
+        )
     with pytest.raises(arun.ArunParseError, match="reported result count"):
         arun._parse_search_results(
             b"<div>No records are deleted</div>"
