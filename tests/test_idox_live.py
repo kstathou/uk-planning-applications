@@ -26,6 +26,7 @@ from yimby.domain import (
     DurableDiscoveryBatch,
     SourceId,
     SourceReference,
+    StoredCheckpoint,
 )
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
@@ -42,6 +43,11 @@ if TYPE_CHECKING:
 WEEK = DiscoveryWindow(
     start=date(2026, 9, 14),
     end=date(2026, 9, 20),
+    include_open=False,
+)
+LATER_WEEK = DiscoveryWindow(
+    start=date(2026, 9, 21),
+    end=date(2026, 9, 27),
     include_open=False,
 )
 
@@ -328,6 +334,7 @@ class _IdoxMock:
         showing_counts: bool = False,
         validated_showing_markers: tuple[str, ...] | None = None,
         validated_legacy_count: str | None = None,
+        expected_week: str = "14/09/2026",
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -345,6 +352,7 @@ class _IdoxMock:
         self.showing_counts = showing_counts
         self.validated_showing_markers = validated_showing_markers
         self.validated_legacy_count = validated_legacy_count
+        self.expected_week = expected_week
         self.current_date_type = ""
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
@@ -366,7 +374,7 @@ class _IdoxMock:
                 ("_csrf", "sanitised-token"),
                 ("searchCriteria.parish", ""),
                 ("searchCriteria.ward", ""),
-                ("week", "14/09/2026"),
+                ("week", self.expected_week),
                 ("dateType", dict(fields)["dateType"]),
             )
             assert fields[5][0] == "searchType"
@@ -920,6 +928,126 @@ def test_leeds_detail_boundary_preserves_remote_and_unverified_failures() -> Non
                 reference.model_copy(update={"locator": None}),
             )
         await missing_session.aclose()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+def test_authority_completed_checkpoint_is_bound_to_live_window(
+    case: _Case,
+) -> None:
+    """A completed window cannot suppress discovery for a later window."""
+    package = pilot_registry().get(case.authority_id)
+
+    async def exercise() -> None:
+        initial_session = _session(_IdoxMock(case))
+        initial = [
+            batch async for batch in package.discover(initial_session, WEEK, None)
+        ]
+        await initial_session.aclose()
+        checkpoint = initial[-1].next_checkpoint
+        assert initial[-1].complete
+
+        repeated_session = _session(_IdoxMock(case))
+        repeated = [
+            batch
+            async for batch in package.discover(repeated_session, WEEK, checkpoint)
+        ]
+        assert repeated_session.requested_urls == ()
+        assert repeated == [
+            DurableDiscoveryBatch(
+                references=(),
+                next_checkpoint=checkpoint,
+                complete=True,
+            )
+        ]
+        await repeated_session.aclose()
+
+        later_mock = _IdoxMock(case, expected_week="21/09/2026")
+        later_session = _session(later_mock)
+        later = [
+            batch
+            async for batch in package.discover(
+                later_session,
+                LATER_WEEK,
+                checkpoint,
+            )
+        ]
+        await later_session.aclose()
+        assert [
+            reference.reference for batch in later for reference in batch.references
+        ] == list(case.references)
+        assert [
+            dict(fields)["week"]
+            for method, path, fields in later_mock.requests
+            if method == "POST" and path.endswith("/weeklyListResults.do")
+        ] == ["21/09/2026", "21/09/2026"]
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+def test_authority_legacy_unscoped_live_checkpoint_restarts(case: _Case) -> None:
+    """Legacy live completion cannot be reused for an unknown window."""
+    package = pilot_registry().get(case.authority_id)
+    checkpoint_type = _member(case, "CheckpointV1")
+    legacy = StoredCheckpoint(
+        schema_version=1,
+        payload_json=checkpoint_type(
+            result_page="live",
+            live_complete=True,
+        ).model_dump_json(),
+    )
+
+    async def exercise() -> None:
+        mock = _IdoxMock(case)
+        session = _session(mock)
+        batches = [batch async for batch in package.discover(session, WEEK, legacy)]
+        await session.aclose()
+        assert [
+            reference.reference for batch in batches for reference in batch.references
+        ] == list(case.references)
+        assert mock.requests
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+def test_authority_stale_active_query_does_not_cross_live_window(
+    case: _Case,
+) -> None:
+    """Partial progress from another window is discarded before validation."""
+    package = pilot_registry().get(case.authority_id)
+
+    async def exercise() -> None:
+        initial_session = _session(_IdoxMock(case))
+        initial = [
+            batch async for batch in package.discover(initial_session, WEEK, None)
+        ]
+        await initial_session.aclose()
+        payload = json.loads(initial[-1].next_checkpoint.payload_json)
+        payload.update(
+            {
+                "active_query": "14/09/2026|DC_Validated",
+                "live_complete": False,
+                "next_page": 2,
+                "query_row_count": 2,
+                "seen_references": [case.references[0]],
+            }
+        )
+        stale = StoredCheckpoint(
+            schema_version=1,
+            payload_json=json.dumps(payload, separators=(",", ":")),
+        )
+
+        later_session = _session(_IdoxMock(case, expected_week="21/09/2026"))
+        later = [
+            batch async for batch in package.discover(later_session, LATER_WEEK, stale)
+        ]
+        await later_session.aclose()
+        assert [
+            reference.reference for batch in later for reference in batch.references
+        ] == list(case.references)
 
     asyncio.run(exercise())
 
