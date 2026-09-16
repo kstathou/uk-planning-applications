@@ -302,6 +302,21 @@ def test_opdc_live_discovery_exhausts_exact_full_array_queries() -> None:
         [("15/0004/FULOPDC", "4")],
     ]
     assert [batch.complete for batch in batches] == [False, False, True]
+    assert [batch.evidence_key for batch in batches] == [
+        "registered-window",
+        "determined-window",
+        "registered-open",
+    ]
+    assert [batch.evidence_page for batch in batches] == [1, 1, 1]
+    assert [
+        (
+            str(batch.evidence[0].url),
+            str(batch.evidence[0].request_url),
+            batch.evidence[0].request_method,
+            batch.evidence[0].request_form,
+        )
+        for batch in batches
+    ] == [(url, url, "GET", ()) for url in _query_urls()]
     final = batches[-1].next_checkpoint
     assert final.live_complete is True
     assert final.completed_queries == (
@@ -610,6 +625,8 @@ def test_opdc_live_detail_retains_metadata_comments_and_three_evidence_captures(
     assert normalised.status == "decision-issued"
     assert normalised.documents[0].title == "Committee report"
     assert str(normalised.documents[0].url) == document_url
+    assert normalised.documents[0].category == "Report"
+    assert normalised.documents[0].published_date == date(2024, 1, 30)
     assert normalised.comments[0].text == "I support the additional homes."
     assert normalised.metadata.aliases == ("PP-11999999",)
     assert normalised.metadata.application_type == "Full planning application"

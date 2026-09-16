@@ -32,6 +32,7 @@ from yimby.domain import (
     Completeness,
     CompleteSection,
     DiscoveryBatch,
+    DiscoveryEvidenceCapture,
     DiscoveryWindow,
     DocumentRecord,
     EvidenceCapture,
@@ -380,13 +381,26 @@ class OpdcAdapter:
             return
         inventory = _query_inventory(scope)
         for query in inventory[len(progress.completed_queries) :]:
-            capture = await session.fetch(_search_request(query, scope))
+            request = _search_request(query, scope)
+            capture = await session.fetch(request)
             identities = _parse_search(capture.body)
             progress, fresh = _advance(progress, query, identities)
             yield DiscoveryBatch(
                 references=fresh,
                 next_checkpoint=progress,
                 complete=progress.live_complete,
+                evidence=(
+                    DiscoveryEvidenceCapture(
+                        capture=capture,
+                        request_url=request.url,
+                        request_method=request.method.value,
+                        request_form=tuple(
+                            (field.name, field.value) for field in request.form
+                        ),
+                    ),
+                ),
+                evidence_key=query.value,
+                evidence_page=1,
             )
 
     async def fetch(
@@ -525,7 +539,12 @@ class OpdcAdapter:
             proposal=payload.development_description,
             status=payload.workflow_status.casefold().replace(" ", "-"),
             documents=tuple(
-                DocumentRecord(title=document.title, url=document.url)
+                DocumentRecord(
+                    title=document.title,
+                    url=document.url,
+                    category=document.media_description,
+                    published_date=document.received_date,
+                )
                 for document in payload.documents
             ),
             comments=tuple(
@@ -537,7 +556,7 @@ class OpdcAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="opdc-v2",
+            normaliser_version="opdc-v3",
             metadata=ApplicationMetadata(
                 aliases=payload.alternative_references,
                 application_type=payload.application_type,
