@@ -122,11 +122,13 @@ uv run python scripts/export_barnet_blocker.py \
   --confirm-official-http-429
 ```
 
-The strict schema checks the dedicated Barnet target, failed run, checkpoint,
-aggregate counts, missing receipt, SQLite integrity, and every retained
-evidence digest. Its output deliberately omits application identities, session
-material, and source bodies. The reviewed 16 September snapshot is committed
-at `docs/evidence/barnet-qualification-blocker-2026-09-16.json`.
+The strict schema checks the dedicated Barnet target, failed run, open-scope
+incomplete checkpoint, absence of qualification lineage and receipt, aggregate
+counts, SQLite integrity, and every retained evidence digest. Expected export
+failures emit only a fixed sanitized error code. Output deliberately omits
+application identities, session material, and source bodies. The reviewed 16
+September snapshot is committed at
+`docs/evidence/barnet-qualification-blocker-2026-09-16.json`.
 
 Requalifying an already terminal target with zero live requests preserves the
 original receipt timestamp and the two follow-up due dates. The same anchor is
@@ -141,6 +143,12 @@ back from a present invalid lineage to the receipt, and timestamps are decoded
 as strict ISO datetimes rather than permissive numeric Unix values. A terminal
 first-bootstrap checkpoint with no lineage may still finish qualification and
 establish its initial anchor.
+
+Qualification lineage is migration 009. On first open, a database created by
+the earlier Barnet branch is reconciled from the legacy
+`006_qualification_lineage.sql` history row to 009 before migration discovery.
+That releases version 006 for OPDC rather than causing its integration migration
+to be skipped; an incompatible pre-existing 009 row fails closed.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 

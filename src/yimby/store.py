@@ -61,6 +61,8 @@ if TYPE_CHECKING:
 _DOCUMENTS = TypeAdapter(tuple[DocumentRecord, ...])
 _COMMENTS = TypeAdapter(tuple[CommentRecord, ...])
 _COMPLETENESS = TypeAdapter(Completeness)
+_LEGACY_LINEAGE_MIGRATION = (6, "006_qualification_lineage.sql")
+_CURRENT_LINEAGE_MIGRATION = (9, "009_qualification_lineage.sql")
 
 
 class _ApplicationSection(FrozenModel):
@@ -102,7 +104,11 @@ class SqliteStore:
         self._connection.execute("PRAGMA foreign_keys = ON")
         self._connection.execute("PRAGMA journal_mode = WAL")
         self._evidence = evidence
-        self._migrate()
+        try:
+            self._migrate()
+        except BaseException:
+            self._connection.close()
+            raise
 
     def close(self) -> None:
         """Close the writer connection."""
@@ -1212,6 +1218,7 @@ class SqliteStore:
             )
             """
         )
+        self._reconcile_legacy_lineage_migration()
         applied = {
             row["version"]
             for row in self._connection.execute("SELECT version FROM schema_migrations")
@@ -1235,6 +1242,43 @@ class SqliteStore:
                 (version, resource.name, datetime.now(UTC).isoformat()),
             )
             self._connection.commit()
+
+    def _reconcile_legacy_lineage_migration(self) -> None:
+        legacy_version, legacy_name = _LEGACY_LINEAGE_MIGRATION
+        current_version, current_name = _CURRENT_LINEAGE_MIGRATION
+        legacy = self._connection.execute(
+            "SELECT name, applied_at FROM schema_migrations WHERE version = ?",
+            (legacy_version,),
+        ).fetchone()
+        if legacy is None or legacy["name"] != legacy_name:
+            return
+        current = self._connection.execute(
+            "SELECT name FROM schema_migrations WHERE version = ?",
+            (current_version,),
+        ).fetchone()
+        if current is not None and current["name"] != current_name:
+            message = "migration 009 conflicts with legacy Barnet lineage"
+            raise sqlite3.IntegrityError(message)
+        with self._connection:
+            if current is None:
+                self._connection.execute(
+                    """
+                    UPDATE schema_migrations
+                    SET version = ?, name = ?
+                    WHERE version = ? AND name = ?
+                    """,
+                    (
+                        current_version,
+                        current_name,
+                        legacy_version,
+                        legacy_name,
+                    ),
+                )
+            else:
+                self._connection.execute(
+                    "DELETE FROM schema_migrations WHERE version = ? AND name = ?",
+                    (legacy_version, legacy_name),
+                )
 
     def _application_id(self, normalised: NormalisedObservation) -> ApplicationId:
         return ApplicationId(

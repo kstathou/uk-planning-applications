@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 _AUTHORITY_ID = "barnet"
 _RECEIPT_NAME = "barnet-qualification-v1.json"
+_QUALIFICATION_NAME = "barnet-live-v1"
 _RETAINED_FAILURE_CODES = ("SourceUnavailableError", "RateLimitedError")
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
 _SHA256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -185,6 +186,10 @@ def derive_barnet_blocker(
             condition=checkpoint.live_scope is not None,
             code="barnet-live-scope-required",
         )
+        _require(
+            condition=not checkpoint.live_complete,
+            code="incomplete-barnet-checkpoint-required",
+        )
 
         run_row = connection.execute(
             """
@@ -225,6 +230,28 @@ def derive_barnet_blocker(
         _require(condition=counts is not None, code="barnet-counts-required")
         counts = cast("sqlite3.Row", counts)
 
+        lineage_table = connection.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = 'qualification_lineage'
+            """
+        ).fetchone()
+        lineage_count = (
+            0
+            if lineage_table is None
+            else connection.execute(
+                """
+                SELECT COUNT(*) FROM qualification_lineage
+                WHERE authority_id = ? AND qualification = ?
+                """,
+                (_AUTHORITY_ID, _QUALIFICATION_NAME),
+            ).fetchone()[0]
+        )
+        _require(
+            condition=lineage_count == 0,
+            code="unqualified-barnet-target-required",
+        )
+
         evidence_rows = tuple(
             connection.execute("SELECT digest, path FROM evidence ORDER BY digest")
         )
@@ -233,12 +260,13 @@ def derive_barnet_blocker(
     checkpoint_payload = str(checkpoint_row["payload_json"])
     evidence_digest_payload = "\n".join(str(row["digest"]) for row in evidence_rows)
     scope = cast("BarnetDiscoveryScope", checkpoint.live_scope)
+    _require(condition=scope.include_open, code="barnet-open-scope-required")
     return BarnetQualificationBlockerV1(
         observed_at=datetime.fromisoformat(run_row["finished_at"]),
         scope=BarnetBlockerScope(
             start=scope.start,
             end=scope.end,
-            include_open=True,
+            include_open=cast("Literal[True]", scope.include_open),
         ),
         counts=BarnetBlockerCounts(
             requests=run_row["request_count"],

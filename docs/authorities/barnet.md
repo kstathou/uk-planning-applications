@@ -127,7 +127,9 @@ is a strict, sanitized aggregate derived from that retained target. It records
 the safe scope, request and persistence counts, absent receipt, SQLite
 integrity, blocker code, and pending later cycles. Checkpoint and evidence-set
 hashes bind those claims to the private retained state without publishing an
-application identity, session material, or response body.
+application identity, session material, or response body. Export is permitted
+only for an open-scope incomplete checkpoint with no qualification lineage;
+expected validation failures return one fixed sanitized error code.
 
 The qualification transport now enforces a Barnet-specific ten-second minimum
 gap and stops on the first 429 instead of retrying. This reduces load while

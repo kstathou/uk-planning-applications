@@ -772,6 +772,77 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     assert "Persistent=false" in timer
 
 
+def test_legacy_barnet_lineage_migration_releases_reserved_version(
+    tmp_path: Path,
+) -> None:
+    """A database that applied Barnet as 006 is repaired before scanning files."""
+    legacy_root = tmp_path / "legacy-only"
+    store = _store(legacy_root)
+    store.close()
+    with closing(sqlite3.connect(legacy_root / "yimby.sqlite3")) as connection:
+        applied_at = connection.execute(
+            "SELECT applied_at FROM schema_migrations WHERE version = 9"
+        ).fetchone()[0]
+        connection.execute("DELETE FROM schema_migrations WHERE version = 9")
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) "
+            "VALUES (6, '006_qualification_lineage.sql', ?)",
+            (applied_at,),
+        )
+        connection.commit()
+    repaired = _store(legacy_root)
+    assert repaired.migration_versions() == (1, 2, 3, 4, 5, 9)
+    repaired.close()
+    with closing(sqlite3.connect(legacy_root / "yimby.sqlite3")) as connection:
+        assert (
+            connection.execute(
+                "SELECT name FROM schema_migrations WHERE version = 9"
+            ).fetchone()[0]
+            == "009_qualification_lineage.sql"
+        )
+
+    duplicate_root = tmp_path / "duplicate"
+    store = _store(duplicate_root)
+    store.close()
+    with closing(sqlite3.connect(duplicate_root / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) "
+            "VALUES (6, '006_qualification_lineage.sql', 'legacy')"
+        )
+        connection.commit()
+    repaired = _store(duplicate_root)
+    assert repaired.migration_versions() == (1, 2, 3, 4, 5, 9)
+    repaired.close()
+
+    owned_root = tmp_path / "owned"
+    store = _store(owned_root)
+    store.close()
+    with closing(sqlite3.connect(owned_root / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) "
+            "VALUES (6, '006_opdc.sql', 'owned')"
+        )
+        connection.commit()
+    owned = _store(owned_root)
+    assert owned.migration_versions() == (1, 2, 3, 4, 5, 6, 9)
+    owned.close()
+
+    conflict_root = tmp_path / "conflict"
+    store = _store(conflict_root)
+    store.close()
+    with closing(sqlite3.connect(conflict_root / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET name = '009_other.sql' WHERE version = 9"
+        )
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) "
+            "VALUES (6, '006_qualification_lineage.sql', 'legacy')"
+        )
+        connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="conflicts"):
+        _store(conflict_root)
+
+
 class _CancellingSession:
     def __init__(self, search_url: str) -> None:
         self._inner = FixtureSession(

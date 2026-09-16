@@ -250,6 +250,18 @@ def _qualification_module() -> ModuleType:
     return module
 
 
+def _blocker_export_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "export_barnet_blocker.py"
+    name = "_test_export_barnet_blocker"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _args(data_dir: Path, *extra: str) -> list[str]:
     return [
         "--confirm-live",
@@ -489,6 +501,21 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
         match="checkpoint-invalid",
     ):
         derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    export_module = _blocker_export_module()
+    assert (
+        export_module.main(
+            [
+                "--data-dir",
+                str(data_dir),
+                "--confirm-official-http-429",
+            ]
+        )
+        == 1
+    )
+    exported = capsys.readouterr()
+    assert exported.out == ""
+    assert json.loads(exported.err) == {"error": "blocker-evidence-invalid"}
+    assert "{invalid" not in exported.err
     with closing(sqlite3.connect(database)) as connection:
         connection.execute(
             "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'barnet'",
@@ -497,6 +524,62 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
         evidence_path = connection.execute(
             "SELECT path FROM evidence ORDER BY digest LIMIT 1"
         ).fetchone()[0]
+        connection.commit()
+
+    checkpoint = barnet_adapter.BarnetCheckpointV1.model_validate_json(
+        original_checkpoint
+    )
+    assert checkpoint.live_scope is not None
+    closed_scope = checkpoint.live_scope.model_copy(update={"include_open": False})
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'barnet'",
+            (
+                checkpoint.model_copy(
+                    update={"live_scope": closed_scope}
+                ).model_dump_json(),
+            ),
+        )
+        connection.commit()
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="open-scope-required",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'barnet'",
+            (checkpoint.model_copy(update={"live_complete": True}).model_dump_json(),),
+        )
+        connection.commit()
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="incomplete-barnet-checkpoint-required",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'barnet'",
+            (original_checkpoint,),
+        )
+        connection.execute(
+            """
+            INSERT INTO qualification_lineage(
+                authority_id, qualification, phase, scope_json, created_at
+            ) VALUES ('barnet', 'barnet-live-v1', 'qualified', '{}',
+                      '2026-09-16T09:00:00+00:00')
+            """
+        )
+        connection.commit()
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="unqualified-barnet-target-required",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute("DROP TABLE qualification_lineage")
         connection.commit()
 
     retained_path = data_dir / "evidence" / evidence_path
@@ -515,12 +598,18 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
         derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
     retained_path.write_bytes(retained_body)
     assert (
-        derive_barnet_blocker(
-            data_dir,
-            official_http_429_confirmed=True,
-        ).blocker.code
-        == "official-http-429"
+        export_module.main(
+            [
+                "--data-dir",
+                str(data_dir),
+                "--confirm-official-http-429",
+            ]
+        )
+        == 0
     )
+    exported = capsys.readouterr()
+    assert exported.err == ""
+    assert json.loads(exported.out)["blocker"]["code"] == "official-http-429"
 
 
 def test_barnet_qualification_persists_complete_typed_receipt(
