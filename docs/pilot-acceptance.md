@@ -48,11 +48,13 @@ presence, no unmapped records, no attachment-body requests, and an immediate
 zero-request rerun. OPDC's sanitized
 [committed receipt](evidence/opdc-qualification-2026-09-16.json) proves 55
 persisted applications, exact terminal discovery, complete implemented
-sections, local database and evidence integrity, exact per-application capture
-provenance, and an immediate zero-network rerun. The other thirteen authorities
-still require verified live bootstraps. All fifteen still require two
-successful later weekly cycles, so operational qualification remains zero of
-fifteen.
+sections, local database and evidence integrity, 103 distinct retained content
+digests, 165 ordered application-to-capture associations, and an immediate
+zero-network rerun. Its SHA-256 commitment covers each application's source
+identity and ordered capture URL, media type, and content digest without
+publishing the identity inventory. The other thirteen authorities still
+require verified live bootstraps. All fifteen still require two successful
+later weekly cycles, so operational qualification remains zero of fifteen.
 
 The Barnet smoke is incomplete because the source returned HTTP 429 during
 pagination; its saved checkpoint permits a later bounded resume without
