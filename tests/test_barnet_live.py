@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: C901, E501, EM102, PLR0911, PLR0912, PLR0913, PLR2004, SLF001, TRY003
+# ruff: noqa: C901, E501, EM102, PLR0911, PLR0912, PLR0913, PLR0915, PLR2004, SLF001, TRY003
 
 """Barnet authority-native IDOX live-boundary behaviour."""
 
@@ -176,6 +176,75 @@ def _result_page(
     ).encode()
 
 
+def _uncounted_result_page(
+    references: tuple[tuple[str, str], ...],
+    *,
+    capacity: str | None = "10",
+    current_page: str | None = "1",
+    numbered_page: int | None = None,
+    repeated_page_action: bool = False,
+) -> bytes:
+    rows = "".join(
+        (
+            '<li class="searchresult">'
+            f'<a href="applicationDetails.do?keyVal={locator}">Details</a>'
+            f"<p>Ref. No: {reference}</p></li>"
+        )
+        for reference, locator in references
+    )
+    page_control = (
+        ""
+        if current_page is None
+        else f'<input name="searchCriteria.page" value="{current_page}">'
+    )
+    capacity_control = (
+        ""
+        if capacity is None
+        else (
+            '<select name="searchCriteria.resultsPerPage">'
+            f'<option value="{capacity}" selected>{capacity}</option></select>'
+        )
+    )
+    pagination = ""
+    if numbered_page is not None:
+        pagination = (
+            '<a href="pagedSearchResults.do?action=page&amp;searchCriteria.page='
+            f'{numbered_page}">next</a>'
+        )
+    if repeated_page_action:
+        pagination = (
+            '<a href="pagedSearchResults.do?action=page&amp;action=printPreview">'
+            "next</a>"
+        )
+    return (
+        f"<form>{page_control}{capacity_control}</form><ul>{rows}</ul>{pagination}"
+    ).encode()
+
+
+def _showing_result_page(
+    references: tuple[tuple[str, str], ...],
+    markers: tuple[str, ...],
+    *,
+    current_page: str = "1",
+    visible_pages: tuple[str, ...] = (),
+    capacity: str | None = "10",
+    numbered_page: int | None = None,
+) -> bytes:
+    pagers = "".join(
+        '<p class="pager"><span class="showing">'
+        f"{marker}</span>"
+        f"{''.join(f'<strong>{page}</strong>' for page in visible_pages)}"
+        "</p>"
+        for marker in markers
+    )
+    return pagers.encode() + _uncounted_result_page(
+        references,
+        capacity=capacity,
+        current_page=current_page,
+        numbered_page=numbered_page,
+    )
+
+
 class _BarnetMock:
     def __init__(
         self,
@@ -259,10 +328,14 @@ class _BarnetMock:
                 ),
             )
         if path.endswith("/pagedSearchResults.do"):
+            page = int(request.url.params.get("searchCriteria.page", "1"))
+            rows = (
+                () if self.count_mismatch and page > 2 else (("TCP/0003/26", "KEY-3"),)
+            )
             return httpx.Response(
                 200,
                 content=_result_page(
-                    (("TCP/0003/26", "KEY-3"),),
+                    rows,
                     count=99 if self.count_mismatch else 3,
                     pages=2,
                 ),
@@ -511,6 +584,22 @@ def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
     assert advanced_post < advanced_page
     assert resumed[-1].complete
 
+    uninterrupted_session = _session(_BarnetMock(advanced_multi_page=True))
+
+    async def uninterrupted() -> list[DiscoveryBatch[BarnetCheckpointV1]]:
+        batches = [
+            batch
+            async for batch in adapter.discover(
+                uninterrupted_session,
+                WEEK_WITH_OPEN,
+                None,
+            )
+        ]
+        await uninterrupted_session.aclose()
+        return batches
+
+    assert asyncio.run(uninterrupted())[-1].complete
+
 
 def test_live_collection_persists_locator_metadata_and_child_failures(
     tmp_path: Path,
@@ -706,6 +795,32 @@ def test_live_discovery_checkpoint_edges_are_explicit() -> None:
         assert restarted_session.requested_urls
         await restarted_session.aclose()
 
+        for include_open in (False, True):
+            recovery_window = WEEK.model_copy(update={"include_open": include_open})
+            recovery_scope = barnet_adapter.BarnetDiscoveryScope(
+                start=recovery_window.start,
+                end=recovery_window.end,
+                include_open=include_open,
+            )
+            recovery_session = _session(_BarnetMock())
+            recovered = [
+                batch
+                async for batch in adapter.discover(
+                    recovery_session,
+                    recovery_window,
+                    BarnetCheckpointV1(
+                        cursor="live",
+                        live_scope=recovery_scope,
+                        completed_queries=barnet_adapter.expected_live_query_keys(
+                            recovery_scope
+                        ),
+                    ),
+                )
+            ]
+            assert recovered[-1].complete
+            assert recovered[-1].next_checkpoint.live_complete
+            await recovery_session.aclose()
+
     asyncio.run(exercise())
 
 
@@ -755,6 +870,60 @@ def test_barnet_form_and_search_boundary_variants() -> None:
                 b'<option value="Appeal Valid">Appeal Valid</option>',
                 b"",
             )
+        )
+    for malformed in (
+        b"<html></html>",
+        ADVANCED_FORM.replace(b'method="post"', b'method="get"'),
+        ADVANCED_FORM.replace(
+            b"advancedSearchResults.do?action=firstPage",
+            b"unexpected.do",
+        ),
+        ADVANCED_FORM.replace(b'name="searchCriteria.caseStatus"', b'name="other"'),
+        ADVANCED_FORM.replace(b'name="searchType"', b'name="otherType"'),
+    ):
+        with pytest.raises(BarnetParseError, match="advanced form"):
+            barnet_adapter._parse_advanced_form(malformed)
+
+    weekly_form = barnet_adapter._parse_form(
+        WEEKLY_FORM.replace(
+            b'<option value="07/09/2026">',
+            b'<option value="bad">bad</option><option value="07/09/2026">',
+        )
+    )
+    assert barnet_adapter._weekly_queries(
+        weekly_form,
+        barnet_adapter.BarnetDiscoveryScope(
+            start=WEEK.start,
+            end=WEEK.end,
+            include_open=False,
+        ),
+    )
+    duplicate_week = WEEKLY_FORM.replace(
+        b'<option value="14/09/2026">14 September</option>',
+        b'<option value="14/09/2026">first</option>'
+        b'<option value="14/09/2026">second</option>',
+    )
+    with pytest.raises(BarnetParseError, match="weekly form weeks"):
+        barnet_adapter._weekly_queries(
+            barnet_adapter._parse_form(duplicate_week),
+            barnet_adapter.BarnetDiscoveryScope(
+                start=WEEK.start,
+                end=WEEK.end,
+                include_open=False,
+            ),
+        )
+    missing_week = WEEKLY_FORM.replace(
+        b'<option value="14/09/2026">14 September</option>',
+        b"",
+    )
+    with pytest.raises(BarnetParseError, match="weekly form weeks"):
+        barnet_adapter._weekly_queries(
+            barnet_adapter._parse_form(missing_week),
+            barnet_adapter.BarnetDiscoveryScope(
+                start=WEEK.start,
+                end=WEEK.end,
+                include_open=False,
+            ),
         )
 
     soup = BeautifulSoup(
@@ -811,6 +980,137 @@ def test_barnet_form_and_search_boundary_variants() -> None:
     empty = barnet_adapter._parse_search_page(b"<p>No results found</p>")
     assert empty.reported == 0
     assert empty.references == ()
+
+    uncounted = barnet_adapter._parse_search_page(
+        _uncounted_result_page((("A", "KEY"),))
+    )
+    assert uncounted.reported == 1
+    advanced_uncounted = barnet_adapter._parse_advanced_search_page(
+        _uncounted_result_page((("A", "KEY"),), current_page=""),
+        page=1,
+    )
+    assert advanced_uncounted.reported == 1
+    advanced_showing = barnet_adapter._parse_advanced_search_page(
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            current_page="",
+        ),
+        page=1,
+    )
+    assert advanced_showing.reported == 1
+
+
+def test_barnet_result_count_boundaries_fail_closed() -> None:
+    """Visible ranges and uncounted shapes prove terminal pagination."""
+    accepted = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            tuple((f"A-{index}", f"KEY-{index}") for index in range(41, 46)),
+            ("Showing 41-45 of 45", "Showing 41-45 of 45"),
+            current_page="1",
+            visible_pages=("5",),
+            numbered_page=4,
+        )
+    )
+    assert accepted.reported == 45
+
+    invalid_showing_pages = (
+        _showing_result_page((("A", "KEY"),), ("Showing one-1 of 1",)),
+        _showing_result_page((("A", "KEY"),), ("Showing 2-1 of 1",)),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1", "Showing 1-1 of 2"),
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            numbered_page=2,
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            current_page="later",
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            visible_pages=("1", "2"),
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            visible_pages=("later",),
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            visible_pages=("1",),
+            capacity=None,
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            visible_pages=("1",),
+            capacity="many",
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+            visible_pages=("1",),
+            capacity="0",
+        ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 11-11 of 11",),
+            visible_pages=("1",),
+        ),
+    )
+    for body in invalid_showing_pages:
+        with pytest.raises(BarnetParseError, match="reported result count"):
+            barnet_adapter._parse_search_page(body)
+
+    ambiguous_uncounted = (
+        _uncounted_result_page(()),
+        _uncounted_result_page((("A", "KEY"),), capacity=None),
+        _uncounted_result_page((("A", "KEY"),), capacity="many"),
+        _uncounted_result_page((("A", "KEY"),), capacity="0"),
+        _uncounted_result_page((("A", "KEY"),), capacity="1"),
+        _uncounted_result_page((("A", "KEY"),), numbered_page=2),
+        _uncounted_result_page((("A", "KEY"),), repeated_page_action=True),
+        _uncounted_result_page((("A", "KEY"),), current_page="2"),
+        _uncounted_result_page((("A", "KEY"),), current_page=None),
+    )
+    for body in ambiguous_uncounted:
+        with pytest.raises(BarnetParseError, match="reported result count"):
+            barnet_adapter._parse_search_page(body)
+
+
+def test_barnet_advanced_detail_redirect_boundaries() -> None:
+    """A one-record advanced redirect has one table, locator, and reference."""
+    detail = (
+        b'<a href="applicationDetails.do?keyVal=KEY">Details</a>'
+        b'<table id="simpleDetailsTable"><tr><th>Reference</th><td>A</td></tr>'
+        b"</table>"
+    )
+    parsed = barnet_adapter._parse_advanced_search_page(detail, page=1)
+    assert parsed.reported == 1
+    assert parsed.references[0].locator == "KEY"
+    with pytest.raises(BarnetParseError, match="advanced detail redirect"):
+        barnet_adapter._parse_advanced_search_page(detail, page=2)
+
+    invalid_redirects = (
+        detail + b'<table id="simpleDetailsTable"></table>',
+        detail + b'<li class="searchresult"></li>',
+        detail + b"<p>No results found</p>",
+        detail.replace(b"?keyVal=KEY", b""),
+        detail.replace(
+            b"</table>",
+            b'</table><a href="applicationDetails.do?keyVal=OTHER">Other</a>',
+        ),
+    )
+    for body in invalid_redirects:
+        with pytest.raises(BarnetParseError, match="advanced detail"):
+            barnet_adapter._parse_advanced_search_page(body, page=1)
 
 
 def test_barnet_detail_boundary_variants() -> None:

@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, date, datetime, timedelta
 from html import unescape
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING, Literal, NoReturn
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
@@ -56,24 +56,119 @@ CURRENT_SOURCE = SourceId("barnet-idox-current")
 BASE_URL = "https://publicaccess.barnet.gov.uk/online-applications"
 _WEEKLY_FORM_URL = f"{BASE_URL}/search.do?action=weeklyList"
 _WEEKLY_RESULTS_URL = f"{BASE_URL}/weeklyListResults.do?action=firstPage"
+_ADVANCED_FORM_URL = f"{BASE_URL}/search.do?action=advanced"
+_ADVANCED_RESULTS_URL = f"{BASE_URL}/advancedSearchResults.do?action=firstPage"
 _PAGED_RESULTS_URL = f"{BASE_URL}/pagedSearchResults.do"
-_CURRENT_FORM_URL = f"{BASE_URL}/search.do?action=currentList"
-_CURRENT_RESULTS_URL = f"{BASE_URL}/currentListResults.do?action=firstPage"
-_DATE_TYPES = ("DC_Validated", "DC_Decided")
+type _DateType = Literal["DC_Validated", "DC_Decided"]
+
+
+_DATE_TYPES: tuple[_DateType, ...] = ("DC_Validated", "DC_Decided")
 _DATE_FORMATS = ("%d/%m/%Y", "%Y-%m-%d", "%d %B %Y", "%d %b %Y")
 _MINIMUM_LABELLED_CELLS = 2
+
+
+class BarnetDiscoveryScope(FrozenModel):
+    """Exact live discovery request owning resumable Barnet progress."""
+
+    start: date
+    end: date
+    include_open: bool
 
 
 class BarnetCheckpointV1(FrozenModel):
     """Fixture cursor plus resumable live weekly-list progress."""
 
     cursor: str
+    live_scope: BarnetDiscoveryScope | None = None
     completed_queries: tuple[str, ...] = ()
     active_query: str | None = None
     next_page: int = 1
     query_row_count: int = 0
     seen_references: tuple[str, ...] = ()
     live_complete: bool = False
+
+
+class _WeeklyQuery(FrozenModel):
+    week_start: date
+    portal_week: str
+    date_type: _DateType
+
+    @property
+    def key(self) -> str:
+        return f"weekly|{self.week_start.isoformat()}|{self.date_type}"
+
+
+class _OpenCaseQuery(FrozenModel):
+    kind: Literal["open-case"] = "open-case"
+    value: Literal[
+        "Application Received",
+        "Valid Application Received",
+        "Pending Consideration",
+        "Pending Decision",
+    ]
+
+    @property
+    def field(self) -> str:
+        return "searchCriteria.caseStatus"
+
+    @property
+    def key(self) -> str:
+        return f"advanced|{self.field}|{self.value}"
+
+
+class _ActiveAppealQuery(FrozenModel):
+    kind: Literal["active-appeal"] = "active-appeal"
+    value: Literal[
+        "Appeal in progress",
+        "Appeal lodged",
+        "Appeal Valid",
+        "High Court Appeal Lodged",
+        "Remitted to Secretary of State",
+    ]
+
+    @property
+    def field(self) -> str:
+        return "searchCriteria.appealStatus"
+
+    @property
+    def key(self) -> str:
+        return f"advanced|{self.field}|{self.value}"
+
+
+type _AdvancedQuery = _OpenCaseQuery | _ActiveAppealQuery
+
+
+_ADVANCED_QUERIES: tuple[_AdvancedQuery, ...] = (
+    _OpenCaseQuery(value="Application Received"),
+    _OpenCaseQuery(value="Valid Application Received"),
+    _OpenCaseQuery(value="Pending Consideration"),
+    _OpenCaseQuery(value="Pending Decision"),
+    _ActiveAppealQuery(value="Appeal in progress"),
+    _ActiveAppealQuery(value="Appeal lodged"),
+    _ActiveAppealQuery(value="Appeal Valid"),
+    _ActiveAppealQuery(value="High Court Appeal Lodged"),
+    _ActiveAppealQuery(value="Remitted to Secretary of State"),
+)
+
+
+def _intersecting_mondays(scope: BarnetDiscoveryScope) -> tuple[date, ...]:
+    monday = scope.start - timedelta(days=scope.start.weekday())
+    weeks = []
+    while monday <= scope.end:
+        weeks.append(monday)
+        monday += timedelta(days=7)
+    return tuple(weeks)
+
+
+def expected_live_query_keys(scope: BarnetDiscoveryScope) -> tuple[str, ...]:
+    """Return the exact canonical query inventory for one Barnet scope."""
+    weekly = tuple(
+        f"weekly|{monday.isoformat()}|{date_type}"
+        for monday in _intersecting_mondays(scope)
+        for date_type in _DATE_TYPES
+    )
+    advanced = tuple(query.key for query in _ADVANCED_QUERIES)
+    return weekly + (advanced if scope.include_open else ())
 
 
 class BarnetDocumentV1(FrozenModel):
@@ -185,7 +280,17 @@ class BarnetAdapter:
         window: DiscoveryWindow,
         checkpoint: BarnetCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[BarnetCheckpointV1]]:
-        progress = checkpoint or BarnetCheckpointV1(cursor="live")
+        requested_scope = BarnetDiscoveryScope(
+            start=window.start,
+            end=window.end,
+            include_open=window.include_open,
+        )
+        progress = checkpoint
+        if progress is None or progress.live_scope != requested_scope:
+            progress = BarnetCheckpointV1(
+                cursor="live",
+                live_scope=requested_scope,
+            )
         if progress.live_complete:
             yield DiscoveryBatch(
                 references=(),
@@ -197,81 +302,55 @@ class BarnetAdapter:
             PortalRequest(url=HttpUrl(_WEEKLY_FORM_URL), intent=RequestIntent.SEARCH)
         )
         form = _parse_form(form_capture.body)
-        query_keys = tuple(
-            f"{week_value}|{date_type}"
-            for week_value in _intersecting_weeks(form, window)
-            for date_type in _DATE_TYPES
-        )
+        weekly_queries = _weekly_queries(form, requested_scope)
+        query_keys = expected_live_query_keys(requested_scope)
         if (
             progress.active_query is not None
             and progress.active_query not in query_keys
         ):
             raise BarnetCheckpointError(progress.active_query)
-        pending = [
-            query_key
-            for query_key in query_keys
-            if query_key not in progress.completed_queries
-        ]
-        for query_key in pending:
-            week_value, date_type = query_key.split("|", maxsplit=1)
-            page = progress.next_page if progress.active_query == query_key else 1
-            row_count = (
-                progress.query_row_count if progress.active_query == query_key else 0
+        pending_weekly = tuple(
+            query
+            for query in weekly_queries
+            if query.key not in progress.completed_queries
+        )
+        for weekly_query in pending_weekly:
+            page = (
+                progress.next_page if progress.active_query == weekly_query.key else 1
             )
-            if progress.active_query == query_key and page > 1:
-                await session.fetch(_weekly_request(form, week_value, date_type, 1))
+            row_count = (
+                progress.query_row_count
+                if progress.active_query == weekly_query.key
+                else 0
+            )
+            if progress.active_query == weekly_query.key and page > 1:
+                await session.fetch(_weekly_request(form, weekly_query, 1))
             while True:
-                capture = await session.fetch(
-                    _weekly_request(form, week_value, date_type, page)
-                )
+                capture = await session.fetch(_weekly_request(form, weekly_query, page))
                 search_page = _parse_search_page(capture.body)
-                row_count += len(search_page.references)
-                if page == search_page.page_count and row_count != search_page.reported:
-                    raise BarnetCountMismatchError(
-                        query_key,
-                        search_page.reported,
-                        row_count,
-                    )
-                seen = set(progress.seen_references)
-                fresh = []
-                for reference in search_page.references:
-                    if reference.reference not in seen:
-                        seen.add(reference.reference)
-                        fresh.append(reference)
-                if page == search_page.page_count:
-                    completed = (*progress.completed_queries, query_key)
-                    next_checkpoint = progress.model_copy(
-                        update={
-                            "completed_queries": completed,
-                            "active_query": None,
-                            "next_page": 1,
-                            "query_row_count": 0,
-                            "seen_references": tuple(seen),
-                            "live_complete": (
-                                len(completed) == len(query_keys)
-                                and not window.include_open
-                            ),
-                        }
-                    )
-                else:
-                    next_checkpoint = progress.model_copy(
-                        update={
-                            "active_query": query_key,
-                            "next_page": page + 1,
-                            "query_row_count": row_count,
-                            "seen_references": tuple(seen),
-                        }
-                    )
+                next_checkpoint, fresh, last_page = _advance_checkpoint(
+                    progress,
+                    active_page=_ActivePage(
+                        query_key=weekly_query.key,
+                        page=page,
+                        row_count=row_count,
+                    ),
+                    search_page=search_page,
+                    all_query_keys=query_keys,
+                )
                 yield DiscoveryBatch(
-                    references=tuple(fresh),
+                    references=fresh,
                     next_checkpoint=next_checkpoint,
                     complete=next_checkpoint.live_complete,
                 )
                 progress = next_checkpoint
-                if page == search_page.page_count:
+                if last_page:
                     break
+                row_count = next_checkpoint.query_row_count
                 page += 1
-        if not pending and not window.include_open:
+        if not window.include_open:
+            if pending_weekly:
+                return
             completed_checkpoint = progress.model_copy(update={"live_complete": True})
             yield DiscoveryBatch(
                 references=(),
@@ -279,14 +358,65 @@ class BarnetAdapter:
                 complete=True,
             )
             return
-        if window.include_open:
-            if not pending:
-                yield DiscoveryBatch(
-                    references=(),
-                    next_checkpoint=progress,
-                    complete=False,
+
+        advanced_form = _parse_advanced_form(
+            (
+                await session.fetch(
+                    PortalRequest(
+                        url=HttpUrl(_ADVANCED_FORM_URL),
+                        intent=RequestIntent.SEARCH,
+                    )
                 )
-            await _probe_open_list(session)
+            ).body
+        )
+        pending_advanced = tuple(
+            query
+            for query in _ADVANCED_QUERIES
+            if query.key not in progress.completed_queries
+        )
+        for advanced_query in pending_advanced:
+            page = (
+                progress.next_page if progress.active_query == advanced_query.key else 1
+            )
+            row_count = (
+                progress.query_row_count
+                if progress.active_query == advanced_query.key
+                else 0
+            )
+            if progress.active_query == advanced_query.key and page > 1:
+                await session.fetch(_advanced_request(advanced_form, advanced_query, 1))
+            while True:
+                capture = await session.fetch(
+                    _advanced_request(advanced_form, advanced_query, page)
+                )
+                search_page = _parse_advanced_search_page(capture.body, page=page)
+                next_checkpoint, fresh, last_page = _advance_checkpoint(
+                    progress,
+                    active_page=_ActivePage(
+                        query_key=advanced_query.key,
+                        page=page,
+                        row_count=row_count,
+                    ),
+                    search_page=search_page,
+                    all_query_keys=query_keys,
+                )
+                yield DiscoveryBatch(
+                    references=fresh,
+                    next_checkpoint=next_checkpoint,
+                    complete=next_checkpoint.live_complete,
+                )
+                progress = next_checkpoint
+                if last_page:
+                    break
+                row_count = next_checkpoint.query_row_count
+                page += 1
+        if not pending_advanced:
+            completed_checkpoint = progress.model_copy(update={"live_complete": True})
+            yield DiscoveryBatch(
+                references=(),
+                next_checkpoint=completed_checkpoint,
+                complete=True,
+            )
 
     async def fetch(
         self,
@@ -501,13 +631,65 @@ class BarnetAdapter:
 class _SearchPage(FrozenModel):
     references: tuple[SourceReference, ...]
     reported: int
-    page_count: int
+
+
+class _ActivePage(FrozenModel):
+    query_key: str
+    page: int
+    row_count: int
 
 
 class _CommentTab(FrozenModel):
     active_tab: str
     category: str
     count_labels: tuple[str, ...]
+
+
+def _advance_checkpoint(
+    progress: BarnetCheckpointV1,
+    *,
+    active_page: _ActivePage,
+    search_page: _SearchPage,
+    all_query_keys: tuple[str, ...],
+) -> tuple[BarnetCheckpointV1, tuple[SourceReference, ...], bool]:
+    next_row_count = active_page.row_count + len(search_page.references)
+    if next_row_count > search_page.reported or (
+        not search_page.references and next_row_count < search_page.reported
+    ):
+        raise BarnetCountMismatchError(
+            active_page.query_key,
+            search_page.reported,
+            next_row_count,
+        )
+    seen = set(progress.seen_references)
+    fresh = []
+    for reference in search_page.references:
+        if reference.reference not in seen:
+            seen.add(reference.reference)
+            fresh.append(reference)
+    last_page = next_row_count == search_page.reported
+    if last_page:
+        completed_queries = (*progress.completed_queries, active_page.query_key)
+        checkpoint = progress.model_copy(
+            update={
+                "completed_queries": completed_queries,
+                "active_query": None,
+                "next_page": 1,
+                "query_row_count": 0,
+                "seen_references": tuple(seen),
+                "live_complete": len(completed_queries) == len(all_query_keys),
+            }
+        )
+    else:
+        checkpoint = progress.model_copy(
+            update={
+                "active_query": active_page.query_key,
+                "next_page": active_page.page + 1,
+                "query_row_count": next_row_count,
+                "seen_references": tuple(seen),
+            }
+        )
+    return checkpoint, tuple(fresh), last_page
 
 
 def _parse_form(body: bytes) -> Tag:
@@ -518,6 +700,40 @@ def _parse_form(body: bytes) -> Tag:
     fields = _form_fields(form)
     if not any(field.name == "_csrf" and field.value for field in fields):
         _raise_parse("_csrf")
+    return form
+
+
+def _parse_advanced_form(body: bytes) -> Tag:
+    soup = BeautifulSoup(body, "html.parser")
+    forms = soup.select("form#advancedSearchForm")
+    if len(forms) != 1 or not isinstance(forms[0], Tag):
+        _raise_parse("advanced form")
+    form = forms[0]
+    action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
+    if (
+        str(form.get("method", "")).casefold() != "post"
+        or action != _ADVANCED_RESULTS_URL
+    ):
+        _raise_parse("advanced form")
+    status_selects: dict[str, Tag] = {}
+    for name in (
+        "searchCriteria.caseStatus",
+        "searchCriteria.appealStatus",
+    ):
+        controls = form.select(f'select[name="{name}"]')
+        if len(controls) != 1:
+            _raise_parse("advanced form status fields")
+        status_selects[name] = controls[0]
+    for query in _ADVANCED_QUERIES:
+        options = tuple(
+            str(option.get("value", ""))
+            for option in status_selects[query.field].select("option[value]")
+        )
+        if options.count(query.value) != 1:
+            _raise_parse("advanced form status options")
+    field_names = {field.name for field in _form_fields(form)}
+    if not {"_csrf", "searchType"}.issubset(field_names):
+        _raise_parse("advanced form")
     return form
 
 
@@ -562,25 +778,36 @@ def _override_fields(form: Tag, values: dict[str, str]) -> tuple[FormField, ...]
     return tuple(fields)
 
 
-def _intersecting_weeks(form: Tag, window: DiscoveryWindow) -> tuple[str, ...]:
-    weeks: list[tuple[date, str]] = []
+def _weekly_queries(
+    form: Tag,
+    scope: BarnetDiscoveryScope,
+) -> tuple[_WeeklyQuery, ...]:
+    offered: dict[date, str] = {}
     for option in form.select('select[name="week"] option[value]'):
         value = str(option.get("value", ""))
         parsed = _parse_date(value)
-        if (
-            parsed is not None
-            and parsed.weekday() == 0
-            and parsed <= window.end
-            and parsed + timedelta(days=6) >= window.start
-        ):
-            weeks.append((parsed, value))
-    return tuple(value for _, value in sorted(weeks))
+        if parsed is None or parsed.weekday() != 0:
+            continue
+        if parsed in offered:
+            _raise_parse("weekly form weeks")
+        offered[parsed] = value
+    expected = _intersecting_mondays(scope)
+    if any(monday not in offered for monday in expected):
+        _raise_parse("weekly form weeks")
+    return tuple(
+        _WeeklyQuery(
+            week_start=monday,
+            portal_week=offered[monday],
+            date_type=date_type,
+        )
+        for monday in expected
+        for date_type in _DATE_TYPES
+    )
 
 
 def _weekly_request(
     form: Tag,
-    week: str,
-    date_type: str,
+    query: _WeeklyQuery,
     page: int,
 ) -> PortalRequest:
     if page == 1:
@@ -592,8 +819,40 @@ def _weekly_request(
                 form,
                 {
                     "searchCriteria.ward": "",
-                    "week": week,
-                    "dateType": date_type,
+                    "week": query.portal_week,
+                    "dateType": query.date_type,
+                },
+            ),
+        )
+    return PortalRequest(
+        url=HttpUrl(f"{_PAGED_RESULTS_URL}?action=page&searchCriteria.page={page}"),
+        intent=RequestIntent.SEARCH,
+    )
+
+
+def _advanced_request(
+    form: Tag,
+    query: _AdvancedQuery,
+    page: int,
+) -> PortalRequest:
+    if page == 1:
+        return PortalRequest(
+            url=HttpUrl(_ADVANCED_RESULTS_URL),
+            intent=RequestIntent.SEARCH,
+            method=RequestMethod.POST,
+            form=_override_fields(
+                form,
+                {
+                    "searchCriteria.caseStatus": (
+                        query.value
+                        if query.field == "searchCriteria.caseStatus"
+                        else ""
+                    ),
+                    "searchCriteria.appealStatus": (
+                        query.value
+                        if query.field == "searchCriteria.appealStatus"
+                        else ""
+                    ),
                 },
             ),
         )
@@ -605,6 +864,27 @@ def _weekly_request(
 
 def _parse_search_page(body: bytes) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
+    return _parse_result_list(soup, terminal_first_page_marker="1")
+
+
+def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
+    soup = BeautifulSoup(body, "html.parser")
+    detail_tables = soup.select("#simpleDetailsTable")
+    if detail_tables:
+        if page != 1:
+            _raise_parse("advanced detail redirect")
+        return _parse_redirected_detail(body, soup, detail_tables)
+    return _parse_result_list(
+        soup,
+        terminal_first_page_marker="" if page == 1 else None,
+    )
+
+
+def _parse_result_list(
+    soup: BeautifulSoup,
+    *,
+    terminal_first_page_marker: str | None,
+) -> _SearchPage:
     references = []
     for row in soup.select("li.searchresult"):
         link = row.select_one('a[href*="applicationDetails.do"]')
@@ -622,54 +902,213 @@ def _parse_search_page(body: bytes) -> _SearchPage:
                 locator=locators[0],
             )
         )
-    result_count = soup.select_one("[data-result-count]")
-    if isinstance(result_count, Tag):
-        raw_count = result_count.get("data-result-count")
-        reported = int(str(raw_count))
-    else:
-        text = soup.get_text(" ", strip=True)
-        if not references and "no results found" in text.casefold():
-            reported = 0
-        else:
-            match = re.search(
-                r"(?:showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of|"
-                r"displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
-                text,
-                re.IGNORECASE,
-            )
-            if match is None:
-                _raise_parse("reported result count")
-            reported = int(match.group(1))
-    page_numbers = [1]
-    for link in soup.select('a[href*="pagedSearchResults.do"]'):
-        pages = parse_qs(urlsplit(str(link.get("href", ""))).query).get(
-            "searchCriteria.page", []
+    try:
+        reported = _reported_count(
+            soup,
+            row_count=len(references),
+            allow_empty_first_page_marker=terminal_first_page_marker == "",
         )
-        page_numbers.extend(int(page) for page in pages if page.isdigit())
+    except BarnetParseError:
+        if not _is_uncounted_terminal_first_page(
+            soup,
+            row_count=len(references),
+            expected_page_marker=terminal_first_page_marker,
+        ):
+            raise
+        reported = len(references)
+    return _SearchPage(references=tuple(references), reported=reported)
+
+
+def _parse_redirected_detail(
+    body: bytes,
+    soup: BeautifulSoup,
+    detail_tables: list[Tag],
+) -> _SearchPage:
+    if (
+        len(detail_tables) != 1
+        or soup.select_one("li.searchresult") is not None
+        or "no results found" in soup.get_text(" ", strip=True).casefold()
+    ):
+        _raise_parse("advanced detail redirect")
+    locators = []
+    for link in soup.select('a[href*="applicationDetails.do"]'):
+        values = parse_qs(urlsplit(str(link.get("href", ""))).query).get(
+            "keyVal",
+            [],
+        )
+        if len(values) != 1 or not values[0]:
+            _raise_parse("advanced detail keyVal")
+        locators.append(values[0])
+    unique_locators = set(locators)
+    if len(unique_locators) != 1:
+        _raise_parse("advanced detail keyVal")
+    fields = _parse_summary(body)
     return _SearchPage(
-        references=tuple(references),
-        reported=reported,
-        page_count=max(page_numbers),
+        references=(
+            SourceReference(
+                source_id=CURRENT_SOURCE,
+                reference=_required_field(
+                    fields,
+                    "reference",
+                    "application reference",
+                ),
+                locator=unique_locators.pop(),
+            ),
+        ),
+        reported=1,
     )
 
 
-async def _probe_open_list(session: PortalSession) -> None:
-    form_capture = await session.fetch(
-        PortalRequest(url=HttpUrl(_CURRENT_FORM_URL), intent=RequestIntent.SEARCH)
-    )
-    form = _parse_form(form_capture.body)
-    result = await session.fetch(
-        PortalRequest(
-            url=HttpUrl(_CURRENT_RESULTS_URL),
-            intent=RequestIntent.SEARCH,
-            method=RequestMethod.POST,
-            form=_form_fields(form),
+def _reported_count(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+    allow_empty_first_page_marker: bool = False,
+) -> int:
+    element = soup.select_one("[data-result-count]")
+    if isinstance(element, Tag):
+        return int(str(element.get("data-result-count")))
+    text = soup.get_text(" ", strip=True)
+    if "no results found" in text.casefold():
+        return 0
+    showing_ranges = []
+    for marker in soup.select(".showing"):
+        match = re.fullmatch(
+            r"showing\s+(\d+)\s*[-\N{EN DASH}]\s*(\d+)\s+of\s+"
+            r"(\d+)(?:\s+results?)?",
+            marker.get_text(" ", strip=True),
+            re.IGNORECASE,
         )
+        if match is None:
+            _raise_parse("reported result count")
+        first, last, total = (int(match.group(index)) for index in range(1, 4))
+        if not 1 <= first <= last <= total or last - first + 1 != row_count:
+            _raise_parse("reported result count")
+        showing_ranges.append((first, last, total))
+    if showing_ranges:
+        displayed_range = showing_ranges[0]
+        if any(value != displayed_range for value in showing_ranges[1:]):
+            _raise_parse("reported result count")
+        visible_page = _visible_result_page(soup, displayed_range)
+        current_pages = (
+            (visible_page,)
+            if visible_page is not None
+            else _current_result_pages(
+                soup,
+                allow_empty_first_page_marker=allow_empty_first_page_marker,
+            )
+        )
+        numbered_pages = tuple(
+            int(value)
+            for link in soup.select('a[href*="pagedSearchResults.do"]')
+            for value in parse_qs(urlsplit(str(link.get("href", ""))).query).get(
+                "searchCriteria.page", ()
+            )
+        )
+        if (
+            displayed_range[1] == displayed_range[2]
+            and len(current_pages) == 1
+            and any(page > current_pages[0] for page in numbered_pages)
+        ):
+            _raise_parse("reported result count")
+        return displayed_range[2]
+    match = re.search(
+        r"(?:showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of|"
+        r"displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
+        text,
+        re.IGNORECASE,
     )
-    message = result.body.decode(errors="replace")
-    if "Too many results found" in message:
-        raise BarnetOpenListLimitError
-    raise BarnetOpenEnumerationUnsupportedError
+    if match is None:
+        _raise_parse("reported result count")
+    return int(match.group(1))
+
+
+def _visible_result_page(
+    soup: BeautifulSoup,
+    displayed_range: tuple[int, int, int],
+) -> int | None:
+    labels = tuple(
+        marker.get_text(" ", strip=True)
+        for pager in soup.select(".pager")
+        for marker in pager.find_all("strong", recursive=False)
+    )
+    if not labels:
+        return None
+    pages = tuple(
+        int(match.group(0))
+        for label in labels
+        if (match := re.fullmatch(r"[1-9]\d*", label)) is not None
+    )
+    if len(pages) != len(labels) or any(page != pages[0] for page in pages[1:]):
+        return _raise_parse("reported result count")
+    selected_capacities = soup.select(
+        'select[name="searchCriteria.resultsPerPage"] option[selected]'
+    )
+    try:
+        (selected_capacity,) = selected_capacities
+        capacity = int(str(selected_capacity.get("value", "")).strip())
+    except ValueError:
+        return _raise_parse("reported result count")
+    page = pages[0]
+    first, last, total = displayed_range
+    expected_first = (page - 1) * capacity + 1
+    expected_last = min(expected_first + capacity - 1, total)
+    if capacity <= 0 or (first, last) != (expected_first, expected_last):
+        return _raise_parse("reported result count")
+    return page
+
+
+def _current_result_pages(
+    soup: BeautifulSoup,
+    *,
+    allow_empty_first_page_marker: bool,
+) -> tuple[int, ...]:
+    page_values = tuple(
+        str(control.get("value", "")).strip()
+        for control in soup.select('input[name="searchCriteria.page"][value]')
+    )
+    if allow_empty_first_page_marker and page_values == ("",):
+        return (1,)
+    try:
+        return tuple(int(value) for value in page_values)
+    except ValueError:
+        return _raise_parse("reported result count")
+
+
+def _is_uncounted_terminal_first_page(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+    expected_page_marker: str | None = "1",
+) -> bool:
+    page_inputs = soup.select('input[name="searchCriteria.page"][value]')
+    if (
+        expected_page_marker is None
+        or row_count == 0
+        or len(page_inputs) != 1
+        or str(page_inputs[0].get("value", "")).strip() != expected_page_marker
+        or soup.select_one(".showing") is not None
+    ):
+        return False
+    selected_capacities = soup.select(
+        'select[name="searchCriteria.resultsPerPage"] option[selected]'
+    )
+    if len(selected_capacities) != 1:
+        return False
+    try:
+        capacity = int(str(selected_capacities[0].get("value", "")).strip())
+    except ValueError:
+        return False
+    if capacity <= 0 or row_count >= capacity:
+        return False
+    queries = tuple(
+        parse_qs(urlsplit(str(link.get("href", ""))).query)
+        for link in soup.select('a[href*="pagedSearchResults.do"]')
+    )
+    return not any(
+        query.get("searchCriteria.page") or "page" in query.get("action", [])
+        for query in queries
+    )
 
 
 def _detail_request(
@@ -990,25 +1429,6 @@ class BarnetCountMismatchError(BarnetParseError):
     def __init__(self, section: str, expected: int, actual: int) -> None:
         """Describe only the bounded count disagreement."""
         super().__init__(f"{section} count expected {expected} actual {actual}")
-
-
-class BarnetOpenListLimitError(RuntimeError):
-    """The current-list route reported the observed unbounded result cap."""
-
-    def __init__(self) -> None:
-        """Expose an actionable bounded-search requirement."""
-        super().__init__(
-            "Barnet currentList is capped: Too many results found; "
-            "bounded advanced-search partitions are required"
-        )
-
-
-class BarnetOpenEnumerationUnsupportedError(RuntimeError):
-    """The current-list response cannot establish older-open completeness."""
-
-    def __init__(self) -> None:
-        """Prevent an unverified current list from being marked complete."""
-        super().__init__("Barnet older-open enumeration is not implemented")
 
 
 class BarnetCheckpointError(ValueError):
