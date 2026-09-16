@@ -431,6 +431,18 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         arun._parse_search_results(
             b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>'
         )
+    explicit_complete = arun._parse_search_results(
+        b'<form method="post" action="planningSearch">'
+        b'<input type="submit" name="BackToSearch" value="Back to Search page">'
+        b"</form><table><tr><th>Reference</th><th>Location</th>"
+        b"<th>Proposal</th><th>Status</th></tr><tr>"
+        b'<td><a href="planningDetails?reference=PE/PA/6/01/AG'
+        b'&amp;from=planningSearch">PE/PA/6/01/AG</a></td>'
+        b"<td>Selden Farm</td><td>Prior Notification</td><td>Undecided</td>"
+        b"</tr></table>"
+    )
+    assert explicit_complete.reported == 1
+    assert explicit_complete.references[0].reference == "PE/PA/6/01/AG"
     expected = arun._parse_search_results(
         b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>',
         expected_reported=1,
