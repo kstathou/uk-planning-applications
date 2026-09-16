@@ -920,7 +920,10 @@ def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
         )
     )
     if not tables:
-        if "no documents found" in text.casefold():
+        if (
+            "no documents found" in text.casefold()
+            or "there are no documents for this section" in text.casefold()
+        ):
             return ()
         _raise_parse("document table")
     if len(tables) != 1:
