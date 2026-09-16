@@ -64,7 +64,7 @@ class BlackburnPlaywrightSession(PlaywrightPortalSession):
         worker: BrowserWorker | None = None,
     ) -> BlackburnPlaywrightSession:
         """Launch the shared guarded Playwright boundary."""
-        return cls(await PlaywrightBoundary.create(), worker=worker)
+        return cls(await PlaywrightBoundary.create(headless=False), worker=worker)
 
     async def search(self, query: BlackburnQueryV1) -> EvidenceCapture:
         """Submit one exact inclusive date query."""
@@ -116,6 +116,7 @@ class BlackburnPlaywrightSession(PlaywrightPortalSession):
 
 async def _assert_search_form(page: Page) -> None:
     form = page.locator("form#form")
+    await form.wait_for(state="attached", timeout=20_000)
     if await form.count() != 1:
         _raise_form("single search form")
     method = (await form.get_attribute("method") or "").casefold()
