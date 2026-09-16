@@ -43,11 +43,11 @@ The deterministic column proves package ownership, typed native payloads, parsin
 As of 16 September 2026, West Suffolk is the first of fifteen authorities to
 complete a verified live bootstrap. Its versioned receipt proves 730 discovered
 references, 730 persisted applications, terminal checkpoint coherence, no
-pending retries, no failed current sections, database and evidence integrity,
-no unmapped records, no attachment-body requests, and an immediate zero-request
-rerun. The other fourteen authorities still require a live bootstrap. All
-fifteen still require two successful later weekly cycles, so operational
-qualification remains zero of fifteen.
+pending retries, no failed current sections, database integrity, retained
+evidence-path presence, no unmapped records, no attachment-body requests, and
+an immediate zero-request rerun. The other fourteen authorities still require a
+live bootstrap. All fifteen still require two successful later weekly cycles,
+so operational qualification remains zero of fifteen.
 
 The Barnet smoke is incomplete because the source returned HTTP 429 during
 pagination; its saved checkpoint permits a later bounded resume without

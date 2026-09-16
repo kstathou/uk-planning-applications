@@ -26,8 +26,9 @@ Court Appeal Lodged, and Pending Appeal Decision.
 The portal-owned value for Appeal Remitted to Secretary of State includes a
 trailing space. The scraper preserves that value exactly. Advanced first pages
 can expose either an empty hidden page marker or `1`. Both forms are accepted
-only on page one. Later pages still require their exact visible and hidden page
-contracts.
+only on page one. Counted later pages must reconcile their visible page, range,
+and capacity evidence. A stale hidden page marker cannot override coherent
+visible evidence.
 
 ## Sections
 
@@ -76,8 +77,8 @@ path.
 
 ## Live bootstrap qualification
 
-The qualification receipt at
-`.yimby/qualification-west-suffolk-2026-09-16/west-suffolk-qualification-v1.json`
+The committed
+[qualification receipt](../evidence/west-suffolk-qualification-2026-09-16.json)
 records 730 discovered references and 730 persisted applications. It also
 records 730 native versions, 730 application versions, 730 document versions,
 no pending retries, no failed current sections, no unmapped records, and no
@@ -86,5 +87,6 @@ attachment-body requests. SQLite integrity and retained evidence paths passed.
 The successful terminal resume made 76 requests and transferred 3,019,581
 bytes. Those figures describe that resume, not the earlier interrupted attempts.
 The immediate rerun made zero requests, transferred zero bytes, and left the
-terminal store unchanged. Both recorded runs succeeded. This satisfies live
-bootstrap acceptance. The two genuinely later weekly refreshes remain open.
+qualification counts and version state unchanged. Both recorded runs succeeded.
+This satisfies live bootstrap acceptance. The two genuinely later weekly
+refreshes remain open.
