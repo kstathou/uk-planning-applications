@@ -182,7 +182,25 @@ def _result_page(query: str, page: int, fault: str | None = None) -> bytes:
     """.encode()
 
 
-def _detail_page(reference: str, *, document_count: int = 2) -> bytes:
+def _detail_page(
+    reference: str,
+    *,
+    document_count: int = 2,
+    duplicate_documents: bool = False,
+) -> bytes:
+    metadata = (
+        (0, "20/08/2026", "Application Form - Without Personal Data", "620kb"),
+        (
+            1,
+            "20/08/2026" if duplicate_documents else "21/08/2026",
+            (
+                "Application Form - Without Personal Data"
+                if duplicate_documents
+                else "Location Plan"
+            ),
+            "620kb" if duplicate_documents else "1mb",
+        ),
+    )
     rows = "".join(
         f"""
         <tr id="ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__{index}">
@@ -192,10 +210,7 @@ def _detail_page(reference: str, *, document_count: int = 2) -> bytes:
             ({size})</td>
         </tr>
         """
-        for index, published, title, size in (
-            (0, "20/08/2026", "Application Form - Without Personal Data", "620kb"),
-            (1, "21/08/2026", "Location Plan", "1mb"),
-        )[:document_count]
+        for index, published, title, size in metadata[:document_count]
     )
     if document_count == 0:
         rows = """
@@ -283,7 +298,11 @@ class _DorsetMock:
                 row.reference for row in (*RECEIVED, *OUTSTANDING) if row.recno == recno
             )
             count = 1 if self.fault == "document-count" else 2
-            body = _detail_page(reference, document_count=count)
+            body = _detail_page(
+                reference,
+                document_count=count,
+                duplicate_documents=self.fault == "duplicate-document-metadata",
+            )
             if self.fault == "document-count":
                 body = body.replace(
                     b'\\"VirtualItemCount\\":1',
@@ -559,7 +578,8 @@ def test_dorset_live_detail_accepts_disclaimer_and_retains_document_metadata() -
         "21/08/2026 - Location Plan (1mb)",
     ]
     assert {str(document.url) for document in collected.normalised.documents} == {
-        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}#"
+        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}#document-0",
+        f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}#document-1",
     }
     assert not {
         str(document.url) for document in collected.normalised.documents
@@ -580,6 +600,26 @@ def test_dorset_live_detail_accepts_disclaimer_and_retains_document_metadata() -
         for method, _path, fields in mock.requests
         if method == "POST"
     )
+
+
+def test_dorset_live_detail_distinguishes_duplicate_document_metadata() -> None:
+    """Official table indices keep otherwise identical metadata rows distinct."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    session = _session(_DorsetMock(fault="duplicate-document-metadata"))
+
+    async def collect_detail() -> Any:
+        collected = await package.collect(session, _live_reference())
+        await session.aclose()
+        return collected
+
+    collected = asyncio.run(collect_detail())
+
+    assert len({document.title for document in collected.normalised.documents}) == 1
+    assert [str(document.url).rsplit("#", 1)[-1] for document in collected.normalised.documents] == [
+        "document-0",
+        "document-1",
+    ]
+    assert session.attachment_body_requests == 0
 
 
 def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> None:
