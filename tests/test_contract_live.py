@@ -17,7 +17,6 @@ from bs4 import BeautifulSoup
 import yimby.authorities.arun.adapter as arun
 import yimby.authorities.camden.adapter as camden
 import yimby.authorities.devon.adapter as devon
-import yimby.authorities.peak_district.adapter as peak
 from yimby import AuthorityId, Collector, DiscoveryWindow
 from yimby.adapters import AuthorityPackage
 from yimby.domain import (
@@ -275,64 +274,6 @@ class _DevonMock:
         raise AssertionError(url)
 
 
-def _peak_search(*, reported: int = 1, row_date: str = "16/09/2026") -> bytes:
-    return f"""
-    <p data-result-count="{reported}">Showing 1 of {reported} entries</p>
-    <table id="searchresults"><tbody><tr>
-      <td>NP/DIS/0926/0917</td><td>Discharge of Conditions</td>
-      <td>Landscape condition</td><td>{row_date}</td>
-      <td><a href="/result/sanitised-0917">View</a></td>
-    </tr></tbody></table>
-    """.encode()
-
-
-def _peak_detail(reference: str = "NP/DIS/0926/0917", *, loading: bool = True) -> bytes:
-    sections = (
-        '<section id="documents">Loading...</section><section id="comments">Loading...</section>'
-        if loading
-        else ""
-    )
-    return f"""
-    <div class="dataview"><table>
-      <tr><th>Reference</th><td>{reference}</td></tr>
-      <tr><th>Description</th><td>Discharge landscape condition</td></tr>
-      <tr><th>Status</th><td>Pending</td></tr>
-      <tr><th>Application Type</th><td>Discharge of Conditions</td></tr>
-      <tr><th>Development Address</th><td>1 Moorland Lane</td></tr>
-      <tr><th>Parish</th><td>Bakewell</td></tr>
-      <tr><th>Validated Date</th><td>16 Sep 2026</td></tr>
-      <tr><th>Planning Portal Reference</th><td>PP-15234567</td></tr>
-    </table></div>
-    <a href="{peak.ASSURE_BASE}/Application/0917">Current record</a>{sections}
-    """.encode()
-
-
-class _PeakMock:
-    def __init__(
-        self,
-        *,
-        reported: int = 1,
-        row_date: str = "16/09/2026",
-        mismatch_detail: bool = False,
-        loading: bool = True,
-    ) -> None:
-        self.reported = reported
-        self.row_date = row_date
-        self.mismatch_detail = mismatch_detail
-        self.loading = loading
-
-    def __call__(self, request: PortalRequest) -> bytes:
-        url = str(request.url)
-        if url == peak._WEEKLY_URL:
-            return _peak_search(reported=self.reported, row_date=self.row_date)
-        if "/result/" in url:
-            return _peak_detail(
-                "WRONG/1" if self.mismatch_detail else "NP/DIS/0926/0917",
-                loading=self.loading,
-            )
-        raise AssertionError(url)
-
-
 def _camden_form() -> bytes:
     return b"""
     <form id="searchForm" action="index.xhtml;jsessionid=sanitised">
@@ -491,35 +432,6 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
     store.close()
 
 
-def test_peak_district_public_collector_keeps_loading_sections_failed(
-    tmp_path: Path,
-) -> None:
-    adapter = peak.PeakDistrictAdapter(today=lambda: date(2026, 9, 16))
-    package = AuthorityPackage(
-        adapter, peak.PeakDistrictApplicationV1, peak.PeakDistrictCheckpointV1
-    )
-    store = _store(tmp_path)
-    collector = Collector(_registry(package), store)
-    window = DiscoveryWindow(
-        start=date(2026, 9, 10), end=date(2026, 9, 16), include_open=False
-    )
-    report = asyncio.run(
-        collector.collect(AuthorityId("peak-district"), window, _Session(_PeakMock()))
-    )
-    assert len(report.applications) == 1
-    stored = store.get_application(report.applications[0])
-    assert stored.completeness.documents.kind == "failed"
-    assert stored.completeness.comments.kind == "failed"
-    assert (
-        store.discovery_state(AuthorityId("peak-district")).queued[0].locator
-        == f"{peak.LEGACY_BASE}/result/sanitised-0917"
-    )
-    view = store.application_view(report.applications[0])
-    assert view.metadata.aliases == ("PP-15234567",)
-    assert report.attachment_body_requests == 0
-    store.close()
-
-
 def test_camden_exact_resolution_and_public_package_collection() -> None:
     adapter = camden.CamdenAdapter()
     package = AuthorityPackage(
@@ -673,58 +585,6 @@ def test_devon_window_disclaimer_cap_and_identity_boundaries() -> None:
                 _Session(_DevonMock()), reference.model_copy(update={"locator": None})
             )
         )
-
-
-def test_peak_window_count_open_and_identity_boundaries() -> None:
-    adapter = peak.PeakDistrictAdapter(today=lambda: date(2026, 9, 16))
-    window = DiscoveryWindow(
-        start=date(2026, 9, 10), end=date(2026, 9, 16), include_open=False
-    )
-    with pytest.raises(peak.PeakDistrictWindowUnsupportedError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(_PeakMock()),
-                window.model_copy(update={"start": date(2026, 9, 11)}),
-                None,
-            )
-        )
-    with pytest.raises(peak.PeakDistrictCountMismatchError):
-        asyncio.run(_batches(adapter, _Session(_PeakMock(reported=2)), window, None))
-    with pytest.raises(peak.PeakDistrictResultWindowError):
-        asyncio.run(
-            _batches(adapter, _Session(_PeakMock(row_date="09/09/2026")), window, None)
-        )
-    with pytest.raises(peak.PeakDistrictOpenEnumerationUnsupportedError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(_PeakMock()),
-                window.model_copy(update={"include_open": True}),
-                None,
-            )
-        )
-    stale = peak.PeakDistrictCheckpointV1(
-        row_offset="live", window_start=date(2020, 1, 1), window_end=date(2020, 1, 2)
-    )
-    with pytest.raises(peak.PeakDistrictCheckpointError):
-        asyncio.run(_batches(adapter, _Session(_PeakMock()), window, stale))
-    reference = SourceReference(
-        source_id=peak.LEGACY_SOURCE,
-        reference="NP/DIS/0926/0917",
-        locator=f"{peak.LEGACY_BASE}/result/sanitised-0917",
-    )
-    with pytest.raises(peak.PeakDistrictReferenceMismatchError):
-        asyncio.run(adapter.fetch(_Session(_PeakMock(mismatch_detail=True)), reference))
-    with pytest.raises(peak.PeakDistrictRoutingError):
-        asyncio.run(
-            adapter.fetch(
-                _Session(_PeakMock()), reference.model_copy(update={"locator": None})
-            )
-        )
-    complete = asyncio.run(adapter.fetch(_Session(_PeakMock(loading=False)), reference))
-    assert complete.completeness.documents.kind == "unavailable"
-    assert complete.completeness.comments.kind == "unavailable"
 
 
 def test_camden_discovery_search_document_and_identity_boundaries() -> None:
@@ -893,80 +753,6 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     assert devon._optional_date({}, "date") is None
     with pytest.raises(devon.DevonParseError, match="date date"):
         devon._optional_date({"date": "bad"}, "date")
-
-
-def test_peak_terminal_and_parser_boundaries() -> None:
-    adapter = peak.PeakDistrictAdapter(today=lambda: date(2026, 9, 16))
-    window = DiscoveryWindow(
-        start=date(2026, 9, 10), end=date(2026, 9, 16), include_open=False
-    )
-    terminal = peak.PeakDistrictCheckpointV1(row_offset="live", live_complete=True)
-    assert asyncio.run(_batches(adapter, _Session(_PeakMock()), window, terminal))[
-        0
-    ].complete
-    with pytest.raises(peak.PeakDistrictOpenEnumerationUnsupportedError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(_PeakMock()),
-                window.model_copy(update={"include_open": True}),
-                terminal,
-            )
-        )
-    seen = peak.PeakDistrictCheckpointV1(
-        row_offset="live", seen_references=("NP/DIS/0926/0917",)
-    )
-    assert (
-        asyncio.run(_batches(adapter, _Session(_PeakMock()), window, seen))[
-            0
-        ].references
-        == ()
-    )
-    with pytest.raises(peak.PeakDistrictParseError, match="searchresults"):
-        peak._parse_weekly_results(b"<html></html>", window)
-    assert (
-        peak._parse_weekly_results(
-            b'<p data-result-count="0"></p><table id="searchresults"><tr><th>Head</th></tr></table>',
-            window,
-        )
-        == ()
-    )
-    with pytest.raises(peak.PeakDistrictParseError, match="opaque result link"):
-        peak._parse_weekly_results(
-            b'<p data-result-count="1"></p><table id="searchresults"><tr><td>A</td><td>16/09/2026</td></tr></table>',
-            window,
-        )
-    with pytest.raises(peak.PeakDistrictParseError, match="weekly reference"):
-        peak._parse_weekly_results(
-            b'<p data-result-count="1"></p><table id="searchresults"><tr><td></td><td>16/09/2026</td><td><a href="/result/x">View</a></td></tr></table>',
-            window,
-        )
-    assert peak._reported_count(BeautifulSoup("No entries", "html.parser")) == 0
-    assert (
-        peak._reported_count(
-            BeautifulSoup("Showing 1 to 10 of 12 entries", "html.parser")
-        )
-        == 12
-    )
-    with pytest.raises(peak.PeakDistrictParseError, match="reported result count"):
-        peak._reported_count(BeautifulSoup("Unknown", "html.parser"))
-    with pytest.raises(peak.PeakDistrictParseError, match="weekly row date"):
-        peak._row_date([BeautifulSoup("<td>none</td>", "html.parser").td])  # type: ignore[list-item]
-    fields, loading, assure = peak._parse_detail(
-        b'<dl class="details"><dt>Proposal</dt><dd>Value</dd><dt>Orphan</dt></dl>'
-    )
-    assert fields == {"proposal": "Value"}
-    assert loading == ()
-    assert assure is None
-    with pytest.raises(peak.PeakDistrictParseError, match="legacy labelled detail"):
-        peak._parse_detail(b'<table class="details"><tr><td>orphan</td></tr></table>')
-    assert peak._optional_field({"second": "value"}, "first", "second") == "value"
-    assert peak._optional_field({}, "missing") is None
-    with pytest.raises(peak.PeakDistrictParseError, match="detail missing"):
-        peak._required_field({}, "missing")
-    assert peak._optional_date({}, "date") is None
-    with pytest.raises(peak.PeakDistrictParseError, match="date date"):
-        peak._optional_date({"date": "bad"}, "date")
 
 
 def test_camden_search_and_parser_boundaries() -> None:

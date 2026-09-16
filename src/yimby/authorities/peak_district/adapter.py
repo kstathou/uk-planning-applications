@@ -8,7 +8,7 @@ import re
 from datetime import UTC, date, datetime
 from html import unescape
 from typing import TYPE_CHECKING, Literal, NoReturn
-from urllib.parse import parse_qs, quote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urlencode, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
@@ -23,21 +23,31 @@ from yimby.domain import (
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
+    DocumentRecord,
     FailedSection,
     FrozenModel,
+    NativeDocument,
     NativeSnapshot,
     NormalisedObservation,
     Provenance,
+    SectionState,
     SourceDefinition,
     SourceId,
     SourceReference,
     TransportMode,
     UnavailableSection,
+    collection_state,
 )
-from yimby.transport import FormField, PortalRequest, RequestIntent, RequestMethod
+from yimby.transport import (
+    FormField,
+    PortalRequest,
+    RequestIntent,
+    RequestMethod,
+    SourceUnavailableError,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator
 
     from yimby.domain import EvidenceCapture
     from yimby.transport import PortalSession
@@ -46,14 +56,18 @@ LEGACY_SOURCE = SourceId("peak-district-legacy")
 ASSURE_SOURCE = SourceId("peak-district-assurelive")
 LEGACY_BASE = "https://portal.peakdistrict.gov.uk"
 ASSURE_BASE = "https://planning.peakdistrict.gov.uk/AssureLive"
-_WEEKLY_URL = f"{LEGACY_BASE}/quicksearch/validated_past_week"
 _ONLINE_BASE = f"{ASSURE_BASE}/ES/Presentation/Planning/OnlinePlanning"
 _SEARCH_URL = f"{_ONLINE_BASE}/OnlinePlanningSearch"
 _ADVANCED_FORM_URL = f"{_ONLINE_BASE}/AdvanceSearch?SearchFor=0"
 _RESULTS_URL = f"{_ONLINE_BASE}/OnlinePlanningSearchResults"
 _PAGINATION_URL = f"{_ONLINE_BASE}/SearchResultsForPagination"
+_DOCUMENTS_URL = f"{_ONLINE_BASE}/GetOnlineDocuments"
+_DOCUMENT_PATH_PREFIX = (
+    "/AssureLive/ES/Presentation/Planning/OnlineDisplayDocument/DisplaySearchDocument/"
+)
 _DATE_FORMATS = ("%d/%m/%Y", "%d %B %Y", "%d %b %Y", "%Y-%m-%d")
 _MINIMUM_LABELLED_CELLS = 2
+_DOCUMENT_COLUMN_COUNT = 4
 type _DateQueryField = Literal["Received", "Validated", "Decided"]
 _DATE_QUERY_FIELDS: tuple[_DateQueryField, ...] = (
     "Received",
@@ -126,8 +140,15 @@ class _ActivePage(FrozenModel):
     row_count: int
 
 
+class PeakDistrictDocumentV1(NativeDocument):
+    """AssureLive document metadata without attachment content."""
+
+    published_date: date | None = None
+    document_type: str | None = None
+
+
 class PeakDistrictApplicationV1(FrozenModel):
-    """Peak District-native legacy summary."""
+    """Peak District-native application and document metadata."""
 
     park_reference: str
     record_type: str
@@ -140,6 +161,32 @@ class PeakDistrictApplicationV1(FrozenModel):
     validated_date: date | None = None
     assurelive_url: HttpUrl | None = None
     loading_sections: tuple[str, ...] = ()
+    applicant_name: str | None = None
+    agent_name: str | None = None
+    officer_name: str | None = None
+    documents: tuple[PeakDistrictDocumentV1, ...] = ()
+
+
+class _AssureDetail(FrozenModel):
+    reference: str
+    record_type: str
+    proposal: str
+    status: str
+    parish: str
+    address: str | None = None
+    registered_date: date | None = None
+    applicant_name: str | None = None
+    agent_name: str | None = None
+    officer_name: str | None = None
+    documents_endpoint: str | None = None
+    comments_tab: bool = False
+
+
+class _DocumentPage(FrozenModel):
+    documents: tuple[PeakDistrictDocumentV1, ...]
+    reported: int
+    page_index: int
+    page_size: int
 
 
 class PeakDistrictAdapter:
@@ -161,10 +208,6 @@ class PeakDistrictAdapter:
             ),
         ),
     )
-
-    def __init__(self, today: Callable[[], date] = date.today) -> None:
-        """Inject today's date so the rolling weekly boundary is testable."""
-        self._today = today
 
     async def discover(
         self,
@@ -339,33 +382,68 @@ class PeakDistrictAdapter:
     ) -> NativeSnapshot[PeakDistrictApplicationV1]:
         if reference.source_id != LEGACY_SOURCE or reference.locator is None:
             raise PeakDistrictRoutingError(reference.reference)
+        locator = urlsplit(reference.locator)
+        applications = parse_qs(locator.query).get("applicationNumber", [])
+        if (
+            locator.scheme != "https"
+            or locator.netloc != "planning.peakdistrict.gov.uk"
+            or locator.path != urlsplit(f"{_ONLINE_BASE}/OnlinePlanningOverview").path
+            or len(applications) != 1
+        ):
+            raise PeakDistrictRoutingError(reference.reference)
+        if applications[0] != reference.reference:
+            raise PeakDistrictReferenceMismatchError(
+                reference.reference,
+                applications[0],
+            )
         detail = await session.fetch(
             PortalRequest(url=HttpUrl(reference.locator), intent=RequestIntent.DETAIL)
         )
-        fields, loading_sections, assure_url = _parse_detail(detail.body)
-        published = _required_field(fields, "reference", "application reference")
-        if published != reference.reference:
-            raise PeakDistrictReferenceMismatchError(reference.reference, published)
-        payload = PeakDistrictApplicationV1(
-            park_reference=published,
-            record_type=_required_field(
-                fields, "application type", "record type", "type"
-            ),
-            proposal_summary=_required_field(fields, "description", "proposal"),
-            case_status=_required_field(fields, "status"),
-            parish=_required_field(fields, "parish"),
-            legacy_record_url=HttpUrl(reference.locator),
-            development_address=_optional_field(
-                fields, "development address", "address"
-            ),
-            planning_portal_reference=_optional_field(
-                fields, "planning portal reference"
-            ),
-            validated_date=_optional_date(fields, "validated date", "date validated"),
-            assurelive_url=assure_url,
-            loading_sections=loading_sections,
+        parsed = _parse_assure_detail(detail.body)
+        if parsed.reference != reference.reference:
+            raise PeakDistrictReferenceMismatchError(
+                reference.reference,
+                parsed.reference,
+            )
+        evidence = [detail]
+        documents, documents_state = await _fetch_assure_documents(
+            session,
+            parsed.documents_endpoint,
+            reference.reference,
+            evidence,
         )
-        return _snapshot(reference, payload, detail)
+        payload = PeakDistrictApplicationV1(
+            park_reference=parsed.reference,
+            record_type=parsed.record_type,
+            proposal_summary=parsed.proposal,
+            case_status=parsed.status,
+            parish=parsed.parish,
+            legacy_record_url=HttpUrl(reference.locator),
+            development_address=parsed.address,
+            validated_date=parsed.registered_date,
+            assurelive_url=HttpUrl(reference.locator),
+            applicant_name=parsed.applicant_name,
+            agent_name=parsed.agent_name,
+            officer_name=parsed.officer_name,
+            documents=documents,
+        )
+        return NativeSnapshot(
+            reference=reference,
+            observed_at=datetime.now(UTC),
+            payload=payload,
+            completeness=Completeness(
+                application=CompleteSection(item_count=1),
+                documents=documents_state,
+                comments=(
+                    FailedSection(code="comments-tab-unsupported")
+                    if parsed.comments_tab
+                    else UnavailableSection(
+                        reason="AssureLive exposes no public comments tab"
+                    )
+                ),
+            ),
+            evidence=tuple(evidence),
+        )
 
     def normalise(
         self,
@@ -379,14 +457,17 @@ class PeakDistrictAdapter:
             reference=snapshot.reference,
             proposal=payload.proposal_summary,
             status=payload.case_status.casefold().replace(" ", "-"),
-            documents=(),
+            documents=tuple(
+                DocumentRecord(title=document.title, url=document.url)
+                for document in payload.documents
+            ),
             comments=(),
             completeness=snapshot.completeness,
             provenance=(
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="peak-district-v2",
+            normaliser_version="peak-district-v3",
             metadata=ApplicationMetadata(
                 application_type=payload.record_type,
                 address=payload.development_address,
@@ -397,6 +478,12 @@ class PeakDistrictAdapter:
                     else (payload.planning_portal_reference,)
                 ),
                 source_url=snapshot.evidence[0].url,
+                published_parties=tuple(
+                    value
+                    for value in (payload.applicant_name, payload.agent_name)
+                    if value is not None
+                ),
+                officer_name=payload.officer_name,
             ),
         )
 
@@ -732,6 +819,229 @@ def _assert_checkpoint(
         raise PeakDistrictCheckpointError
 
 
+def _parse_assure_detail(body: bytes) -> _AssureDetail:
+    soup = BeautifulSoup(body, "html.parser")
+    reference = _required_element_text(soup, "#spnApplicationId", "detail reference")
+    hidden = soup.select_one("#applicationReference")
+    if not isinstance(hidden, Tag) or str(hidden.get("value", "")).strip() != reference:
+        _raise_parse("detail application reference")
+    status = _required_element_text(
+        soup,
+        "#applicationStatusHelpTextHeader",
+        "detail status",
+    )
+    labels = soup.select(
+        ".row.btspace.tpspace .col-xs-12.padding-0 > .col-xs-12 > label"
+    )
+    record_type = next(
+        (
+            label.get_text(" ", strip=True)
+            for label in labels
+            if label.get("id") != "applicationDisplayAddress"
+            and label.get_text(" ", strip=True)
+        ),
+        "",
+    )
+    if not record_type:
+        _raise_parse("detail record type")
+    fields: dict[str, str] = {}
+    for row in soup.select("#tabOverviewMain table.boxBorderLightGrey tr"):
+        cells = row.find_all("td", recursive=False)
+        if len(cells) >= _MINIMUM_LABELLED_CELLS:
+            key = _normalise_label(cells[0].get_text(" ", strip=True))
+            value = cells[-1].get_text(" ", strip=True)
+            if key and value:
+                fields[key] = value
+    proposal = _required_field(fields, "proposal")
+    parish = _required_field(fields, "parish")
+    address_element = soup.select_one("#applicationDisplayAddress")
+    address = (
+        None
+        if not isinstance(address_element, Tag)
+        else " ".join(address_element.get_text(" ", strip=True).split()) or None
+    )
+    documents_element = soup.select_one("#divDisplayDocumentsUrl")
+    documents_endpoint = (
+        None
+        if not isinstance(documents_element, Tag)
+        else str(documents_element.get("data-url", "")) or None
+    )
+    return _AssureDetail(
+        reference=reference,
+        record_type=record_type,
+        proposal=proposal,
+        status=status,
+        parish=parish,
+        address=address,
+        registered_date=_optional_date(fields, "registered"),
+        applicant_name=_optional_field(fields, "applicant"),
+        agent_name=_optional_field(fields, "agent/company", "agent"),
+        officer_name=_optional_field(fields, "planning officer", "case officer"),
+        documents_endpoint=documents_endpoint,
+        comments_tab=soup.select_one("#Comments_tab") is not None,
+    )
+
+
+def _required_element_text(
+    soup: BeautifulSoup,
+    selector: str,
+    field: str,
+) -> str:
+    element = soup.select_one(selector)
+    if not isinstance(element, Tag):
+        _raise_parse(field)
+    value = element.get_text(" ", strip=True)
+    if not value:
+        _raise_parse(field)
+    return value
+
+
+async def _fetch_assure_documents(  # noqa: PLR0911
+    session: PortalSession,
+    endpoint: str | None,
+    reference: str,
+    evidence: list[EvidenceCapture],
+) -> tuple[tuple[PeakDistrictDocumentV1, ...], SectionState]:
+    if endpoint is None or urljoin(f"{ASSURE_BASE}/", endpoint) != _DOCUMENTS_URL:
+        return (), FailedSection(code="documents-route-drift")
+    documents: list[PeakDistrictDocumentV1] = []
+    seen_urls: set[str] = set()
+    page_index = 0
+    while True:
+        try:
+            capture = await session.fetch(
+                _document_request(reference, page_index),
+            )
+        except SourceUnavailableError:
+            return (), FailedSection(code="source-unavailable")
+        evidence.append(capture)
+        try:
+            page = _parse_document_page(
+                capture.body,
+                reference=reference,
+                expected_page=page_index,
+            )
+        except PeakDistrictParseError as error:
+            return (), FailedSection(code=error.code)
+        for document in page.documents:
+            url = str(document.url)
+            if url in seen_urls:
+                return (), FailedSection(code="duplicate-document-url")
+            seen_urls.add(url)
+            documents.append(document)
+        if len(documents) > page.reported:
+            return (), FailedSection(code="document-count-mismatch")
+        if len(documents) == page.reported:
+            return tuple(documents), collection_state(len(documents))
+        if not page.documents:
+            return (), FailedSection(code="document-count-mismatch")
+        page_index += 1
+
+
+def _document_request(reference: str, page_index: int) -> PortalRequest:
+    query = urlencode(
+        {
+            "applicationNumber": reference,
+            "currentPageIndex": page_index,
+            "IsDatePublishSortedDescending": "false",
+            "pageSize": 10,
+        }
+    )
+    return PortalRequest(
+        url=HttpUrl(f"{_DOCUMENTS_URL}?{query}"),
+        intent=RequestIntent.DETAIL,
+        method=RequestMethod.POST,
+    )
+
+
+def _parse_document_page(
+    body: bytes,
+    *,
+    reference: str,
+    expected_page: int,
+) -> _DocumentPage:
+    soup = BeautifulSoup(body, "html.parser")
+    container = soup.select_one("#tabDocumentsMain")
+    if not isinstance(container, Tag):
+        _raise_parse("documents container")
+    links = container.select(f'a[href*="{_DOCUMENT_PATH_PREFIX}"]')
+    if "no record(s) found" in container.get_text(" ", strip=True).casefold():
+        if links or expected_page != 0:
+            _raise_parse("documents empty state")
+        return _DocumentPage(
+            documents=(),
+            reported=0,
+            page_index=0,
+            page_size=10,
+        )
+    total_match = _TOTAL_PATTERN.search(container.get_text(" ", strip=True))
+    if total_match is None:
+        _raise_parse("document reported count")
+    reported = int(total_match.group(1))
+    document_count = _required_control_int(soup, "DocumentCount")
+    hidden_reported = _required_control_int(soup, "PagingParameters.TotalRecords")
+    if len({reported, document_count, hidden_reported}) != 1:
+        raise PeakDistrictCountMismatchError(reported, hidden_reported)
+    page_index = _required_control_int(soup, "PagingParameters.CurrentPageIndex")
+    page_size = _required_control_int(soup, "PagingParameters.PageSize")
+    if page_index != expected_page:
+        _raise_parse("document page index")
+    if page_size <= 0:
+        _raise_parse("document page size")
+    documents = tuple(_parse_document_link(link, reference) for link in links)
+    expected_rows = min(page_size, max(0, reported - (page_index * page_size)))
+    if len(documents) != expected_rows:
+        raise PeakDistrictCountMismatchError(expected_rows, len(documents))
+    pages = max(1, (reported + page_size - 1) // page_size)
+    observed_pages = {
+        int(match.group(1))
+        for link in container.select(".pagination a[onclick]")
+        if (match := _PAGE_PATTERN.search(str(link.get("onclick", "")))) is not None
+    }
+    if observed_pages != set(range(pages)):
+        _raise_parse("document pagination inventory")
+    return _DocumentPage(
+        documents=documents,
+        reported=reported,
+        page_index=page_index,
+        page_size=page_size,
+    )
+
+
+def _parse_document_link(link: Tag, reference: str) -> PeakDistrictDocumentV1:
+    href = urljoin(f"{ASSURE_BASE}/", str(link.get("href", "")))
+    split = urlsplit(href)
+    query = parse_qs(split.query)
+    if (
+        split.scheme != "https"
+        or split.netloc != "planning.peakdistrict.gov.uk"
+        or not split.path.startswith(_DOCUMENT_PATH_PREFIX)
+        or query.get("applicationNumber") != [reference]
+        or any(
+            len(query.get(name, [])) != 1
+            for name in ("FileName", "fileType", "aspectGuid")
+        )
+    ):
+        _raise_parse("document metadata link")
+    row = link.find_parent(class_="row")
+    if not isinstance(row, Tag):
+        _raise_parse("document metadata row")
+    cells = row.find_all("div", recursive=False)
+    if len(cells) < _DOCUMENT_COLUMN_COUNT:
+        _raise_parse("document metadata row")
+    title = link.get_text(" ", strip=True)
+    published = _parse_date(cells[0].get_text(" ", strip=True))
+    document_type = cells[-1].get_text(" ", strip=True)
+    if not title or published is None or not document_type:
+        _raise_parse("document metadata")
+    return PeakDistrictDocumentV1(
+        title=title,
+        url=HttpUrl(href),
+        published_date=published,
+        document_type=document_type,
+    )
+
+
 def _snapshot(
     reference: SourceReference,
     payload: PeakDistrictApplicationV1,
@@ -761,96 +1071,6 @@ def _snapshot(
         ),
         evidence=(detail,),
     )
-
-
-def _parse_weekly_results(
-    body: bytes, window: DiscoveryWindow
-) -> tuple[SourceReference, ...]:
-    soup = BeautifulSoup(body, "html.parser")
-    table = soup.select_one("#searchresults")
-    if not isinstance(table, Tag):
-        _raise_parse("#searchresults")
-    references = []
-    for row in table.select("tbody tr") or table.select("tr"):
-        cells = row.find_all("td", recursive=False)
-        if not cells:
-            continue
-        link = row.select_one('a[href*="/result/"]')
-        if not isinstance(link, Tag):
-            _raise_parse("opaque result link")
-        row_date = _row_date(cells)
-        if not window.start <= row_date <= window.end:
-            raise PeakDistrictResultWindowError(row_date)
-        reference = cells[0].get_text(" ", strip=True)
-        if not reference:
-            _raise_parse("weekly reference")
-        references.append(
-            SourceReference(
-                source_id=LEGACY_SOURCE,
-                reference=reference,
-                locator=urljoin(f"{LEGACY_BASE}/", str(link.get("href", ""))),
-            )
-        )
-    reported = _reported_count(soup)
-    if reported != len(references):
-        raise PeakDistrictCountMismatchError(reported, len(references))
-    return tuple(references)
-
-
-def _reported_count(soup: BeautifulSoup) -> int:
-    element = soup.select_one("[data-result-count]")
-    if isinstance(element, Tag):
-        return int(str(element.get("data-result-count")))
-    text = soup.get_text(" ", strip=True)
-    if "no entries" in text.casefold() or "no results" in text.casefold():
-        return 0
-    match = re.search(
-        r"(?:showing.*?of|total)\s+(\d+)\s+(?:entries|results)",
-        text,
-        re.IGNORECASE,
-    )
-    if match is None:
-        _raise_parse("reported result count")
-    return int(match.group(1))
-
-
-def _row_date(cells: list[Tag]) -> date:
-    for cell in cells:
-        parsed = _parse_date(cell.get_text(" ", strip=True))
-        if parsed is not None:
-            return parsed
-    return _raise_parse("weekly row date")
-
-
-def _parse_detail(
-    body: bytes,
-) -> tuple[dict[str, str], tuple[str, ...], HttpUrl | None]:
-    soup = BeautifulSoup(body, "html.parser")
-    fields: dict[str, str] = {}
-    for row in soup.select(".dataview tr, table.details tr"):
-        cells = row.find_all(["th", "td"], recursive=False)
-        if len(cells) >= _MINIMUM_LABELLED_CELLS:
-            fields[_normalise_label(cells[0].get_text(" ", strip=True))] = cells[
-                -1
-            ].get_text(" ", strip=True)
-    for term in soup.select(".dataview dt, dl.details dt"):
-        value = term.find_next_sibling("dd")
-        if isinstance(value, Tag):
-            fields[_normalise_label(term.get_text(" ", strip=True))] = value.get_text(
-                " ", strip=True
-            )
-    if not fields:
-        _raise_parse("legacy labelled detail")
-    loading = tuple(
-        str(item.get("id") or item.get("data-section") or "unknown")
-        for item in soup.select("[id], [data-section]")
-        if item.get_text(" ", strip=True).casefold() == "loading..."
-    )
-    assure = soup.select_one(f'a[href^="{ASSURE_BASE}"]')
-    assure_url = (
-        None if not isinstance(assure, Tag) else HttpUrl(str(assure.get("href", "")))
-    )
-    return fields, loading, assure_url
 
 
 def _normalise_label(value: str) -> str:
@@ -891,15 +1111,6 @@ def _parse_date(value: str) -> date | None:
     return None
 
 
-def _assert_window(
-    checkpoint: PeakDistrictCheckpointV1, window: DiscoveryWindow
-) -> None:
-    if checkpoint.window_start is not None and (
-        checkpoint.window_start != window.start or checkpoint.window_end != window.end
-    ):
-        raise PeakDistrictCheckpointError
-
-
 def _required_fixture(value: str, pattern: str, field: str) -> str:
     match = re.search(pattern, value)
     if match is None:
@@ -916,14 +1127,6 @@ class PeakDistrictParseError(ValueError):
         super().__init__(f"missing Peak District field {field}")
 
 
-class PeakDistrictWindowUnsupportedError(ValueError):
-    """The requested dates cannot be proven by the weekly route."""
-
-    def __init__(self, start: date, end: date) -> None:
-        """Report the only currently supported live interval."""
-        super().__init__(f"Peak District live discovery requires {start} through {end}")
-
-
 class PeakDistrictCountMismatchError(ValueError):
     """The DataTable count did not match all DOM rows."""
 
@@ -934,24 +1137,8 @@ class PeakDistrictCountMismatchError(ValueError):
         )
 
 
-class PeakDistrictResultWindowError(ValueError):
-    """The rolling route returned a row outside the requested week."""
-
-    def __init__(self, observed: date) -> None:
-        """Report the unexpected public date."""
-        super().__init__(f"Peak District returned out-of-window row dated {observed}")
-
-
 class PeakDistrictCheckpointError(ValueError):
-    """A saved cursor belongs to another rolling week."""
-
-
-class PeakDistrictOpenEnumerationUnsupportedError(RuntimeError):
-    """Older open applications cannot yet be enumerated completely."""
-
-    def __init__(self) -> None:
-        """Keep the unsupported boundary explicit."""
-        super().__init__("Peak District older-open enumeration is not verified")
+    """A saved cursor is incoherent with its exact discovery scope."""
 
 
 class PeakDistrictRoutingError(ValueError):
