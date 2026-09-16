@@ -362,6 +362,27 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
             ),
             "advanced form fields",
         ),
+        (
+            _advanced_form().replace(
+                b'<input name="searchCriteria.reference" value="">',
+                b'<input name="searchCriteria.reference" value="" disabled>',
+            ),
+            "advanced form fields",
+        ),
+        (
+            _advanced_form().replace(
+                b'<option value="Current">',
+                b'<option value="Current" disabled>',
+            ),
+            "advanced case status options",
+        ),
+        (
+            _advanced_form().replace(
+                b'<select name="searchCriteria.caseStatus">',
+                b'<select name="searchCriteria.caseStatus" disabled>',
+            ),
+            "advanced case status",
+        ),
     ],
     ids=(
         "missing",
@@ -372,6 +393,9 @@ def test_leeds_rejects_advanced_case_type_taxonomy_drift() -> None:
         "unknown-filter",
         "duplicate-discriminator",
         "extra-opaque",
+        "disabled-filter",
+        "disabled-option",
+        "disabled-select",
     ),
 )
 def test_leeds_rejects_advanced_form_boundary_drift(
@@ -989,10 +1013,20 @@ def test_leeds_rejects_malformed_summary_boundaries(
 
 def test_leeds_accepts_an_explicit_empty_document_page() -> None:
     """Only the official no-documents wording establishes emptiness."""
-    documents, state = leeds_adapter._parse_documents(b"<p>No documents found</p>")
+    documents, state = leeds_adapter._parse_documents(
+        b"<span>Documents (0)</span><p>No documents found</p>"
+    )
 
     assert documents == ()
     assert isinstance(state, EmptySection)
+
+
+def test_leeds_rejects_a_contradictory_empty_document_page() -> None:
+    """No-documents wording cannot overrule a nonzero authoritative count."""
+    with pytest.raises(LeedsParseError, match="documents table"):
+        leeds_adapter._parse_documents(
+            b"<span>Documents (2)</span><p>No documents found</p>"
+        )
 
 
 def test_leeds_rejects_a_truncated_document_index() -> None:

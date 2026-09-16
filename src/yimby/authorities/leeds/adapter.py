@@ -716,9 +716,15 @@ def _require_options(
     controls = form.select(f'select[name="{field}"]')
     if len(controls) != 1:
         _raise_parse(f"advanced {label}")
+    control = controls[0]
+    if control.has_attr("disabled"):
+        _raise_parse(f"advanced {label}")
+    options = control.select("option[value]")
+    if any(option.has_attr("disabled") for option in options):
+        _raise_parse(f"advanced {label} options")
     actual = tuple(
         (str(option.get("value", "")), option.get_text(" ", strip=True))
-        for option in controls[0].select("option[value]")
+        for option in options
     )
     if actual != expected:
         _raise_parse(f"advanced {label} options")
@@ -740,6 +746,8 @@ def _form_fields(form: Tag) -> tuple[FormField, ...]:
     for control in form.select("input[name], select[name], textarea[name]"):
         name = control.get("name")
         if not isinstance(name, str):
+            continue
+        if control.has_attr("disabled"):
             continue
         if control.name == "input":
             input_type = str(control.get("type", "text")).casefold()
@@ -978,22 +986,22 @@ def _parse_documents(
     body: bytes,
 ) -> tuple[tuple[LeedsDocumentV1, ...], SectionState]:
     soup = BeautifulSoup(body, "html.parser")
+    page_text = soup.get_text(" ", strip=True).casefold()
+    if "permission denied" in page_text and (
+        "do not have permission to view the page" in page_text
+    ):
+        return (), UnavailableSection(
+            reason="documents are restricted by Leeds Public Access"
+        )
+    expected = _section_count(soup, "documents")
     tables = soup.select('table[summary="Documents" i]')
     if not tables:
-        page_text = soup.get_text(" ", strip=True).casefold()
-        if "permission denied" in page_text and (
-            "do not have permission to view the page" in page_text
-        ):
-            return (), UnavailableSection(
-                reason="documents are restricted by Leeds Public Access"
-            )
-        if "no documents found" in page_text:
+        if expected == 0:
             return (), EmptySection()
         _raise_parse("documents table")
     if len(tables) != 1:
         _raise_parse("documents table")
     table = tables[0]
-    expected = _section_count(soup, "documents")
     rows = table.select("tr")
     if not rows:
         _raise_parse("documents table header")

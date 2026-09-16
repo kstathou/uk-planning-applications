@@ -69,7 +69,8 @@ allowlisted repeated opaque fields. It preserves every enabled named control in
 DOM order. It replaces only fields owned by the active query and preserves
 `caseAddressType=Application`, the nonblank `_csrf`,
 `searchType=Application`, blank defaults, and both opaque fields. Unknown or
-duplicate controls and taxonomy drift fail closed.
+duplicate controls, disabled named controls or options, and taxonomy drift fail
+closed.
 
 ## Checkpoint
 
@@ -113,11 +114,12 @@ selection cell followed by `Date Published`, `Document Type`, `Measure`,
 `Description`, and `View`; the selection cell can contain the portal's hidden
 label and checkbox. The four-cell compact shape omits selection and measure.
 The parser stores metadata and resolved view URLs but never requests them. A
-header-only table or explicit no-documents response is empty. The exact
-permission-denied response is unavailable. Every other missing or malformed
-table remains failed. Parsed rows must exactly equal the portal's displayed
-`Documents (N)` count, including zero. A document transport failure propagates
-to the collector's bounded whole-record retry rather than becoming a successful
+header-only table or missing table is empty only when the authoritative
+`Documents (N)` count is zero. The exact permission-denied response is
+unavailable. Every other missing or malformed table remains failed. Parsed rows
+must exactly equal the displayed count, including zero; no-documents wording
+cannot overrule a nonzero count. A document transport failure propagates to the
+collector's bounded whole-record retry rather than becoming a successful
 snapshot with a failed section. Public comment text is `UnavailableSection`
 under the verified Leeds policy, and comment tabs are not fetched.
 
