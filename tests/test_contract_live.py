@@ -805,6 +805,16 @@ def test_devon_collects_exact_appeal_route_and_native_fields() -> None:
     assert normalised.metadata.decision == "Withdrawn"
     assert normalised.metadata.aliases == ("3299799",)
     assert normalised.metadata.published_parties == ()
+    placeholder_decision = adapter.normalise(
+        snapshot.model_copy(
+            update={
+                "payload": snapshot.payload.model_copy(
+                    update={"appeal_decision": "-"}
+                )
+            }
+        )
+    )
+    assert placeholder_decision.metadata.decision is None
     assert {
         (item.relationship_type, item.related_reference)
         for item in normalised.metadata.relationships
