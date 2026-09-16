@@ -37,14 +37,14 @@ Implement in three waves of five. All 15 belong to the pilot; national rollout b
 | 2 | Old Oak and Park Royal Development Corporation | Development-corporation cases and delegated applications |
 | 2 | Dorset | Consolidated authority and register integration |
 | 2 | Cheshire East | Alternative search workflow and reference handling |
-| 2 | Blackburn with Darwen | Another Planning Explorer implementation |
+| 2 | Blackburn with Darwen | Citizen register with visible-browser verification |
 | 3 | Birmingham | Metropolitan authority and Planning Explorer variation |
 | 3 | Leeds | Large urban authority and geographical searches |
 | 3 | Cornwall | Geographically large unitary authority |
 | 3 | Durham County Council | North East and unitary-county coverage |
 | 3 | West Suffolk | East of England, ward/parish filters, weekly lists |
 
-The additions include confirmed distinct implementations: [Arun's Ocella interface](https://www.arun.gov.uk/planning-application-search/), [OPDC's Agile/APAS system](https://www.london.gov.uk/adhs13-apas-back-office-planning-system-fee-2025-26), and [Blackburn's Planning Explorer](https://planning.blackburn.gov.uk/Northgate/PlanningExplorer/ApplicationSearch.aspx). Confirm each authority's current portal and supporting services during its walkthrough.
+The additions include confirmed distinct implementations: [Arun's Ocella interface](https://www.arun.gov.uk/planning-application-search/), [OPDC's Agile/APAS system](https://www.london.gov.uk/adhs13-apas-back-office-planning-system-fee-2025-26), and [Blackburn's current Citizen register](https://online.blackburn.gov.uk/planning/). Confirm each authority's current portal and supporting services during its walkthrough.
 
 ### Required investigation for every authority
 

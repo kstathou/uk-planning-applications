@@ -129,6 +129,40 @@ the rolling seven-day quick link and reports the source-provided totals. It
 does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
+Blackburn with Darwen has an authority-specific persisted qualification command:
+
+```sh
+uv run python scripts/qualify_blackburn_with_darwen.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-blackburn-with-darwen-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open \
+  --resume
+```
+
+The command accepts exactly one inclusive 30-day window and requires
+`--include-open`. Omit `--resume` only for a new or empty directory. It searches
+received, valid, and decision dates for the recent window and received dates
+from 1 January 1977 for older open cases. Capped ranges split recursively. A
+30-row result on a single day, form drift, route drift, or incomplete store
+fails closed.
+
+The source requires visible Chromium and may present an attended human check.
+After that check is completed, its browser storage state may be saved as
+`browser-state.json` inside the qualification directory. The command reuses
+that file automatically. It can contain a short-lived verification token, so
+keep it local, ignored, and unshared.
+
+Every attempt atomically replaces
+`blackburn-with-darwen-qualification-v1.json` with either a typed `qualified`
+or `blocked` result. Qualification requires a terminal coherent query tree,
+zero pending retries, zero failed sections, database and evidence integrity,
+one persisted application per discovered reference, zero attachment-body
+requests, and an immediate rerun with zero requests, bytes, and browser time.
+The receipt keeps the later 23 and 30 September cycles pending. Same-day replay
+does not satisfy them.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
