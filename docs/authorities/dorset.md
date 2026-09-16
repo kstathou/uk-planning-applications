@@ -119,7 +119,7 @@ A final adversarial review found that automatic redirects could still leave the
 official origin and that HTTPX could consume an attachment-marked intermediate
 redirect body. Exact pre-dispatch route validation and pre-body response-header
 checks now close both paths. A bounded official smoke of the corrected transport
-completed the disclaimer flow through the three expected official requests,
+completed the disclaimer flow through the three expected top-level fetches,
 transferred 396,105 bytes, and recorded zero attachment-body requests. This
 monotonic boundary correction does not alter the persisted terminal inventory
 or its receipt digest.
