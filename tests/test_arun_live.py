@@ -6,7 +6,9 @@
 import asyncio
 import importlib.util
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, date, datetime, timedelta
 from hashlib import sha256
 from itertools import pairwise
@@ -17,17 +19,23 @@ import pytest
 from pydantic import HttpUrl
 
 import yimby.authorities.arun.adapter as arun
+from yimby.authorities.arun import ARUN_PACKAGE
 from yimby.domain import (
+    ApplicationId,
     AuthorityId,
+    Completeness,
+    CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
+    RetainedNativeRecord,
     RunMetrics,
     RunOutcome,
     RunStatus,
     SourceReference,
     TransportMode,
+    UnavailableSection,
 )
 from yimby.evidence import EvidenceStore
 from yimby.store import SqliteStore
@@ -66,9 +74,9 @@ def _search_form() -> bytes:
 
 def _partial_results(query_fields: str) -> bytes:
     return f"""
-    <table><tr><th>Reference</th></tr>
+    <table><tr><th>Reference</th><th>Location</th><th>Proposal</th><th>Status</th></tr>
       <tr><td><a href="planningDetails?reference=BR/1/26/PL&amp;from=planningSearch">
-        BR/1/26/PL</a></td></tr>
+        BR/1/26/PL</a></td><td>Site</td><td>Proposal</td><td>Undecided</td></tr>
     </table>
     <strong>First 20 results shown, there are 2 in total</strong>
     <form method="post" action="planningSearch">
@@ -232,6 +240,8 @@ class _DiscoveryResponder:
                 if name != "action"
             )
             return _partial_results(fields)
+        if values.get("receivedFrom") == "01-01-01":
+            return _complete_results((self.references[0],))
         return _empty_results()
 
 
@@ -447,13 +457,16 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         )
 
     duplicate = (
-        b'<table><tr><td><a href="planningDetails?reference=A">A</a></td></tr>'
-        b'<tr><td><a href="planningDetails?reference=A">A again</a></td></tr></table>'
+        b"<table><tr><th>Reference</th><th>Location</th><th>Proposal</th>"
+        b'<th>Status</th></tr><tr><td><a href="planningDetails?reference=A">A</a>'
+        b"</td><td>Site</td><td>Proposal</td><td>Open</td></tr>"
+        b'<tr><td><a href="planningDetails?reference=A">A again</a></td>'
+        b"<td>Site</td><td>Proposal</td><td>Open</td></tr></table>"
         b"<strong>First 20 results shown, there are 2 in total</strong>"
     )
     with pytest.raises(arun.ArunParseError, match="duplicate result reference"):
         arun._parse_search_results(duplicate)
-    with pytest.raises(arun.ArunParseError, match="reported result count"):
+    with pytest.raises(arun.ArunParseError, match="result table"):
         arun._parse_search_results(
             b'<a href="planningDetails?reference=A">A</a><p>1 result</p>'
         )
@@ -464,13 +477,13 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
             b"<strong>First 20 results shown, there are 2 in total</strong>"
             b"<strong>First 20 results shown, there are 2 in total</strong>"
         )
-    with pytest.raises(arun.ArunParseError, match="reported result count"):
+    with pytest.raises(arun.ArunParseError, match="result table"):
         arun._parse_search_results(
             b"<div>No records are deleted</div>"
             b'<a href="planningDetails?reference=A">A</a>'
         )
 
-    with pytest.raises(arun.ArunParseError, match="reported result count"):
+    with pytest.raises(arun.ArunParseError, match="result table"):
         arun._parse_search_results(
             b'<a href="planningDetails?reference=BR/1/26/PL">BR/1/26/PL</a>'
         )
@@ -499,7 +512,55 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
 def test_arun_result_links_stay_on_the_exact_official_route(href: str) -> None:
     with pytest.raises(arun.ArunParseError, match="result reference"):
         arun._parse_search_results(
-            f'<strong>1 record</strong><a href="{href}">BR/1/26/PL</a>'.encode()
+            _complete_results(("BR/1/26/PL",)).replace(
+                b"planningDetails?reference=BR/1/26/PL&amp;from=planningSearch",
+                href.replace("&", "&amp;").encode(),
+            )
+        )
+
+
+def test_arun_result_membership_is_owned_by_each_validated_table_row() -> None:
+    outside = (
+        _complete_results(("INSIDE/1",)).replace(
+            b'<a href="planningDetails?reference=INSIDE/1&amp;from=planningSearch">'
+            b"INSIDE/1</a>",
+            b"INSIDE/1",
+        )
+        + b'<a href="planningDetails?reference=OUTSIDE/1">outside</a>'
+    )
+
+    with pytest.raises(arun.ArunParseError, match="outside table"):
+        arun._parse_search_results(outside)
+
+    base = _complete_results(("INSIDE/1",))
+    with pytest.raises(arun.ArunParseError, match="result row"):
+        arun._parse_search_results(base.replace(b"<td>Site</td>", b"", 1))
+    with pytest.raises(arun.ArunParseError, match="result reference"):
+        arun._parse_search_results(
+            base.replace(
+                b'<a href="planningDetails?reference=INSIDE/1&amp;from=planningSearch">'
+                b"INSIDE/1</a>",
+                b'<a href="other">INSIDE/1</a>',
+            )
+        )
+    wrong_cell = base.replace(
+        b'<a href="planningDetails?reference=INSIDE/1&amp;from=planningSearch">'
+        b"INSIDE/1</a>",
+        b"INSIDE/1",
+    ).replace(
+        b"<td>Site</td>",
+        b'<td><a href="planningDetails?reference=INSIDE/1">Site</a></td>',
+        1,
+    )
+    with pytest.raises(arun.ArunParseError, match="result reference"):
+        arun._parse_search_results(wrong_cell)
+    with pytest.raises(arun.ArunParseError, match="result reference"):
+        arun._parse_search_results(
+            base.replace(
+                b'<a href="planningDetails?reference=INSIDE/1&amp;from=planningSearch">'
+                b"INSIDE/1</a>",
+                b'<a href="planningDetails?from=planningSearch">INSIDE/1</a>',
+            )
         )
 
 
@@ -842,6 +903,48 @@ def test_arun_checkpoint_modes_cannot_cross_transport_boundaries() -> None:
         asyncio.run(_batches(adapter, _Session(_DiscoveryResponder()), window, fixture))
 
 
+def test_arun_legacy_v1_checkpoints_decode_and_restart_safely() -> None:
+    adapter = arun.ArunAdapter()
+    window = DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+    legacy_live = arun.ArunCheckpointV1.model_validate_json(
+        json.dumps(
+            {
+                "result_row": "live",
+                "live_phase": "show-all",
+                "window_start": "2026-08-18",
+                "window_end": "2026-09-16",
+                "seen_references": ["BR/1/26/PL"],
+            }
+        )
+    )
+
+    batches = asyncio.run(
+        _batches(adapter, _Session(_DiscoveryResponder()), window, legacy_live)
+    )
+
+    assert batches[-1].complete
+    assert isinstance(batches[-1].next_checkpoint.cursor, arun.ArunLiveCursor)
+    assert isinstance(
+        batches[-1].next_checkpoint.cursor.progress,
+        arun.ArunComplete,
+    )
+    legacy_fixture = arun.ArunCheckpointV1.model_validate_json(
+        '{"result_row":"second"}'
+    )
+    assert legacy_fixture.cursor == arun.ArunFixtureCursor(result_row="second")
+    mismatched = arun.ArunCheckpointV1.model_validate_json(
+        '{"result_row":"live","window_start":"2026-08-17","window_end":"2026-09-16"}'
+    )
+    with pytest.raises(arun.ArunCheckpointError):
+        asyncio.run(
+            _batches(adapter, _Session(_DiscoveryResponder()), window, mismatched)
+        )
+
+
 def test_arun_form_and_show_all_structure_fail_closed() -> None:
     query = arun.ArunReceivedQuery(
         start=date(2026, 8, 18),
@@ -897,6 +1000,11 @@ def test_arun_form_and_show_all_structure_fail_closed() -> None:
     with pytest.raises(arun.ArunParseError, match="show all form method"):
         arun._parse_search_results(
             _partial_results(fields).replace(b'method="post"', b'method="get"')
+        )
+    with pytest.raises(arun.ArunParseError, match="show all form"):
+        arun._parse_search_results(
+            _partial_results(fields)
+            + b'<form method="post"><input name="showall" value="showall"></form>'
         )
 
 
@@ -1022,7 +1130,7 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
         )
     )
     assert on_hold.status == "undecided-(on-hold)"
-    assert on_hold.normaliser_version == "arun-v4"
+    assert on_hold.normaliser_version == "arun-v5"
 
     without_locator = asyncio.run(
         arun.ArunAdapter().fetch(
@@ -1031,6 +1139,93 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
         )
     )
     assert without_locator.payload.ocella_reference == reference.reference
+
+
+def test_arun_appeal_block_is_preserved_without_becoming_application_type() -> None:
+    reference = SourceReference(
+        source_id=arun.SOURCE,
+        reference="R/271/06/TEL",
+        locator=f"{arun.BASE_URL}/planningDetails?reference=R%2F271%2F06%2FTEL",
+    )
+    appeal_rows = b"""
+      <tr><th>Appeal</th><td>
+        <a href="appealDetails?appeal=1671&amp;back=no">1671</a>
+      </td></tr>
+      <tr><th>Lodged</th><td>19-12-06</td></tr>
+      <tr><th>Type</th><td>Dismissed</td></tr>
+      <tr><th>Decision</th><td>03-05-07</td></tr>
+    """
+    detail = _detail_with_documents(reference.reference).replace(
+        b"</table>", appeal_rows + b"</table>", 1
+    )
+
+    def responder(request: PortalRequest) -> bytes:
+        return detail if "planningDetails" in str(request.url) else _document_index()
+
+    snapshot = asyncio.run(arun.ArunAdapter().fetch(_Session(responder), reference))
+    normalised = arun.ArunAdapter().normalise(snapshot)
+
+    assert snapshot.payload.application_type is None
+    assert snapshot.payload.appeal_reference == "1671"
+    assert snapshot.payload.appeal_status == "Dismissed"
+    assert snapshot.payload.appeal_lodged_date == date(2006, 12, 19)
+    assert snapshot.payload.appeal_decision_date == date(2007, 5, 3)
+    assert [event.event_type for event in normalised.metadata.events][-2:] == [
+        "appeal-lodged",
+        "appeal-decision",
+    ]
+    assert normalised.metadata.events[-1].details == "Dismissed"
+    assert normalised.metadata.relationships[0].model_dump() == {
+        "related_reference": "1671",
+        "relationship_type": "appeal",
+    }
+
+
+def test_arun_v1_native_documents_remain_offline_rebuildable() -> None:
+    reference = SourceReference(source_id=arun.SOURCE, reference="LEGACY/1")
+    body = json.dumps(
+        {
+            "ocella_reference": "LEGACY/1",
+            "proposal_text": "Legacy proposal",
+            "decision_status": "Undecided",
+            "parish_name": "Arun",
+            "documents": [
+                {
+                    "title": "Legacy plan",
+                    "url": "https://www1.arun.gov.uk/legacy-plan.pdf",
+                }
+            ],
+        }
+    )
+    capture = EvidenceCapture(
+        url=HttpUrl(f"{arun.BASE_URL}/planningDetails?reference=LEGACY%2F1"),
+        media_type="text/html",
+        body=b"legacy",
+        digest=EvidenceDigest(sha256(b"legacy").hexdigest()),
+    )
+    retained = RetainedNativeRecord(
+        application_id=ApplicationId("legacy-id"),
+        authority_id=AuthorityId("arun"),
+        reference=reference,
+        native_schema="ArunApplicationV1",
+        native_json=body,
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        completeness=Completeness(
+            application=CompleteSection(item_count=1),
+            documents=CompleteSection(item_count=1),
+            comments=UnavailableSection(reason="legacy"),
+        ),
+        evidence=(capture,),
+    )
+
+    rebuilt = ARUN_PACKAGE.rebuild(retained)
+
+    assert rebuilt.documents[0].title == "Legacy plan"
+    assert rebuilt.normaliser_version == "arun-v5"
+    assert not _qualification_module()._native_evidence_agrees(
+        retained,
+        arun.ArunApplicationV1.model_validate_json(body),
+    )
 
 
 def test_arun_reference_unions_drop_duplicates_in_stable_order() -> None:
@@ -1069,7 +1264,11 @@ def test_arun_fetch_accepts_an_application_without_a_parish_label() -> None:
                 b"<tr><th>Parish</th><td>Bognor Regis</td></tr>",
                 b"",
             )
-        return b"No documents found for this planning application"
+        return (
+            b"<strong>Documents</strong><table><tr><td>"
+            b"There are no documents for this section"
+            b"</td></tr></table>"
+        )
 
     snapshot = asyncio.run(arun.ArunAdapter().fetch(_Session(responder), reference))
 
@@ -1109,10 +1308,8 @@ def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> Non
         arun._parse_document_index(
             _document_index().replace(b'value="" selected', b'value="PLAN" selected')
         )
-    documents = arun._parse_document_index(
-        b"No documents found for this planning application"
-    )
-    assert documents == ()
+    with pytest.raises(arun.ArunParseError, match="document table"):
+        arun._parse_document_index(b"No documents found in unrelated help text")
 
 
 def test_arun_document_index_accepts_the_official_headerless_table() -> None:
@@ -1132,6 +1329,59 @@ def test_arun_document_index_accepts_the_official_empty_section() -> None:
     )
 
     assert documents == ()
+
+
+def test_arun_document_index_rejects_ambiguous_empty_and_link_shapes() -> None:
+    with pytest.raises(arun.ArunParseError, match="document rows"):
+        arun._parse_document_index(
+            b"<strong>Documents</strong><table>"
+            b"<tr><th>Type</th><th>Date</th></tr></table>"
+        )
+    official_empty = (
+        b"<strong>Documents</strong><table><tr><td>"
+        b"There are no documents for this section</td></tr></table>"
+    )
+    with pytest.raises(arun.ArunParseError, match="document empty state"):
+        arun._parse_document_index(official_empty + _document_index())
+    ambiguous = _document_index().replace(
+        b"Decision</a>",
+        (
+            b'Decision</a><a href="https://elsewhere.invalid/'
+            b'viewDocument?file=other.pdf&amp;module=pl">other</a>'
+        ),
+        1,
+    )
+    with pytest.raises(arun.ArunParseError, match="document link"):
+        arun._parse_document_index(ambiguous)
+    unrelated = _document_index().replace(
+        b"viewDocument?file=decision-1.pdf&amp;module=pl",
+        b"other?file=decision-1.pdf&amp;module=pl",
+        1,
+    )
+    with pytest.raises(arun.ArunParseError, match="document link"):
+        arun._parse_document_index(unrelated)
+
+
+def test_arun_appeal_block_rejects_ambiguous_or_incomplete_shapes() -> None:
+    block = b"""
+      <table>
+        <tr><th>Appeal</th><td>123</td></tr>
+        <tr><th>Lodged</th><td>19-12-06</td></tr>
+        <tr><th>Type</th><td>Dismissed</td></tr>
+        <tr><th>Decision</th><td>03-05-07</td></tr>
+      </table>
+    """
+    with pytest.raises(arun.ArunParseError, match="appeal block"):
+        arun._parse_appeal_fields(block + block)
+    with pytest.raises(arun.ArunParseError, match="appeal block"):
+        arun._parse_appeal_fields(
+            block.replace(
+                b"<tr><th>Lodged</th><td>19-12-06</td></tr>",
+                b"<tr><td>orphan</td></tr>",
+            )
+        )
+    with pytest.raises(arun.ArunParseError, match="appeal block"):
+        arun._parse_appeal_fields(block.replace(b"<th>Type</th>", b"<th>State</th>"))
 
 
 @pytest.mark.parametrize(
@@ -1286,6 +1536,30 @@ def test_arun_qualification_reports_a_stable_parse_boundary(
     }
 
 
+def test_arun_qualification_does_not_hide_programmer_defects(tmp_path: "Path") -> None:
+    module = _qualification_module()
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "programmer-defect"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    with pytest.raises(AssertionError, match="programmer defect"):
+        module.main(
+            args,
+            session_factory=lambda: _Session(
+                lambda _request: (_ for _ in ()).throw(
+                    AssertionError("programmer defect")
+                )
+            ),
+        )
+
+
 def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
     tmp_path: "Path",
     capsys: pytest.CaptureFixture[str],
@@ -1348,6 +1622,19 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
         "retained_native": ["BR/1/26/PL", "BR/2/26/PL"],
         "applications": ["BR/1/26/PL", "BR/2/26/PL"],
     }
+    assert receipt["native_coverage"] == {
+        "applications": 2,
+        "appeal_references": 0,
+        "appeal_statuses": 0,
+        "appeal_lodged_dates": 0,
+        "appeal_decision_dates": 0,
+    }
+    prior_v3 = dict(receipt)
+    prior_v3.pop("native_coverage")
+    assert (
+        module.ArunQualificationReceiptV3.model_validate(prior_v3).native_coverage
+        is None
+    )
     assert receipt["evidence"]["application_capture_count"] == 4
     assert len(receipt["evidence"]["application_digests"]) == 4
     assert receipt["evidence"]["search_capture_count"] == 62
@@ -1378,6 +1665,49 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
     receipt_path = data_dir / "arun-qualification-v3.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert not (data_dir / ".arun-qualification-v3.json.tmp").exists()
+
+
+def test_arun_qualification_rejects_checkpoint_source_count_tampering(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "count-tampering"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    factory = lambda: _Session(_QualificationResponder())  # noqa: E731
+
+    assert module.main(args, session_factory=factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM checkpoints WHERE authority_id = 'arun'"
+            ).fetchone()[0]
+        )
+        assert payload["cursor"]["progress"]["completed"][4]["reported_count"] is None
+        payload["cursor"]["progress"]["completed"][4]["reported_count"] = 1
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'arun'",
+            (json.dumps(payload, separators=(",", ":")),),
+        )
+        connection.commit()
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "terminal-checkpoint" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
 
 
 def test_arun_qualification_replaces_an_existing_receipt_atomically(

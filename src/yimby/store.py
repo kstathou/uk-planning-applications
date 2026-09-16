@@ -178,7 +178,10 @@ class SqliteStore:
                 """,
                 (outcome.transport_mode, now, authority_id),
             )
-            if outcome.status == RunStatus.SUCCEEDED:
+            if (
+                outcome.status == RunStatus.SUCCEEDED
+                and outcome.metrics.request_count > 0
+            ):
                 self._connection.execute(
                     """
                     UPDATE authorities SET last_success_at = ?

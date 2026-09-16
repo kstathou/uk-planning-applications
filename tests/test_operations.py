@@ -205,6 +205,42 @@ def _commit_rich(store: SqliteStore) -> ApplicationId:
     return application_id
 
 
+def test_zero_request_success_does_not_advance_source_freshness(tmp_path: Path) -> None:
+    """A no-op command success is not a new source observation."""
+    store = _store(tmp_path)
+    _commit_rich(store)
+    before = next(
+        state.last_success_at
+        for state in store.authority_states()
+        if state.manifest.id == AuthorityId("barnet")
+    )
+    run_id = store.begin_run(AuthorityId("barnet"))
+    store.finish_run(
+        run_id,
+        AuthorityId("barnet"),
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=1,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.FIXTURE,
+        ),
+    )
+
+    after = next(
+        state.last_success_at
+        for state in store.authority_states()
+        if state.manifest.id == AuthorityId("barnet")
+    )
+
+    assert before is not None
+    assert after == before
+    store.close()
+
+
 def test_rich_storage_location_search_and_operational_state(tmp_path: Path) -> None:
     """Rich fields, schedules, metrics, search, and corrections remain typed."""
     store = _store(tmp_path)

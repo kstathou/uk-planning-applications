@@ -17,6 +17,7 @@ from pydantic import Field, HttpUrl, model_validator
 from yimby.domain import (
     ApplicationEvent,
     ApplicationMetadata,
+    ApplicationRelationship,
     AuthorityId,
     AuthorityKind,
     AuthorityManifest,
@@ -238,6 +239,17 @@ class ArunFixtureCursor(FrozenModel):
     result_row: str
 
 
+class ArunLegacyLiveCursor(FrozenModel):
+    """Decoded pre-query-plan V1 state, restarted at the current boundary."""
+
+    mode: Literal["legacy-live"] = "legacy-live"
+    result_row: str
+    live_phase: Literal["initial", "show-all", "complete"] = "initial"
+    window_start: date | None = None
+    window_end: date | None = None
+    seen_references: tuple[str, ...] = ()
+
+
 class ArunLiveCursor(FrozenModel):
     """Scope-bound query plan and its valid progress state."""
 
@@ -282,9 +294,36 @@ class ArunCheckpointV1(FrozenModel):
     """Discriminated fixture or live Arun checkpoint."""
 
     cursor: Annotated[
-        ArunFixtureCursor | ArunLiveCursor,
+        ArunFixtureCursor | ArunLegacyLiveCursor | ArunLiveCursor,
         Field(discriminator="mode"),
     ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def decode_legacy_v1(cls, value: object) -> object:
+        """Upconvert checkpoints written before the cursor discriminator existed."""
+        if (
+            not isinstance(value, dict)
+            or "cursor" in value
+            or "result_row" not in value
+        ):
+            return value
+        legacy = dict(value)
+        is_live = (
+            legacy.get("result_row") == "live"
+            or legacy.get("window_start") is not None
+            or legacy.get("window_end") is not None
+            or legacy.get("live_phase", "initial") != "initial"
+            or bool(legacy.get("seen_references"))
+        )
+        if is_live:
+            return {"cursor": {"mode": "legacy-live", **legacy}}
+        return {
+            "cursor": {
+                "mode": "fixture",
+                "result_row": legacy["result_row"],
+            }
+        }
 
 
 class ArunDocumentV1(FrozenModel):
@@ -293,9 +332,9 @@ class ArunDocumentV1(FrozenModel):
     title: str = Field(min_length=1)
     url: HttpUrl
     published_date: date | None = None
-    document_type: str = Field(min_length=1)
+    document_type: str | None = Field(default=None, min_length=1)
     description: str | None = None
-    source_links: tuple[HttpUrl, ...] = Field(min_length=1)
+    source_links: tuple[HttpUrl, ...] = ()
 
 
 class ArunApplicationV1(FrozenModel):
@@ -317,6 +356,10 @@ class ArunApplicationV1(FrozenModel):
     case_officer: str | None = None
     applicant: str | None = None
     agent: str | None = None
+    appeal_reference: str | None = None
+    appeal_status: str | None = None
+    appeal_lodged_date: date | None = None
+    appeal_decision_date: date | None = None
 
 
 class ArunSearchForm(FrozenModel):
@@ -400,6 +443,17 @@ class ArunAdapter:
         scope = ArunDiscoveryScope.model_validate(window.model_dump())
         plan = _canonical_query_plan(scope)
         if checkpoint is None:
+            cursor = ArunLiveCursor(
+                scope=scope,
+                plan=plan,
+                progress=ArunReady(next_query=0),
+            )
+        elif isinstance(checkpoint.cursor, ArunLegacyLiveCursor):
+            legacy = checkpoint.cursor
+            if (
+                legacy.window_start is not None and legacy.window_start != window.start
+            ) or (legacy.window_end is not None and legacy.window_end != window.end):
+                raise ArunCheckpointError
             cursor = ArunLiveCursor(
                 scope=scope,
                 plan=plan,
@@ -672,6 +726,7 @@ class ArunAdapter:
             PortalRequest(url=HttpUrl(url), intent=RequestIntent.DETAIL)
         )
         fields = _parse_labelled_fields(detail.body)
+        appeal = _parse_appeal_fields(detail.body)
         published = _required_field(fields, "reference", "application reference")
         if published != reference.reference:
             raise ArunReferenceMismatchError(reference.reference, published)
@@ -686,7 +741,7 @@ class ArunAdapter:
             parish_name=_optional_field(fields, "parish"),
             documents=documents,
             site_address=_optional_field(fields, "location", "address"),
-            application_type=_optional_field(fields, "application type", "type"),
+            application_type=_optional_field(fields, "application type"),
             received_date=_optional_date(fields, "received", "received date"),
             validated_date=_optional_date(fields, "validated", "validated date"),
             decision_by_date=_optional_date(fields, "decision by"),
@@ -696,6 +751,10 @@ class ArunAdapter:
             case_officer=_optional_field(fields, "case officer"),
             applicant=_optional_field(fields, "applicant"),
             agent=_optional_field(fields, "agent"),
+            appeal_reference=appeal.reference,
+            appeal_status=appeal.status,
+            appeal_lodged_date=appeal.lodged_date,
+            appeal_decision_date=appeal.decision_date,
         )
         return NativeSnapshot(
             reference=reference,
@@ -733,7 +792,7 @@ class ArunAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="arun-v4",
+            normaliser_version="arun-v5",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
                 decision=(
@@ -762,8 +821,27 @@ class ArunAdapter:
                             "target-committee",
                             payload.target_committee_date,
                         ),
+                        _application_event(
+                            "appeal-lodged",
+                            payload.appeal_lodged_date,
+                        ),
+                        _application_event(
+                            "appeal-decision",
+                            payload.appeal_decision_date,
+                            details=payload.appeal_status,
+                        ),
                     )
                     if event is not None
+                ),
+                relationships=(
+                    ()
+                    if payload.appeal_reference is None
+                    else (
+                        ApplicationRelationship(
+                            related_reference=payload.appeal_reference,
+                            relationship_type="appeal",
+                        ),
+                    )
                 ),
             ),
         )
@@ -931,11 +1009,42 @@ def _parse_search_results(
     )
 
 
-def _parse_result_references(soup: BeautifulSoup) -> tuple[SourceReference, ...]:
+def _parse_result_references(  # noqa: C901
+    soup: BeautifulSoup,
+) -> tuple[SourceReference, ...]:
+    result_tables = tuple(
+        table
+        for table in soup.select("table")
+        if tuple(
+            _normalise_label(header.get_text(" ", strip=True))
+            for header in table.select("th")
+        )
+        == ("reference", "location", "proposal", "status")
+    )
+    all_links = tuple(soup.select('a[href*="planningDetails"]'))
+    if not result_tables:
+        if all_links:
+            _raise_parse("result table")
+        return ()
+    if len(result_tables) != 1:
+        _raise_parse("result table")
+    table = result_tables[0]
+    table_links = tuple(table.select('a[href*="planningDetails"]'))
+    if len(table_links) != len(all_links):
+        _raise_parse("result reference outside table")
     found = []
     seen = set()
-    for link in soup.select('a[href*="planningDetails"]'):
+    for row in table.select("tr:has(td)"):
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != _RESULT_COLUMNS:
+            _raise_parse("result row")
+        links = tuple(row.select("a"))
+        if len(links) != 1 or links[0] not in cells[0].select("a"):
+            _raise_parse("result reference")
+        link = links[0]
         href = str(link.get("href", ""))
+        if "planningDetails" not in href:
+            _raise_parse("result reference")
         resolved = urljoin(f"{BASE_URL}/", href)
         parts = urlsplit(resolved)
         values = parse_qs(parts.query, keep_blank_values=True)
@@ -1139,15 +1248,21 @@ def _document_request(body: bytes, expected_reference: str) -> PortalRequest:
     )
 
 
-def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
+def _parse_document_index(  # noqa: C901
+    body: bytes,
+) -> tuple[ArunDocumentV1, ...]:
     soup = BeautifulSoup(body, "html.parser")
-    text = soup.get_text(" ", strip=True)
     if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
         _raise_parse("document pagination")
     for selected_type in soup.select('select[name="selectedtype"]'):
         selected = selected_type.select_one("option[selected]")
         if isinstance(selected, Tag) and str(selected.get("value", "")):
             _raise_parse("document filter")
+    empty_markers = _document_empty_markers(soup)
+    if _is_explicit_empty_document_page(soup, empty_markers):
+        return ()
+    if empty_markers:
+        _raise_parse("document empty state")
     tables = tuple(
         table
         for table in soup.select("table")
@@ -1160,11 +1275,6 @@ def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
         )
     )
     if not tables:
-        if (
-            "no documents found" in text.casefold()
-            or "there are no documents for this section" in text.casefold()
-        ):
-            return ()
         _raise_parse("document table")
     if len(tables) != 1:
         _raise_parse("document table")
@@ -1174,14 +1284,60 @@ def _parse_document_index(body: bytes) -> tuple[ArunDocumentV1, ...]:
         if not cells:
             continue
         documents.append(_parse_document_row(cells))
+    if not documents:
+        _raise_parse("document rows")
     return tuple(documents)
+
+
+def _document_empty_markers(soup: BeautifulSoup) -> tuple[Tag, ...]:
+    markers = []
+    for table in soup.select("table"):
+        rows = table.find_all("tr", recursive=False)
+        if len(rows) != 1:
+            continue
+        cells = rows[0].find_all("td", recursive=False)
+        if (
+            len(cells) == 1
+            and _normalise_label(cells[0].get_text(" ", strip=True))
+            == "there are no documents for this section"
+        ):
+            markers.append(table)
+    return tuple(markers)
+
+
+def _is_explicit_empty_document_page(
+    soup: BeautifulSoup,
+    markers: tuple[Tag, ...],
+) -> bool:
+    headings = tuple(
+        heading
+        for heading in soup.select("strong, h1, h2, h3, h4, h5, h6")
+        if _normalise_label(heading.get_text(" ", strip=True)) == "documents"
+    )
+    return (
+        bool(headings)
+        and len(markers) == 1
+        and soup.select_one('a[href*="viewDocument"]') is None
+        and not any(
+            {"type", "date"}.issubset(
+                {
+                    _normalise_label(header.get_text(" ", strip=True))
+                    for header in table.select("th")
+                }
+            )
+            for table in soup.select("table")
+        )
+    )
 
 
 def _parse_document_row(cells: list[Tag]) -> ArunDocumentV1:
     if len(cells) != _DOCUMENT_COLUMNS:
         _raise_parse("document row")
-    link = cells[0].select_one('a[href*="viewDocument"]')
-    if not isinstance(link, Tag):
+    links = tuple(link for cell in cells for link in cell.select("a"))
+    if len(links) != 1 or links[0] not in cells[0].select("a"):
+        _raise_parse("document link")
+    link = links[0]
+    if "viewDocument" not in str(link.get("href", "")):
         _raise_parse("document link")
     url = HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))
     parts = urlsplit(str(url))
@@ -1228,6 +1384,60 @@ def _parse_labelled_fields(body: bytes) -> dict[str, str]:
     if not fields:
         _raise_parse("labelled detail fields")
     return fields
+
+
+class _ArunAppealFields(FrozenModel):
+    """Appeal subrecord published at the end of one detail table."""
+
+    reference: str | None = None
+    status: str | None = None
+    lodged_date: date | None = None
+    decision_date: date | None = None
+
+
+def _parse_appeal_fields(body: bytes) -> _ArunAppealFields:
+    soup = BeautifulSoup(body, "html.parser")
+    candidates: list[tuple[Tag, int]] = []
+    for table in soup.select("table"):
+        rows = tuple(table.find_all("tr", recursive=False))
+        for index, row in enumerate(rows):
+            cells = row.find_all(["th", "td"], recursive=False)
+            if (
+                len(cells) >= _MINIMUM_LABELLED_CELLS
+                and _normalise_label(cells[0].get_text(" ", strip=True)) == "appeal"
+            ):
+                candidates.append((table, index))
+    if not candidates:
+        return _ArunAppealFields()
+    if len(candidates) != 1:
+        _raise_parse("appeal block")
+    table, start = candidates[0]
+    rows = tuple(table.find_all("tr", recursive=False))[start : start + 4]
+    labels_and_values = []
+    for row in rows:
+        cells = row.find_all(["th", "td"], recursive=False)
+        if len(cells) < _MINIMUM_LABELLED_CELLS:
+            _raise_parse("appeal block")
+        labels_and_values.append(
+            (
+                _normalise_label(cells[0].get_text(" ", strip=True)),
+                cells[-1].get_text(" ", strip=True),
+            )
+        )
+    if tuple(label for label, _value in labels_and_values) != (
+        "appeal",
+        "lodged",
+        "type",
+        "decision",
+    ):
+        _raise_parse("appeal block")
+    values = dict(labels_and_values)
+    return _ArunAppealFields(
+        reference=unescape(values["appeal"]) or None,
+        status=unescape(values["type"]) or None,
+        lodged_date=_optional_date_text(values["lodged"]),
+        decision_date=_optional_date_text(values["decision"]),
+    )
 
 
 def _fresh(
@@ -1314,12 +1524,15 @@ def _completed_references(
 def _application_event(
     event_type: str,
     event_date: date | None,
+    *,
+    details: str | None = None,
 ) -> ApplicationEvent | None:
     if event_date is None:
         return None
     return ApplicationEvent(
         event_type=event_type,
         event_at=datetime.combine(event_date, datetime.min.time(), tzinfo=UTC),
+        details=details,
     )
 
 

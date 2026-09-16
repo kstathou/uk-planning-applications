@@ -949,12 +949,14 @@ def test_arun_terminal_and_parser_boundaries() -> None:
     ]
     with pytest.raises(arun.ArunParseError, match="result reference"):
         arun._parse_search_results(
-            b'<a href="planningDetails?from=planningSearch">View</a><p>1 result</p>'
+            _arun_results(("A",), 1, show_all=False, fields={}).replace(
+                b"planningDetails?reference=A&amp;from=planningSearch",
+                b"planningDetails?from=planningSearch",
+            )
         )
     with pytest.raises(arun.ArunParseError, match="duplicate result reference"):
         arun._parse_search_results(
-            b'<a href="planningDetails?reference=A">A</a>'
-            b'<a href="planningDetails?reference=A">A again</a><p>1 result</p>'
+            _arun_results(("A", "A"), 2, show_all=False, fields={})
         )
     assert arun._parse_search_results(_arun_empty_results()).reported == 0
     with pytest.raises(arun.ArunParseError, match="reported result count"):

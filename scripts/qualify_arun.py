@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import json
 import os
+import sqlite3
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -16,19 +17,29 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from yimby.authorities.arun import ARUN_PACKAGE
 from yimby.authorities.arun.adapter import (
     ArunApplicationV1,
+    ArunCheckpointError,
     ArunCheckpointV1,
     ArunComplete,
     ArunCompletedQuery,
+    ArunCountMismatchError,
     ArunDiscoveryScope,
     ArunLiveCursor,
     ArunParseError,
     ArunQuery,
+    ArunQueryReplayError,
+    ArunReferenceMismatchError,
+    ArunResultCapError,
+    ArunRoutingError,
     _canonical_query_plan,
+    _optional_field,
+    _parse_appeal_fields,
+    _parse_document_index,
+    _parse_labelled_fields,
     _parse_search_form,
     _parse_search_results,
 )
@@ -41,14 +52,19 @@ from yimby.domain import (
     FrozenModel,
     LiveReadiness,
     QualificationSnapshot,
+    RetainedNativeRecord,
     RunStatus,
 )
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
-from yimby.orchestration import ProcessLock
+from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
 from yimby.store import SqliteStore
-from yimby.transport import PortalSession
+from yimby.transport import (
+    AttachmentBodyBlockedError,
+    PortalSession,
+    SourceUnavailableError,
+)
 
 _AUTHORITY_ID = AuthorityId("arun")
 _RECEIPT_NAME = "arun-qualification-v3.json"
@@ -117,6 +133,16 @@ class QualificationCounts(FrozenModel):
     unmapped_records: int = Field(ge=0)
 
 
+class QualificationNativeCoverage(FrozenModel):
+    """Evidence-reconciled coverage of Arun-native appeal fields."""
+
+    applications: int = Field(ge=0)
+    appeal_references: int = Field(ge=0)
+    appeal_statuses: int = Field(ge=0)
+    appeal_lodged_dates: int = Field(ge=0)
+    appeal_decision_dates: int = Field(ge=0)
+
+
 class QualificationCost(FrozenModel):
     """Observable transport cost for one qualification pass."""
 
@@ -162,6 +188,7 @@ class ArunQualificationReceiptV3(FrozenModel):
     references: QualificationReferences
     evidence: QualificationEvidence
     counts: QualificationCounts
+    native_coverage: QualificationNativeCoverage | None = None
     semantic_fingerprint: str
     costs: QualificationCosts
     run_statuses: tuple[RunStatus, ...]
@@ -186,6 +213,8 @@ class _QualificationState(FrozenModel):
     evidence_integrity: bool
     search_evidence_integrity: bool
     current_sections_complete: bool
+    native_evidence_agreement: bool
+    native_coverage: QualificationNativeCoverage
 
 
 class _TerminalDiscoveryProof(FrozenModel):
@@ -218,6 +247,33 @@ class QualificationFailedError(RuntimeError):
         """Retain the stable names of failed invariants."""
         super().__init__("qualification checks failed")
         self.failed_checks = failed_checks
+
+
+class QualificationRuntimeError(RuntimeError):
+    """An expected source, evidence, storage, or filesystem operation failed."""
+
+    def __init__(self, error: Exception) -> None:
+        """Retain only the public exception kind and stable Arun parser code."""
+        super().__init__(type(error).__name__)
+        self.exception_name = type(error).__name__
+        self.source_error = error.code if isinstance(error, ArunParseError) else None
+
+
+_EXPECTED_RUNTIME_ERRORS = (
+    ArunCheckpointError,
+    ArunCountMismatchError,
+    ArunParseError,
+    ArunQueryReplayError,
+    ArunReferenceMismatchError,
+    ArunResultCapError,
+    ArunRoutingError,
+    AttachmentBodyBlockedError,
+    CollectionAlreadyRunningError,
+    OSError,
+    SourceUnavailableError,
+    sqlite3.Error,
+    ValidationError,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -340,10 +396,7 @@ def _validate_query_evidence(  # noqa: PLR0911
     if initial is None or not _capture_is_valid(initial):
         return None
     parsed_initial = _parse_search_results(initial.body)
-    if (
-        parsed_initial.reported is not None
-        and parsed_initial.reported != completed.reported_count
-    ):
+    if parsed_initial.reported != completed.reported_count:
         return None
     digests = [completed.initial_evidence]
     parsed_final = parsed_initial
@@ -408,7 +461,14 @@ def _references(store: SqliteStore) -> QualificationReferences:
 
 def _evidence_and_sections(
     store: SqliteStore,
-) -> tuple[int, tuple[EvidenceDigest, ...], bool, bool]:
+) -> tuple[
+    int,
+    tuple[EvidenceDigest, ...],
+    bool,
+    bool,
+    bool,
+    QualificationNativeCoverage,
+]:
     retained = tuple(
         record
         for record in store.retained_native_records()
@@ -419,9 +479,15 @@ def _evidence_and_sections(
         sha256(capture.body).hexdigest() == str(capture.digest) for capture in captures
     )
     sections_complete = True
+    native_evidence_agreement = True
+    native_rows = []
     for record in retained:
         native = ArunApplicationV1.model_validate_json(record.native_json)
+        native_rows.append(native)
         current = store.get_application(record.application_id)
+        native_evidence_agreement = (
+            native_evidence_agreement and _native_evidence_agrees(record, native)
+        )
         sections_complete = sections_complete and (
             record.completeness.application.kind == "complete"
             and record.completeness.documents.kind in {"complete", "empty"}
@@ -435,6 +501,39 @@ def _evidence_and_sections(
         tuple(sorted(capture.digest for capture in captures)),
         integrity,
         sections_complete,
+        native_evidence_agreement,
+        QualificationNativeCoverage(
+            applications=len(native_rows),
+            appeal_references=sum(
+                item.appeal_reference is not None for item in native_rows
+            ),
+            appeal_statuses=sum(item.appeal_status is not None for item in native_rows),
+            appeal_lodged_dates=sum(
+                item.appeal_lodged_date is not None for item in native_rows
+            ),
+            appeal_decision_dates=sum(
+                item.appeal_decision_date is not None for item in native_rows
+            ),
+        ),
+    )
+
+
+def _native_evidence_agrees(
+    record: RetainedNativeRecord,
+    native: ArunApplicationV1,
+) -> bool:
+    if len(record.evidence) != _EVIDENCE_PER_APPLICATION:
+        return False
+    source_fields = _parse_labelled_fields(record.evidence[0].body)
+    source_appeal = _parse_appeal_fields(record.evidence[0].body)
+    source_documents = _parse_document_index(record.evidence[1].body)
+    return (
+        native.application_type == _optional_field(source_fields, "application type")
+        and native.appeal_reference == source_appeal.reference
+        and native.appeal_status == source_appeal.status
+        and native.appeal_lodged_date == source_appeal.lodged_date
+        and native.appeal_decision_date == source_appeal.decision_date
+        and native.documents == source_documents
     )
 
 
@@ -479,6 +578,8 @@ def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState
         application_digests,
         evidence_integrity,
         current_sections_complete,
+        native_evidence_agreement,
+        native_coverage,
     ) = _evidence_and_sections(store)
     search_digests = () if terminal is None else terminal.search_digests
     return _QualificationState(
@@ -504,6 +605,8 @@ def _state(store: SqliteStore, scope: QualificationScope) -> _QualificationState
         evidence_integrity=evidence_integrity,
         search_evidence_integrity=terminal is not None,
         current_sections_complete=current_sections_complete,
+        native_evidence_agreement=native_evidence_agreement,
+        native_coverage=native_coverage,
     )
 
 
@@ -554,6 +657,10 @@ def _base_checks(
         QualificationCheck(
             name="current-sections",
             ok=state.current_sections_complete,
+        ),
+        QualificationCheck(
+            name="native-evidence-agreement",
+            ok=state.native_evidence_agreement,
         ),
         QualificationCheck(
             name="application-count",
@@ -676,6 +783,7 @@ async def _qualify(
         references=final_state.references,
         evidence=final_state.evidence,
         counts=_counts(final_state.snapshot),
+        native_coverage=final_state.native_coverage,
         semantic_fingerprint=final_state.semantic_fingerprint,
         costs=QualificationCosts(
             bootstrap_total=bootstrap_cost,
@@ -719,6 +827,28 @@ def _error(code: str, exit_code: int, **details: object) -> int:
     return exit_code
 
 
+def _run_qualification(
+    config: _Config,
+    session_factory: SessionFactory,
+    now: Clock,
+) -> ArunQualificationReceiptV3:
+    """Translate only expected operational boundary failures."""
+    try:
+        with ProcessLock(config.data_dir / "qualification.lock"):
+            store = SqliteStore(
+                config.data_dir / "yimby.sqlite3",
+                EvidenceStore(config.data_dir / "evidence"),
+            )
+            try:
+                receipt = asyncio.run(_qualify(store, config, session_factory, now))
+                _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
+                return receipt
+            finally:
+                store.close()
+    except _EXPECTED_RUNTIME_ERRORS as error:
+        raise QualificationRuntimeError(error) from error
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -731,26 +861,17 @@ def main(
     except QualificationConfigError as error:
         return _error(str(error), 2)
     try:
-        with ProcessLock(config.data_dir / "qualification.lock"):
-            store = SqliteStore(
-                config.data_dir / "yimby.sqlite3",
-                EvidenceStore(config.data_dir / "evidence"),
-            )
-            try:
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
-                _write_receipt(config.data_dir / _RECEIPT_NAME, receipt)
-            finally:
-                store.close()
+        receipt = _run_qualification(config, session_factory, now)
     except QualificationFailedError as error:
         return _error(
             "qualification-failed",
             1,
             failed_checks=list(error.failed_checks),
         )
-    except Exception as error:  # noqa: BLE001
-        details: dict[str, object] = {"exception": type(error).__name__}
-        if isinstance(error, ArunParseError):
-            details["source_error"] = error.code
+    except QualificationRuntimeError as error:
+        details: dict[str, object] = {"exception": error.exception_name}
+        if error.source_error is not None:
+            details["source_error"] = error.source_error
         return _error("runtime-failure", 1, **details)
     print(receipt.model_dump_json())
     return 0

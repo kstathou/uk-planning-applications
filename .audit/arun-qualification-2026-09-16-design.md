@@ -18,8 +18,9 @@ The live plan for the inclusive 2026-08-18 to 2026-09-16 scope is:
    through the scope end, with the last window clipped to the scope end.
 
 This produces 60 ordered queries. The 58 older-open date partitions are
-mutually non-overlapping; the received, decided, and older-open populations
-intentionally overlap and are reconciled by exact application reference. The
+mutually non-overlapping. In the canonical snapshot, received overlaps decided
+by 7 references and older-open by 81; decided and older-open are disjoint. All
+populations are reconciled by exact application reference. The
 official portal returns an explicit empty result for the 1948-1999 open
 partition. Every later partition must expose fewer than 200 rows and, where the
 source reports a total, exact agreement between that total and the enumerated
@@ -44,6 +45,10 @@ global unique reference union, and exactly one of these states:
 Illegal combinations cannot be constructed. A terminal cursor yields one empty
 complete batch without a request. A crash before the store commit safely
 repeats the portal request; a crash after it resumes at the committed state.
+The earlier V1 checkpoint shape is decoded explicitly. Its fixture cursor is
+upconverted directly; its live cursor restarts the canonical plan for the same
+scope, relying on durable reference de-duplication rather than inventing missing
+per-query evidence.
 
 The canonical plan is also the source for checkpoint validation and the receipt
 query inventory. Completed query summaries retain the query key, exact
@@ -60,8 +65,9 @@ preserve portal-owned hidden fields and use the captured `action=Search` submit
 control. A Show All request comes only from the result-owned form and preserves
 its exact query fields and `showall=showall` control.
 
-Result parsing accepts only references from exact same-host planning-result
-links. It recognizes the portal's explicit empty structure, its `First 20
+Result parsing accepts exactly one same-host planning-result link from each
+validated four-cell result row and rejects matching links outside that table.
+It recognizes the portal's explicit empty structure, its `First 20
 results shown, there are N in total` partial count, and the source-owned complete
 page whose exact four-column result table is paired with its `Back to Search
 page` control. A complete page may contain multiple rows and no numeric total;
@@ -82,6 +88,13 @@ description, primary URL, and non-empty source links. The live snapshot retains
 the detail and document-index evidence captures. Attachment URLs are data only;
 no attachment body is requested. Comments remain truthfully unavailable because
 the official detail route does not expose a bounded text collection contract.
+The official empty state requires the `Documents` heading and exact one-cell
+empty table. A trailing appeal block is parsed independently so appeal `Type`
+cannot become application type; its identifier/status/dates are preserved and
+normalised as a relationship and dated events.
+The added native document and appeal fields remain optional in
+`ArunApplicationV1`, so retained payloads written before this qualification
+still decode and rebuild without a schema-name fiction.
 
 ## Qualification receipt
 
@@ -98,12 +111,19 @@ schema-version-3 receipt atomically. The receipt proves:
 - database integrity and recomputed application and search-evidence-digest
   integrity, including reparsing every retained result capture against its
   recorded query membership;
+- exact checkpoint/source-count equality, including null source totals, and
+  exact native appeal/application-type and document agreement with retained
+  detail and document-index evidence;
 - complete current application and document sections for every retained record;
 - a successful completed run plus an immediate successful rerun with a
   byte-for-byte semantic fingerprint match; all historical run outcomes and
   aggregate bootstrap costs remain visible; and
 - zero requests, zero transferred bytes, and zero attachment-body requests on
   the immediate terminal rerun.
+
+The native coverage summary is an optional additive schema-version-3 field:
+older v3 receipts still decode, while newly published receipts always populate
+it and validate it against retained source evidence.
 
 Two weekly refresh targets remain explicitly pending. The registry stays
 `DISCOVERY_ONLY`; a successful bootstrap receipt does not promote Arun to
