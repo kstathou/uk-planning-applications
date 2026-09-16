@@ -1442,6 +1442,33 @@ def test_west_suffolk_count_rejects_invalid_visible_page_markers(
         getattr(west_suffolk_adapter, "_parse_search_page")(body)
 
 
+@pytest.mark.parametrize(
+    ("visible_page", "showing"),
+    [
+        ("+1", "Showing 1-1 of 1"),
+        ("01", "Showing 1-1 of 1"),
+        ("1_0", "Showing 91-91 of 91"),
+    ],
+)
+def test_west_suffolk_count_rejects_noncanonical_visible_page_numbers(
+    visible_page: str,
+    showing: str,
+) -> None:
+    """Visible page numbers use canonical positive decimal syntax."""
+    page = _result_page_with_showing_markers(
+        (("DC/26/0001/FUL", "KEY1"),),
+        (showing, showing),
+        numbered_page=1,
+        visible_page=visible_page,
+    )
+
+    with pytest.raises(
+        west_suffolk_adapter.WestSuffolkParseError,
+        match="reported result count",
+    ):
+        getattr(west_suffolk_adapter, "_parse_search_page")(page)
+
+
 def test_west_suffolk_count_rejects_visible_page_outside_displayed_range() -> None:
     """A false visible page number cannot conceal a forward result link."""
     page = _result_page_with_showing_markers(
