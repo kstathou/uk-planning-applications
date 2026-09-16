@@ -459,8 +459,13 @@ def test_api_qualification_rejects_acceptance_faults(
     ) -> CollectionReport:
         report = await real_collect(collector, authority, window, live_session)
         if fault == "count":
-            return report.model_copy(update={"applications": ()})
-        return report.model_copy(update={"attachment_body_requests": 1})
+            return cast(
+                "CollectionReport", report.model_copy(update={"applications": ()})
+            )
+        return cast(
+            "CollectionReport",
+            report.model_copy(update={"attachment_body_requests": 1}),
+        )
 
     monkeypatch.setattr(module.Collector, "collect", faulty_collect)
     monkeypatch.setattr(module, "create_session", lambda: session(Feed([row(1)])))
