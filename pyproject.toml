@@ -17,7 +17,18 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "beautifulsoup4>=4.13",
+    "httpx>=0.28",
+    "playwright>=1.54",
+    "pyarrow>=20",
+    "pydantic>=2.11",
+    "pyproj>=3.7",
+    "streamlit>=1.48",
+]
+
+[project.scripts]
+yimby = "yimby.cli:main"
 
 [project.urls]
 Issues = "https://github.com/kstathou/uk-planning-applications/issues"

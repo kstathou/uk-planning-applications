@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "authority_id": "west-suffolk",
+  "created_at": "2026-09-16T09:28:31.367117Z",
+  "scope": {
+    "start": "2026-08-18",
+    "end": "2026-09-16",
+    "include_open": true
+  },
+  "counts": {
+    "applications": 730,
+    "discovered_references": 730,
+    "native_versions": 730,
+    "application_versions": 730,
+    "document_versions": 730,
+    "comment_versions": 0,
+    "pending_retries": 0,
+    "failed_sections": 0,
+    "unmapped_records": 0
+  },
+  "costs": {
+    "initial": {
+      "request_count": 76,
+      "transferred_bytes": 3019581,
+      "attachment_body_requests": 0
+    },
+    "rerun": {
+      "request_count": 0,
+      "transferred_bytes": 0,
+      "attachment_body_requests": 0
+    }
+  },
+  "run_statuses": [
+    "succeeded",
+    "succeeded"
+  ],
+  "checks": [
+    {
+      "name": "terminal-checkpoint",
+      "ok": true
+    },
+    {
+      "name": "pending-retries",
+      "ok": true
+    },
+    {
+      "name": "failed-sections",
+      "ok": true
+    },
+    {
+      "name": "attachment-policy",
+      "ok": true
+    },
+    {
+      "name": "database-integrity",
+      "ok": true
+    },
+    {
+      "name": "evidence-paths",
+      "ok": true
+    },
+    {
+      "name": "application-count",
+      "ok": true
+    },
+    {
+      "name": "unmapped-records",
+      "ok": true
+    },
+    {
+      "name": "idempotent-rerun",
+      "ok": true
+    },
+    {
+      "name": "terminal-rerun-requests",
+      "ok": true
+    },
+    {
+      "name": "run-statuses",
+      "ok": true
+    }
+  ]
+}
