@@ -753,6 +753,11 @@ def test_discovery_evidence_is_registered_linked_and_verified(tmp_path: Path) ->
         body=body,
         digest=EvidenceDigest(sha256(body).hexdigest()),
     )
+    retained = DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=HttpUrl("https://planningrecords.camden.gov.uk/results"),
+        request_method="GET",
+    )
 
     store.commit_discovery(
         run_id,
@@ -764,7 +769,9 @@ def test_discovery_evidence_is_registered_linked_and_verified(tmp_path: Path) ->
                 payload_json='{"kind":"test"}',
             ),
             complete=False,
-            evidence=(capture,),
+            evidence=(retained,),
+            evidence_key="date:received",
+            evidence_page=1,
         ),
     )
 
@@ -1132,7 +1139,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -1168,7 +1175,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+    assert reopened.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()
@@ -1179,6 +1186,60 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     assert "ConditionPathExists=/path/to/enable-yimby-sync" in service
     assert "[Install]" not in timer
     assert "Persistent=false" in timer
+
+
+def test_migrations_upgrade_existing_discovery_evidence_schema(
+    tmp_path: Path,
+) -> None:
+    """A database already at Camden's migration 008 upgrades without data loss."""
+    database = tmp_path / "yimby.sqlite3"
+    migrations = Path("src/yimby/migrations")
+    existing_version = 8
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        for migration in sorted(migrations.glob("[0-9][0-9][0-9]_*.sql")):
+            version = int(migration.name.split("_", maxsplit=1)[0])
+            if version > existing_version:
+                continue
+            connection.executescript(migration.read_text())
+            connection.execute(
+                "INSERT INTO schema_migrations(version, name, applied_at) "
+                "VALUES (?, ?, ?)",
+                (version, migration.name, "2026-09-16T00:00:00+00:00"),
+            )
+        connection.execute(
+            "INSERT INTO runs(id, authority_id, started_at) VALUES (?, ?, ?)",
+            ("run-008", "camden", "2026-09-16T00:00:00+00:00"),
+        )
+        digest = "a" * 64
+        connection.execute(
+            "INSERT INTO evidence(digest, path, source_url, media_type) "
+            "VALUES (?, ?, ?, ?)",
+            (digest, f"aa/{digest}.gz", "https://example.test/search", "text/html"),
+        )
+        connection.execute(
+            "INSERT INTO discovery_evidence(authority_id, run_id, digest) "
+            "VALUES (?, ?, ?)",
+            ("camden", "run-008", digest),
+        )
+        connection.commit()
+
+    store = _store(tmp_path)
+    assert store.migration_versions() == (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+    store.close()
+    with closing(sqlite3.connect(database)) as connection:
+        row = connection.execute(
+            "SELECT query_key, page, digest FROM discovery_evidence"
+        ).fetchone()
+    assert row == ("legacy-unscoped", 1, digest)
 
 
 class _CancellingSession:

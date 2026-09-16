@@ -830,6 +830,7 @@ def test_camden_discovery_retains_sanitised_reproducible_page_evidence() -> None
     assert second_payload["references"][-1]["reference"] == "2026/12/P"
     assert first.digest == EvidenceDigest(sha256(first.body).hexdigest())
     assert second.digest == EvidenceDigest(sha256(second.body).hexdigest())
+    assert second.media_type == discovery.DISCOVERY_EVIDENCE_MEDIA_TYPE
     assert urlsplit(str(second.url)).query == ""
     assert b"XMLLoc" not in second.body
     assert b"fresh-DATE_RECEIVED" not in second.body

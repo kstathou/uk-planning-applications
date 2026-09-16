@@ -76,7 +76,13 @@ class _MissingDiscoveryEvidenceCamdenAdapter(_VerifiedCommentsCamdenAdapter):
         checkpoint: discovery.CamdenCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[discovery.CamdenCheckpointV1]]:
         async for batch in super().discover(session, window, checkpoint):
-            yield batch.model_copy(update={"evidence": ()})
+            yield batch.model_copy(
+                update={
+                    "evidence": (),
+                    "evidence_key": None,
+                    "evidence_page": None,
+                }
+            )
 
 
 def _verified_qualification_module() -> ModuleType:

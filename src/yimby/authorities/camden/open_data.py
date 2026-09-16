@@ -21,6 +21,7 @@ from yimby.domain import (
     Completeness,
     CompleteSection,
     DiscoveryBatch,
+    DiscoveryEvidenceCapture,
     DiscoveryWindow,
     EvidenceCapture,
     FrozenModel,
@@ -92,6 +93,19 @@ class CamdenOpenDataCheckpointV1(FrozenModel):
 def api_url(**parameters: str) -> HttpUrl:
     """Encode SoQL values; credentials never appear in URLs or evidence."""
     return HttpUrl(f"{DATASET_URL}?{urlencode(parameters)}")
+
+
+def _discovery_capture(
+    capture: EvidenceCapture,
+    request: PortalRequest,
+) -> DiscoveryEvidenceCapture:
+    """Bind a retained API response to the exact public request that produced it."""
+    return DiscoveryEvidenceCapture(
+        capture=capture,
+        request_url=request.url,
+        request_method=request.method.value,
+        request_form=tuple((field.name, field.value) for field in request.form),
+    )
 
 
 def scope_filter(window: DiscoveryWindow) -> str:
@@ -184,24 +198,23 @@ class CamdenOpenDataAdapter:
 
     async def _summary(
         self, session: PortalSession, where: str
-    ) -> tuple[int, str, EvidenceCapture]:
-        capture = await session.fetch(
-            PortalRequest(
-                url=api_url(
-                    **{
-                        "$select": (
-                            "count(distinct pk) AS total,"
-                            "count(distinct application_number) AS references,"
-                            "count(distinct (pk || '|' || application_number)) "
-                            "AS pairs,"
-                            "max(last_uploaded) AS watermark"
-                        ),
-                        "$where": where,
-                    }
-                ),
-                intent=RequestIntent.SEARCH,
-            )
+    ) -> tuple[int, str, DiscoveryEvidenceCapture]:
+        request = PortalRequest(
+            url=api_url(
+                **{
+                    "$select": (
+                        "count(distinct pk) AS total,"
+                        "count(distinct application_number) AS references,"
+                        "count(distinct (pk || '|' || application_number)) "
+                        "AS pairs,"
+                        "max(last_uploaded) AS watermark"
+                    ),
+                    "$where": where,
+                }
+            ),
+            intent=RequestIntent.SEARCH,
         )
+        capture = await session.fetch(request)
         rows = _ROWS.validate_json(capture.body)
         if len(rows) != 1 or "total" not in rows[0]:
             _fail("missing source count")
@@ -210,7 +223,7 @@ class CamdenOpenDataAdapter:
         return (
             int(str(rows[0]["total"])),
             str(rows[0].get("watermark", "empty")),
-            capture,
+            _discovery_capture(capture, request),
         )
 
     async def discover(  # noqa: C901 - One scope-bound pagination state machine.
@@ -236,18 +249,18 @@ class CamdenOpenDataAdapter:
                 window=window, expected=total, watermark=watermark
             )
         while True:
-            capture = await session.fetch(
-                PortalRequest(
-                    url=api_url(
-                        **{
-                            "$where": f"{where} AND pk > {cursor.last_pk}",
-                            "$order": "pk ASC,socrata_id ASC",
-                            "$limit": str(PAGE_SIZE),
-                        }
-                    ),
-                    intent=RequestIntent.SEARCH,
-                )
+            previous_last_pk = cursor.last_pk
+            request = PortalRequest(
+                url=api_url(
+                    **{
+                        "$where": f"{where} AND pk > {cursor.last_pk}",
+                        "$order": "pk ASC,socrata_id ASC",
+                        "$limit": str(PAGE_SIZE),
+                    }
+                ),
+                intent=RequestIntent.SEARCH,
             )
+            capture = await session.fetch(request)
             rows = _ROWS.validate_json(capture.body)
             parsed = [_canonical(row) for row in rows]
             keys = [int(row.pk) for row in parsed]
@@ -267,7 +280,10 @@ class CamdenOpenDataAdapter:
                 unique[row.application_number] = row
             self._cache = {ref: (row, capture) for ref, row in unique.items()}
             count = cursor.enumerated + len(unique)
-            evidence: tuple[EvidenceCapture, ...] = (summary, capture)
+            evidence: tuple[DiscoveryEvidenceCapture, ...] = (
+                summary,
+                _discovery_capture(capture, request),
+            )
             if terminal:
                 final_total, final_watermark, final_summary = await self._summary(
                     session, where
@@ -293,6 +309,8 @@ class CamdenOpenDataAdapter:
                 next_checkpoint=cursor,
                 complete=terminal,
                 evidence=evidence,
+                evidence_key=f"socrata:after:{previous_last_pk}",
+                evidence_page=1,
             )
             if terminal:
                 return

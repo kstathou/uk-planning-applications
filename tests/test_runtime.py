@@ -67,9 +67,9 @@ from yimby.transport import (
     FixtureResponse,
     FixtureSession,
     PortalRequest,
-    RequestHeader,
     RedirectBoundary,
     RedirectBoundaryError,
+    RequestHeader,
     RequestIntent,
     SourceUnavailableError,
 )

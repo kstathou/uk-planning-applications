@@ -1577,6 +1577,7 @@ class SqliteStore:
                 "FROM evidence ORDER BY digest"
             )
         )
+
     def evidence_registration_audit(
         self, authority_id: AuthorityId
     ) -> EvidenceRegistrationAudit:

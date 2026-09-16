@@ -19,6 +19,7 @@ from pydantic import ConfigDict, Field, HttpUrl, RootModel, model_validator
 
 from yimby.domain import (
     DiscoveryBatch,
+    DiscoveryEvidenceCapture,
     DiscoveryWindow,
     EvidenceCapture,
     EvidenceDigest,
@@ -411,15 +412,17 @@ async def discover_live(
                 next_checkpoint=CamdenCheckpointV1(root=progress),
                 complete=isinstance(next_progress, CamdenTerminalV1),
                 evidence=captured.evidence,
+                evidence_key=query.key,
+                evidence_page=captured.page_number,
             )
             if page.next_url is None:
                 break
             requested_offset = len(query_references)
-            capture = await session.fetch(
-                PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
-            )
+            request = PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
+            capture = await session.fetch(request)
             captured = _capture_result_page(
                 capture,
+                request=request,
                 requested_offset=requested_offset,
                 query=query,
             )
@@ -512,8 +515,14 @@ async def _submit_query(
         PortalRequest(url=HttpUrl(GENERAL_SEARCH_URL), intent=RequestIntent.SEARCH)
     )
     form = _parse_general_search_form(form_capture.body)
-    result_capture = await session.fetch(_search_request(form, query))
-    return _capture_result_page(result_capture, requested_offset=0, query=query)
+    request = _search_request(form, query)
+    result_capture = await session.fetch(request)
+    return _capture_result_page(
+        result_capture,
+        request=request,
+        requested_offset=0,
+        query=query,
+    )
 
 
 async def _replay_prefix(
@@ -524,7 +533,6 @@ async def _replay_prefix(
 ) -> _CapturedResultPage:
     captured = first_page
     page = captured.page
-    evidence = list(captured.evidence)
     consumed = 0
     while consumed < len(cursor.ordered_prefix):
         if page.reported_count != cursor.reported_count:
@@ -538,29 +546,24 @@ async def _replay_prefix(
         if consumed < len(cursor.ordered_prefix):
             if page.next_url is None:
                 _raise_resume_drift("committed prefix lost its pager")
-            capture = await session.fetch(
-                PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
-            )
+            request = PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
+            capture = await session.fetch(request)
             captured = _capture_result_page(
                 capture,
+                request=request,
                 requested_offset=consumed,
                 query=query,
             )
             page = captured.page
-            evidence.extend(captured.evidence)
     if consumed != cursor.next_offset or page.next_url is None:
         _raise_resume_drift("committed prefix cannot continue")
-    capture = await session.fetch(
-        PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
-    )
-    captured = _capture_result_page(
+    request = PortalRequest(url=page.next_url, intent=RequestIntent.SEARCH)
+    capture = await session.fetch(request)
+    return _capture_result_page(
         capture,
+        request=request,
         requested_offset=cursor.next_offset,
         query=query,
-    )
-    return _CapturedResultPage(
-        page=captured.page,
-        evidence=(*evidence, *captured.evidence),
     )
 
 
@@ -614,12 +617,14 @@ class _CamdenResultPage:
 @dataclass(frozen=True, slots=True)
 class _CapturedResultPage:
     page: _CamdenResultPage
-    evidence: tuple[EvidenceCapture, ...]
+    evidence: tuple[DiscoveryEvidenceCapture, ...]
+    page_number: int = 1
 
 
 def _capture_result_page(
     capture: EvidenceCapture,
     *,
+    request: PortalRequest,
     requested_offset: int,
     query: CamdenDiscoveryQueryV1,
 ) -> _CapturedResultPage:
@@ -649,7 +654,18 @@ def _capture_result_page(
         body=payload,
         digest=EvidenceDigest(sha256(payload).hexdigest()),
     )
-    return _CapturedResultPage(page=page, evidence=(evidence,))
+    return _CapturedResultPage(
+        page=page,
+        evidence=(
+            DiscoveryEvidenceCapture(
+                capture=evidence,
+                request_url=request.url,
+                request_method=request.method.value,
+                request_form=tuple((field.name, field.value) for field in request.form),
+            ),
+        ),
+        page_number=requested_offset // _RESULT_PAGE_SIZE + 1,
+    )
 
 
 def _parse_general_search_form(body: bytes) -> _CamdenSearchForm:

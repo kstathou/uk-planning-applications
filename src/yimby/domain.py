@@ -208,21 +208,32 @@ class DiscoveryEvidenceCapture(FrozenModel):
     request_method: Literal["GET", "POST"]
     request_form: tuple[tuple[str, str], ...] = ()
 
+    @property
+    def url(self) -> HttpUrl:
+        """Expose the retained response URL for evidence consumers."""
+        return self.capture.url
+
+    @property
+    def media_type(self) -> str:
+        """Expose the retained response media type."""
+        return self.capture.media_type
+
+    @property
+    def body(self) -> bytes:
+        """Expose the retained response body."""
+        return self.capture.body
+
+    @property
+    def digest(self) -> EvidenceDigest:
+        """Expose the retained response digest."""
+        return self.capture.digest
+
 
 class StoredCheckpoint(FrozenModel):
     """Type-erased checkpoint persisted by the common runner."""
 
     schema_version: int = Field(ge=1)
     payload_json: str
-
-
-class EvidenceCapture(FrozenModel):
-    """One permitted response retained as source evidence."""
-
-    url: HttpUrl
-    media_type: str
-    body: bytes
-    digest: EvidenceDigest
 
 
 class DiscoveryBatch[CheckpointT: BaseModel](FrozenModel):
