@@ -33,7 +33,7 @@ requirement.
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
-| Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail explicitly unavailable | Open | Open |
+| Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Live weekly discovery completed for 3 validated and 14 decided applications; one bounded detail fetched with no attachment body | Open | Open |
