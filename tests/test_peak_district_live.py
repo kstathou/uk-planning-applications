@@ -1220,6 +1220,40 @@ def test_peak_district_qualification_requires_safe_exact_scope(
     assert created == 0
 
 
+def test_peak_district_qualification_only_formats_expected_runtime_failures(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+
+    def arguments(name: str) -> list[str]:
+        return [
+            "--confirm-live",
+            "--data-dir",
+            str(tmp_path / name),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ]
+
+    def expected_failure() -> _Session:
+        raise RuntimeError("source failed")
+
+    assert module.main(arguments("expected"), session_factory=expected_failure) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "runtime-failure",
+        "exception": "RuntimeError",
+    }
+
+    def programming_bug() -> _Session:
+        raise TypeError("programming bug")
+
+    with pytest.raises(TypeError, match="programming bug"):
+        module.main(arguments("bug"), session_factory=programming_bug)
+
+
 def test_peak_district_qualification_persists_complete_receipt_and_zero_io_rerun(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
