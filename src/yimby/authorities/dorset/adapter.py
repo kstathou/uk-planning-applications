@@ -52,7 +52,7 @@ BASE_URL = "https://gi.dorsetcouncil.gov.uk/dorsetexplorer/planning/public"
 LIVE_BASE_URL = "https://planning.dorsetcouncil.gov.uk"
 _ADVANCED_URL = f"{LIVE_BASE_URL}/advsearch.aspx"
 _RESULTS_URL = f"{LIVE_BASE_URL}/searchresults.aspx"
-_DISCLAIMER_URL = f"{LIVE_BASE_URL}/disclaimer.aspx?returnURL=%2f"
+_DISCLAIMER_PATH = "/disclaimer.aspx"
 _ACCEPT_BUTTON = "ctl00$ContentPlaceHolder1$btnAccept"
 _RECEIVED_FROM = "ctl00$ContentPlaceHolder1$txtDateReceivedFrom"
 _RECEIVED_TO = "ctl00$ContentPlaceHolder1$txtDateReceivedTo"
@@ -541,9 +541,8 @@ async def _replay_active_query(
 
 def _parse_disclaimer_form(body: bytes) -> Tag:
     form = _single_form(body, "disclaimer form")
-    if (
-        str(form.get("method", "")).casefold() != "post"
-        or _form_action(form) != _DISCLAIMER_URL
+    if str(form.get("method", "")).casefold() != "post" or not _is_disclaimer_action(
+        _form_action(form)
     ):
         _raise_parse("disclaimer form")
     fields = _successful_controls(form)
@@ -569,9 +568,24 @@ async def _load_advanced_form(session: PortalSession) -> Tag:
 def _is_disclaimer(body: bytes) -> bool:
     soup = BeautifulSoup(body, "html.parser")
     return any(
-        _form_action(form) == _DISCLAIMER_URL
+        _is_disclaimer_action(_form_action(form))
         for form in soup.select("form")
         if isinstance(form, Tag)
+    )
+
+
+def _is_disclaimer_action(action: str) -> bool:
+    parsed = urlsplit(action)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    return_url = query.get("returnURL", ())
+    return (
+        parsed.scheme == "https"
+        and parsed.netloc == urlsplit(LIVE_BASE_URL).netloc
+        and parsed.path == _DISCLAIMER_PATH
+        and set(query) == {"returnURL"}
+        and len(return_url) == 1
+        and return_url[0].startswith("/")
+        and not return_url[0].startswith("//")
     )
 
 
@@ -919,8 +933,11 @@ def _submit_value(form: Tag, name: str, expected: str) -> str:
 
 
 def _accept_disclaimer_request(form: Tag) -> PortalRequest:
+    action = _form_action(form)
+    if not _is_disclaimer_action(action):
+        _raise_parse("disclaimer form")
     return PortalRequest(
-        url=HttpUrl(_DISCLAIMER_URL),
+        url=HttpUrl(action),
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
         form=(
