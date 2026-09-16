@@ -255,7 +255,10 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
     captures.append(search_form_capture)
     try:
         search_form = cheshire.parse_search_form(search_form_capture.body)
-    except cheshire.CheshireEastParseError:
+    except (
+        cheshire.CheshireEastFormMethodUnavailableError,
+        cheshire.CheshireEastParseError,
+    ):
         return _ProbeResult(
             source_contract=None,
             captures=tuple(captures),
@@ -444,12 +447,13 @@ def _receipt(
         not in probe.source_contract.recent.visible_references
     )
     weekly = probe.source_contract.weekly
-    weekly_complete = not weekly.pagination_links and (
-        weekly.terminal_marker
-        or (
-            weekly.reported_total is not None
-            and weekly.reported_total == weekly.row_count
-        )
+    published_count_agrees = (
+        weekly.reported_total is None or weekly.reported_total == weekly.row_count
+    )
+    weekly_complete = (
+        not weekly.pagination_links
+        and published_count_agrees
+        and (weekly.terminal_marker or weekly.reported_total is not None)
     )
     weekly_unproved = not weekly_complete
     blockers = []
