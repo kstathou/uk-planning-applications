@@ -141,7 +141,7 @@ class CheshireEastAdapter:
         window: DiscoveryWindow,
         checkpoint: CheshireEastCheckpointV1 | None,
     ) -> AsyncIterator[DiscoveryBatch[CheshireEastCheckpointV1]]:
-        """Use fixtures or capture the verified valid-date result table."""
+        """Use fixture discovery or reject live collection before source I/O."""
         if session.mode == TransportMode.FIXTURE:
             async for batch in self._discover_fixture(session, window, checkpoint):
                 yield batch
@@ -179,7 +179,7 @@ class CheshireEastAdapter:
         session: PortalSession,
         reference: SourceReference,
     ) -> NativeSnapshot[CheshireEastApplicationV1]:
-        """Preserve fixture detail and reject the unresolved live interaction."""
+        """Preserve fixture detail or reject live collection for this authority."""
         if session.mode != TransportMode.FIXTURE:
             if reference.source_id != SOURCE or reference.locator is None:
                 raise CheshireEastRoutingError(reference.reference)
@@ -697,19 +697,19 @@ class CheshireEastFormMethodUnavailableError(RuntimeError):
 
 
 class CheshireEastResultCompletenessUnavailableError(RuntimeError):
-    """Count and pagination rules remain unresolved after the observed table."""
+    """Live discovery is blocked because result completeness is unproved."""
 
     def __init__(self) -> None:
         """Prevent the visible rows from becoming false completeness."""
-        super().__init__("Cheshire East result count and pagination are unresolved")
+        super().__init__("Cheshire East live discovery completeness is unproved")
 
 
 class CheshireEastDetailUnavailableError(RuntimeError):
-    """The observed View interaction did not produce a readable detail."""
+    """Live detail collection is disabled while the authority is blocked."""
 
     def __init__(self, reference: str) -> None:
         """Identify the public reference only."""
-        super().__init__(f"Cheshire East detail is unresolved for {reference}")
+        super().__init__(f"Cheshire East live detail is blocked for {reference}")
 
 
 class CheshireEastReferenceMismatchError(ValueError):

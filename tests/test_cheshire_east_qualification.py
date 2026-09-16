@@ -688,11 +688,14 @@ def test_cheshire_total_or_next_link_cannot_claim_weekly_terminality(
     assert "weekly-list-terminality-unproven" in {
         blocker.code for blocker in receipt.blockers
     }
-    assert next(
-        check.status
-        for check in receipt.checks
-        if check.name == "weekly-list-terminality"
-    ) == "failed"
+    assert (
+        next(
+            check.status
+            for check in receipt.checks
+            if check.name == "weekly-list-terminality"
+        )
+        == "failed"
+    )
 
 
 def test_cheshire_qualification_does_not_hide_programming_defects(

@@ -17,14 +17,19 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal, Self
 
-from pydantic import Field, HttpUrl, model_validator
+from pydantic import Field, HttpUrl, ValidationError, model_validator
 
 import yimby.authorities.cheshire_east.adapter as cheshire
 from yimby.domain import DiscoveryWindow, EvidenceCapture, FrozenModel
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HttpxPortalSession
-from yimby.orchestration import ProcessLock
-from yimby.transport import PortalRequest, PortalSession, RequestMethod
+from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
+from yimby.transport import (
+    PortalRequest,
+    PortalSession,
+    RequestMethod,
+    SourceUnavailableError,
+)
 
 _RECEIPT_NAME = "cheshire-east-qualification-blocker-v1.json"
 _DETAIL_REFERENCE = "26/3335/PRIOR-1A"
@@ -438,11 +443,15 @@ def _receipt(
         and probe.source_contract.detail.public_reference
         not in probe.source_contract.recent.visible_references
     )
-    weekly_unproved = (
-        probe.source_contract.weekly.reported_total is None
-        and not probe.source_contract.weekly.pagination_links
-        and not probe.source_contract.weekly.terminal_marker
+    weekly = probe.source_contract.weekly
+    weekly_complete = not weekly.pagination_links and (
+        weekly.terminal_marker
+        or (
+            weekly.reported_total is not None
+            and weekly.reported_total == weekly.row_count
+        )
     )
+    weekly_unproved = not weekly_complete
     blockers = []
     if recent_contradicted:
         blockers.append(
@@ -582,7 +591,17 @@ def main(
                 evidence = _retain_evidence(evidence_store, probe.captures)
                 receipt = _receipt(config.scope, probe, evidence, now())
                 _write_receipt(receipt_path, receipt)
-    except Exception as error:  # noqa: BLE001
+    except (
+        EOFError,
+        OSError,
+        ValidationError,
+        cheshire.CheshireEastParseError,
+        cheshire.CheshireEastReferenceMismatchError,
+        CollectionAlreadyRunningError,
+        QualificationConfigError,
+        QualificationEvidenceError,
+        SourceUnavailableError,
+    ) as error:
         return _error(
             "runtime-failure",
             1,
