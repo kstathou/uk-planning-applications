@@ -573,6 +573,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         assert receipt_path.exists()
 
     valid_scope_json = json.dumps(receipt["scope"], separators=(",", ":"))
+    preserved_receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
     invalid_lineages = (
         ("{invalid", "2026-09-16T12:00:00+00:00"),
         (valid_scope_json, "not-a-date"),
@@ -615,7 +616,7 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         assert captured.out == ""
         assert json.loads(captured.err) == {"error": "receipt-anchor-required"}
         assert sessions == []
-        assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
+        assert json.loads(receipt_path.read_text(encoding="utf-8")) == preserved_receipt
 
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         connection.execute(

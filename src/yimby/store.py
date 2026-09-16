@@ -68,6 +68,27 @@ class _ApplicationSection(FrozenModel):
     status: str
 
 
+class QualificationLineageCorruptError(RuntimeError):
+    """A durable qualification lineage row cannot be decoded safely."""
+
+
+def _qualification_lineage_from_row(
+    authority_id: AuthorityId,
+    qualification: str,
+    row: sqlite3.Row,
+) -> QualificationLineage:
+    try:
+        return QualificationLineage(
+            authority_id=authority_id,
+            qualification=qualification,
+            phase=row["phase"],
+            scope_json=row["scope_json"],
+            created_at=row["created_at"],
+        )
+    except ValueError as error:
+        raise QualificationLineageCorruptError from error
+
+
 class SqliteStore:
     """Own the only SQLite writer connection for a collection runtime."""
 
@@ -1033,13 +1054,7 @@ class SqliteStore:
         ).fetchone()
         if row is None:
             return None
-        return QualificationLineage(
-            authority_id=authority_id,
-            qualification=qualification,
-            phase=row["phase"],
-            scope_json=row["scope_json"],
-            created_at=datetime.fromisoformat(row["created_at"]),
-        )
+        return _qualification_lineage_from_row(authority_id, qualification, row)
 
     def record_qualification_lineage(
         self,
@@ -1066,12 +1081,10 @@ class SqliteStore:
                     ),
                 )
             )
-        return QualificationLineage(
-            authority_id=lineage.authority_id,
-            qualification=lineage.qualification,
-            phase=row["phase"],
-            scope_json=row["scope_json"],
-            created_at=datetime.fromisoformat(row["created_at"]),
+        return _qualification_lineage_from_row(
+            lineage.authority_id,
+            lineage.qualification,
+            row,
         )
 
     def metrics_totals(self) -> RunMetrics:

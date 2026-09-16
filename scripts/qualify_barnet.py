@@ -43,7 +43,7 @@ from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import AuthorityRegistry
-from yimby.store import SqliteStore
+from yimby.store import QualificationLineageCorruptError, SqliteStore
 from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalSession,
@@ -422,6 +422,8 @@ def _resolve_anchor(
     current_time: datetime,
 ) -> datetime | None:
     stored = _lineage_anchor(lineage, scope, current_time)
+    if lineage is not None and stored is None:
+        raise QualificationAnchorError
     receipted = _receipt_anchor(receipt, scope, current_time)
     if stored is not None and receipted is not None and stored != receipted:
         raise QualificationAnchorError
@@ -629,7 +631,7 @@ def main(
             1,
             failed_checks=list(error.failed_checks),
         )
-    except QualificationAnchorError:
+    except (QualificationAnchorError, QualificationLineageCorruptError):
         return _error(_RECEIPT_ANCHOR_REQUIRED, 1)
     except SourceUnavailableError as error:
         return _error("source-unavailable", 1, detail=str(error))
