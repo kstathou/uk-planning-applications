@@ -31,7 +31,7 @@ requirement.
 | Old Oak and Park Royal Development Corporation | Verified | Official Registered/Determined searches, client-side pagination, detail, 643-row sampled document index, and public responses recorded | Exact three-query HTTP adapter with complete detail, document-metadata, and response collection | Verified on 16 September 2026: 55 applications, zero failed sections/retries/attachment bodies, and zero-network rerun | Open; approximately 23 and 30 September 2026 |
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
-| Blackburn with Darwen | Verified | Current Citizen search, 30-row cap, detail, eight-row document index, absent comment surface, and browser challenge recorded | Browser adapter implements exact 30-day plus older-open discovery, capped-range splitting, detail and document metadata, two-second pacing, and local verified-state reuse | Blocked by attended human verification; typed receipt persisted after 26 queued references and before any complete application | Pending for 23 and 30 September 2026 |
+| Blackburn with Darwen | Verified | Current Citizen search, 30-row cap, detail, eight-row document index, absent comment surface, and browser challenge recorded | Browser adapter implements exact 30-day plus older-open discovery, capped-range splitting, detail and document metadata, two-second pacing, and local verified-state reuse | Blocked by attended human verification; typed receipt persisted with 26 queued references, one complete application, and two pending retries | Pending for 23 and 30 September 2026 |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
 | Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
@@ -79,4 +79,4 @@ No qualification receipt was emitted. Durham remains discovery-only.
 
 Blackburn's current source was reachable only in visible Chromium. Its persisted
 bootstrap stopped at the explicit human check, leaving 26 references queued,
-zero complete applications, and two retry items.
+one complete application, and two pending retries.

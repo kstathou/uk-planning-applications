@@ -70,8 +70,9 @@ local session state and must never be committed or shared.
 
 The persisted 16 September attempt is currently fail-closed with
 `BlackburnHumanVerificationRequiredError`. Before the detail check stopped the
-run, the store durably queued 26 discovered references. It contains zero
-applications and two retry items, so it does not prove a live bootstrap.
+run, the store durably queued 26 discovered references. It contains one
+complete application and two pending retry items, so it does not prove a live
+bootstrap.
 
 The typed receipt is
 `.yimby/qualification-blackburn-with-darwen-2026-09-16/blackburn-with-darwen-qualification-v1.json`.
