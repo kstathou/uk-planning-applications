@@ -663,7 +663,15 @@ def _validate_evidence_bindings(
     evidence: tuple[RetainedEvidenceV1, ...],
 ) -> None:
     for request, item in zip(requests, evidence, strict=True):
-        if str(item.source_url) != str(request.url) or item.media_type != "text/html":
+        request_url = urlsplit(str(request.url))
+        evidence_url = urlsplit(str(item.source_url))
+        if (
+            evidence_url.scheme != request_url.scheme
+            or evidence_url.netloc != request_url.netloc
+            or evidence_url.path != request_url.path
+            or evidence_url.query not in {"", request_url.query}
+            or item.media_type != "text/html"
+        ):
             _raise_invariant("request-evidence-mismatch")
 
 

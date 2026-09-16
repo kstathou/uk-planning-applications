@@ -964,7 +964,19 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         (("attempted_requests", 0, "url"), "https://example.com/evil"),
         (("attempted_requests", 0, "form"), [{"name": "evil", "value": "x"}]),
         (("attempted_requests", 1, "form", 8, "value"), "Tampered proposal"),
+        (
+            ("evidence", 0, "source_url"),
+            "http://pa.cheshireeast.gov.uk/planning/index.html?fa=search",
+        ),
         (("evidence", 0, "source_url"), "https://example.com/evil"),
+        (
+            ("evidence", 0, "source_url"),
+            "https://pa.cheshireeast.gov.uk/planning/evil?fa=search",
+        ),
+        (
+            ("evidence", 0, "source_url"),
+            "https://pa.cheshireeast.gov.uk/planning/index.html?fa=evil",
+        ),
         (("evidence", 0, "media_type"), "application/pdf"),
         (("source_contract", "recent", "visible_references"), ["26/X"]),
         (("source_contract", "weekly", "week"), "2030-01-01"),
@@ -979,7 +991,10 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         "request-url",
         "request-form",
         "request-form-body-binding",
-        "evidence-url",
+        "evidence-url-scheme",
+        "evidence-url-host",
+        "evidence-url-path",
+        "evidence-url-query",
         "evidence-media-type",
         "recent-zero-with-reference",
         "historical-week",
@@ -1037,3 +1052,51 @@ def test_cheshire_offline_resume_binds_requests_evidence_and_contract(
     captured = capsys.readouterr()
     assert captured.out == ""
     assert '"error": "runtime-failure"' in captured.err
+
+
+def test_cheshire_offline_resume_accepts_transport_sanitized_query(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert (
+        module.main(
+            arguments,
+            session_factory=_QualificationSession,
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
+        == 1
+    )
+    capsys.readouterr()
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v2.json"
+    payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    for item in payload["evidence"]:
+        item["source_url"] = item["source_url"].partition("?")[0]
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "offline resume constructed a portal session"
+        raise AssertionError(message)
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert '"outcome":"blocked"' in captured.out
+    assert captured.err == ""
