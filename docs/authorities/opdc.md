@@ -86,6 +86,8 @@ applications. Each query's declared total is also tied to its retained identity
 inventory. Every application rebuild input preserves its own ordered detail,
 document-index, and response URL association even when response bodies have the
 same digest.
+The persisted authority manifest is also checked as `live-ready` with HTTP
+transport before the receipt can be written.
 
 ## Verification status
 
