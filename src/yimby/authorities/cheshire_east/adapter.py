@@ -46,6 +46,33 @@ _WEEKLY_RECEIVED_URL = f"{BASE_URL}/index.html?fa=getReceivedWeeklyList"
 _DETAIL_URL = f"{BASE_URL}/index.html?fa=getApplication&id={{locator}}"
 _MAX_BNG_EASTING = 700_000
 _MAX_BNG_NORTHING = 1_300_000
+_SEARCH_FILTER_NAMES = frozenset(
+    {
+        "application_reference_number",
+        "application_type_id",
+        "proposal",
+        "decision_type_id",
+        "Applicant[applicant_name]",
+        "Applicant[company_name]",
+        "Agent[agent_name]",
+        "Agent[company_name]",
+        "ps_development_code_id",
+        "SiteAddress[magic]",
+        "SiteAddress[postcode]",
+        "SiteAddress[Street][street_description]",
+        "site_address_description",
+        "site_address_x",
+        "site_address_y",
+        "ward_id",
+        "community_id",
+        "received_date_from",
+        "received_date_to",
+        "committee_proposed_date_from",
+        "committee_proposed_date_to",
+        "decision_issued_date_from",
+        "decision_issued_date_to",
+    }
+)
 
 
 class CheshireEastCheckpointV1(FrozenModel):
@@ -284,6 +311,10 @@ def parse_search_form(body: bytes) -> Tag:
     successful_names = _successful_field_names(form)
     if len(successful_names) != len(set(successful_names)):
         _raise_parse("duplicate successful search control")
+    _exact_search_form_fields(
+        form,
+        {"valid_date_from": "", "valid_date_to": ""},
+    )
     return form
 
 
@@ -355,7 +386,7 @@ def valid_date_request(form: Tag, window: DiscoveryWindow) -> PortalRequest:
         url=HttpUrl(_SEARCH_POST_URL),
         intent=RequestIntent.SEARCH,
         method=RequestMethod.POST,
-        form=_successful_form_fields(form, values),
+        form=_exact_search_form_fields(form, values),
     )
 
 
@@ -375,12 +406,9 @@ def _successful_form_fields(
         if name in overrides:
             values: tuple[str, ...] = (overrides[name],)
         elif control.name == "select":
-            options = [
-                option
-                for option in control.select("option[selected]")
-                if not _is_disabled_option(option)
-            ]
-            if not options and not control.has_attr("multiple"):
+            selected = control.select("option[selected]")
+            options = [option for option in selected if not _is_disabled_option(option)]
+            if not selected and not control.has_attr("multiple"):
                 options = [
                     option
                     for option in control.select("option")
@@ -405,6 +433,63 @@ def _successful_form_fields(
             )
         fields.extend(FormField(name=name, value=value) for value in values)
     return tuple(fields)
+
+
+def _exact_search_form_fields(
+    form: Tag,
+    date_overrides: dict[str, str],
+) -> tuple[FormField, ...]:
+    fields: list[FormField] = []
+    for control in form.select("input[name], select[name], textarea[name]"):
+        if _is_effectively_disabled(control):
+            continue
+        name = str(control["name"])
+        values = _exact_search_control_values(control, name, date_overrides)
+        fields.extend(FormField(name=name, value=value) for value in values)
+    return tuple(fields)
+
+
+def _exact_search_control_values(
+    control: Tag,
+    name: str,
+    date_overrides: dict[str, str],
+) -> tuple[str, ...]:
+    if name in date_overrides:
+        return (date_overrides[name],)
+    if name in {"fa", "submitted"}:
+        return (str(control.get("value", "")),)
+    if name in _SEARCH_FILTER_NAMES:
+        return _neutral_search_filter_values(control, name)
+    input_type = str(control.get("type", "text")).casefold()
+    if control.name == "input" and input_type == "hidden":
+        return (str(control.get("value", "")),)
+    if control.name == "input" and input_type in {
+        "button",
+        "file",
+        "image",
+        "reset",
+        "submit",
+    }:
+        return ()
+    return _raise_parse(f"unknown {name} search control")
+
+
+def _neutral_search_filter_values(control: Tag, name: str) -> tuple[str, ...]:
+    if control.name == "select":
+        if control.has_attr("multiple"):
+            return ()
+        blank_options = tuple(
+            option
+            for option in control.select("option")
+            if not _is_disabled_option(option) and _option_value(option) == ""
+        )
+        if len(blank_options) != 1:
+            _raise_parse(f"neutral {name} search option")
+        return ("",)
+    if control.name == "textarea":
+        return ("",)
+    input_type = str(control.get("type", "text")).casefold()
+    return () if input_type in {"checkbox", "radio"} else ("",)
 
 
 def _is_disabled_option(option: Tag) -> bool:

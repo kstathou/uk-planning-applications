@@ -384,6 +384,7 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
     query_inventory: tuple[str, ...]
     pending_query_inventory: tuple[str, ...]
     attempted_requests: tuple[RecordedQueryV1, ...] = Field(min_length=1)
+    decision_query_key: str | None = None
     source_contract: SourceContractV1 | None
     blockers: tuple[QualificationBlockerV1, ...] = Field(min_length=1)
     checks: tuple[QualificationCheckV1, ...]
@@ -432,11 +433,12 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
                 "official-source-contract-drift",
             }:
                 _raise_invariant("receipt-source-blocker-mismatch")
+            decision_index = _source_failure_decision_index(self, attempted)
             expected_checks.update(
                 {
                     "official-search-form": (
                         "failed"
-                        if self.blockers[0].code == "official-search-form-unavailable"
+                        if decision_index == _SEARCH_FORM_REQUEST_INDEX
                         else "passed"
                     ),
                     "source-contract": "failed",
@@ -447,6 +449,8 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
                 }
             )
         else:
+            if self.decision_query_key is not None:
+                _raise_invariant("receipt-decision-stage-mismatch")
             if (
                 self.source_contract.weekly.week != _HISTORICAL_WEEK
                 or self.source_contract.detail.locator != _DETAIL_LOCATOR
@@ -492,6 +496,31 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
         return self
 
 
+def _source_failure_decision_index(
+    receipt: CheshireEastQualificationBlockerReceiptV2,
+    attempted: tuple[str, ...],
+) -> int:
+    decision_index = _decision_index(receipt, attempted)
+    search_form_unavailable = (
+        receipt.blockers[0].code == "official-search-form-unavailable"
+    )
+    if search_form_unavailable and (
+        decision_index != _SEARCH_FORM_REQUEST_INDEX or len(attempted) != 1
+    ):
+        _raise_invariant("receipt-decision-stage-mismatch")
+    return decision_index
+
+
+def _decision_index(
+    receipt: CheshireEastQualificationBlockerReceiptV2,
+    attempted: tuple[str, ...],
+) -> int:
+    decision_key = receipt.decision_query_key or attempted[-1]
+    if decision_key not in attempted:
+        _raise_invariant("receipt-decision-stage-mismatch")
+    return attempted.index(decision_key)
+
+
 class _Config(FrozenModel):
     data_dir: Path
     scope: QualificationScopeV1
@@ -516,6 +545,7 @@ class _ProbeResult(FrozenModel):
     attempted_requests: tuple[RecordedQueryV1, ...]
     captures: tuple[EvidenceCapture, ...]
     costs: QualificationCostsV1
+    decision_query_key: str | None = None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -621,9 +651,21 @@ class _ProbeJournal:
     def retained_evidence(self) -> tuple[RetainedEvidenceV1, ...]:
         return _completed_stage_evidence(self._journal.stages)
 
-    @property
-    def consumed_evidence(self) -> tuple[RetainedEvidenceV1, ...]:
-        return _completed_stage_evidence(self._journal.stages[: self._index])
+    def completed_history(
+        self,
+    ) -> tuple[
+        tuple[RecordedQueryV1, ...],
+        tuple[RetainedEvidenceV1, ...],
+        tuple[EvidenceCapture, ...],
+    ]:
+        stages = tuple(
+            stage for stage in self._journal.stages if stage.state == "completed"
+        )
+        evidence = _completed_stage_evidence(stages)
+        captures = tuple(
+            _read_retained_evidence(self._data_dir, item) for item in evidence
+        )
+        return tuple(stage.request for stage in stages), evidence, captures
 
     def _replace_stages(
         self,
@@ -681,7 +723,9 @@ async def _probe(
         cheshire.search_form_request(),
     )
     try:
-        search_form = cheshire.parse_search_form(_html_body(search_form_capture))
+        search_form = cheshire.parse_search_form(
+            _html_body(search_form_capture, cheshire.search_form_request())
+        )
     except (
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
@@ -710,26 +754,32 @@ async def _probe(
             ),
         )
         recent_capture = await capture(recent_key, recent_request)
-        recent_boundary = cheshire.parse_search_boundary(_html_body(recent_capture))
+        recent_boundary = cheshire.parse_search_boundary(
+            _html_body(recent_capture, recent_request)
+        )
 
         weekly_form_capture = await capture(
             "source-access|weekly-form",
             cheshire.weekly_received_form_request(),
         )
-        weekly_form = cheshire.parse_weekly_form(_html_body(weekly_form_capture))
+        weekly_form = cheshire.parse_weekly_form(
+            _html_body(weekly_form_capture, cheshire.weekly_received_form_request())
+        )
         weekly_key = f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}"
         weekly_request = cheshire.weekly_received_request(
             weekly_form,
             _HISTORICAL_WEEK,
         )
         weekly_capture = await capture(weekly_key, weekly_request)
-        weekly_boundary = cheshire.parse_weekly_boundary(_html_body(weekly_capture))
+        weekly_boundary = cheshire.parse_weekly_boundary(
+            _html_body(weekly_capture, weekly_request)
+        )
 
         detail_key = f"detail|{_DETAIL_LOCATOR}"
         detail_portal_request = cheshire.detail_request(_DETAIL_LOCATOR)
         detail_capture = await capture(detail_key, detail_portal_request)
         detail = cheshire.parse_detail_contract(
-            _html_body(detail_capture),
+            _html_body(detail_capture, detail_portal_request),
             expected_reference=_DETAIL_REFERENCE,
             expected_locator=_DETAIL_LOCATOR,
         )
@@ -766,8 +816,15 @@ async def _probe(
     )
 
 
-def _html_body(capture: EvidenceCapture) -> bytes:
-    if canonical_source_media_type(capture.media_type) != "text/html":
+def _html_body(capture: EvidenceCapture, request: PortalRequest) -> bytes:
+    response_url = urlsplit(str(capture.url))
+    request_url = urlsplit(str(request.url))
+    if (
+        canonical_source_media_type(capture.media_type) != "text/html"
+        or response_url.scheme != request_url.scheme
+        or response_url.netloc != request_url.netloc
+        or response_url.path != request_url.path
+    ):
         raise _QualificationSourceMediaError
     return capture.body
 
@@ -783,6 +840,9 @@ def _probe_result(
     return _ProbeResult(
         source_contract=source_contract,
         blocker=blocker,
+        decision_query_key=(
+            attempted_requests[-1].key if blocker is not None else None
+        ),
         attempted_requests=tuple(attempted_requests),
         captures=tuple(captures),
         costs=QualificationCostsV1(
@@ -790,6 +850,37 @@ def _probe_result(
             transferred_bytes=sum(len(capture.body) for capture in captures),
             attachment_body_requests=session.attachment_body_requests,
         ),
+    )
+
+
+def _merge_completed_history(
+    probe: _ProbeResult,
+    attempted_requests: tuple[RecordedQueryV1, ...],
+    captures: tuple[EvidenceCapture, ...],
+) -> _ProbeResult:
+    if probe.attempted_requests != attempted_requests[: len(probe.attempted_requests)]:
+        _raise_invariant("journal-probe-prefix-mismatch")
+    blocker = probe.blocker
+    if (
+        blocker is not None
+        and blocker.code == "official-search-form-unavailable"
+        and len(attempted_requests) > len(probe.attempted_requests)
+    ):
+        blocker = QualificationBlockerV1(
+            code="official-source-contract-drift",
+            explanation=_BLOCKER_EXPLANATIONS["official-source-contract-drift"],
+        )
+    return probe.model_copy(
+        update={
+            "blocker": blocker,
+            "attempted_requests": attempted_requests,
+            "captures": captures,
+            "costs": QualificationCostsV1(
+                request_count=len(captures),
+                transferred_bytes=sum(len(capture.body) for capture in captures),
+                attachment_body_requests=probe.costs.attachment_body_requests,
+            ),
+        }
     )
 
 
@@ -933,21 +1024,27 @@ def _unique_recorded_fields(
 def _validate_evidence_bindings(
     receipt: CheshireEastQualificationBlockerReceiptV2,
 ) -> None:
-    last_index = len(receipt.evidence) - 1
+    attempted_keys = tuple(request.key for request in receipt.attempted_requests)
+    decision_index = _decision_index(receipt, attempted_keys)
     for index, (request, item) in enumerate(
         zip(receipt.attempted_requests, receipt.evidence, strict=True)
     ):
         request_url = urlsplit(str(request.url))
         evidence_url = urlsplit(str(item.source_url))
         media_type = canonical_source_media_type(item.media_type)
-        final_blocker_media = receipt.source_contract is None and index == last_index
+        decision_blocker_media = (
+            receipt.source_contract is None and index == decision_index
+        )
+        decision_stage_redirect = (
+            receipt.source_contract is None and index == decision_index
+        )
         if (
             evidence_url.scheme != request_url.scheme
             or evidence_url.netloc != request_url.netloc
-            or evidence_url.path != request_url.path
+            or (evidence_url.path != request_url.path and not decision_stage_redirect)
             or evidence_url.query not in {"", request_url.query}
             or not is_source_document_media_type(media_type)
-            or (media_type != "text/html" and not final_blocker_media)
+            or (media_type != "text/html" and not decision_blocker_media)
         ):
             _raise_invariant("request-evidence-mismatch")
 
@@ -983,11 +1080,14 @@ class _RetainedEvidenceReplay:
             raise _QualificationEvidenceError from error
 
     def accepts_failure(self, index: int, blocker_code: str) -> bool:
+        decision_key = (
+            self.receipt.decision_query_key or self.receipt.attempted_requests[-1].key
+        )
         return (
             self.receipt.source_contract is None
             and len(self.receipt.blockers) == 1
             and self.receipt.blockers[0].code == blocker_code
-            and len(self.receipt.attempted_requests) == index + 1
+            and self.receipt.attempted_requests[index].key == decision_key
         )
 
     def require_following_request(self, parsed_index: int) -> None:
@@ -1008,7 +1108,11 @@ def _verify_request_evidence_contract(
             cheshire.CheshireEastFormMethodUnavailableError,
             cheshire.CheshireEastParseError,
         ),
-        "official-search-form-unavailable",
+        (
+            "official-source-contract-drift"
+            if receipt.blockers[0].code == "official-source-contract-drift"
+            else "official-search-form-unavailable"
+        ),
     )
     if search_form is None:
         return
@@ -1167,6 +1271,7 @@ def _receipt(
             query_inventory=query_inventory,
             pending_query_inventory=pending_queries,
             attempted_requests=probe.attempted_requests,
+            decision_query_key=probe.decision_query_key,
             source_contract=None,
             blockers=(probe.blocker,),
             checks=(
@@ -1174,7 +1279,8 @@ def _receipt(
                     name="official-search-form",
                     status=(
                         "failed"
-                        if probe.blocker.code == "official-search-form-unavailable"
+                        if probe.decision_query_key
+                        == _planned_query_inventory(scope)[_SEARCH_FORM_REQUEST_INDEX]
                         else "passed"
                     ),
                 ),
@@ -1351,7 +1457,12 @@ def main(
             else:
                 journal = _open_probe_journal(config)
                 probe = asyncio.run(_run_probe(config.scope, session_factory, journal))
-                evidence = journal.consumed_evidence
+                attempted_requests, evidence, captures = journal.completed_history()
+                probe = _merge_completed_history(
+                    probe,
+                    attempted_requests,
+                    captures,
+                )
                 receipt = _receipt(config.scope, probe, evidence, now())
                 _write_receipt(receipt_path, receipt)
     except (

@@ -52,18 +52,21 @@ def _search_form() -> bytes:
     <form id="form" name="form" method="post" action="/planning/index.html">
       <input type="hidden" name="fa" value="search">
       <input type="hidden" name="submitted" value="">
+      <input type="hidden" name="csrf_token" value="token">
       <input name="application_reference_number" value="">
       <select name="application_type_id">
         <option value="" selected>Any</option><option value="4">Full</option>
       </select>
       <select name="decision_type_id"><option value="">Any</option></select>
+      <input type="hidden" name="site_address_x" value="999999">
+      <input type="hidden" name="site_address_y" value="999999">
+      <select name="ps_development_code_id" multiple>
+        <option selected value="narrow">Narrow</option>
+      </select>
       <input name="valid_date_from" value="">
       <input name="valid_date_to" value="">
-      <input type="checkbox" name="ignored_checkbox" value="1">
-      <input type="checkbox" name="included_checkbox" value="yes" checked>
       <input type="text" name="disabled_value" value="no" disabled>
       <textarea name="proposal">House</textarea>
-      <select name="empty_multiple" multiple><option value="one">One</option></select>
       <input type="submit" name="ignored_submit" value="Search">
       <button type="submit" name="submit_button" value="Search">Search</button>
     </form>
@@ -385,9 +388,12 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
     assert tuple((field.name, field.value) for field in request.form) == (
         ("fa", "search"),
         ("submitted", ""),
+        ("csrf_token", "token"),
         ("application_reference_number", ""),
         ("application_type_id", ""),
         ("decision_type_id", ""),
+        ("site_address_x", ""),
+        ("site_address_y", ""),
         ("valid_date_from", "18-08-2026"),
         ("valid_date_to", "16-09-2026"),
         ("proposal", ""),
@@ -446,16 +452,9 @@ def test_cheshire_successful_select_options_match_browser_disabledness() -> None
     ).select_one("form")
     assert isinstance(form, Tag)
 
-    request = cheshire.valid_date_request(
-        form,
-        DiscoveryWindow(
-            start=date(2026, 8, 18),
-            end=date(2026, 9, 16),
-            include_open=True,
-        ),
-    )
+    fields = cheshire._successful_form_fields(form, {})
 
-    assert tuple((field.name, field.value) for field in request.form) == (
+    assert tuple((field.name, field.value) for field in fields) == (
         ("kind", "Text fallback"),
         ("default_checkbox", "on"),
     )
@@ -757,6 +756,13 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<textarea name="proposal">House</textarea>'
             b'<input name="proposal" value="Other">',
         ),
+        _search_form().replace(
+            b'<option value="" selected>Any</option>',
+            b'<option value="4" selected>Full</option>',
+        ),
+        _search_form().replace(
+            b"</form>", b'<input name="unknown_filter" value="narrow"></form>'
+        ),
         _search_form() + _search_form(),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -777,15 +783,8 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         "html.parser",
     ).select_one("form")
     assert isinstance(custom, Tag)
-    request = cheshire.valid_date_request(
-        custom,
-        DiscoveryWindow(
-            start=date(2026, 8, 18),
-            end=date(2026, 9, 16),
-            include_open=True,
-        ),
-    )
-    assert tuple((field.name, field.value) for field in request.form) == (
+    fields = cheshire._successful_form_fields(custom, {})
+    assert tuple((field.name, field.value) for field in fields) == (
         ("f", "f"),
         ("g", "g"),
     )
@@ -1429,7 +1428,7 @@ def test_cheshire_resume_uses_only_consumed_completed_journal_evidence(
     assert receipt.decision_query_key == "source-access|search-form"
     assert len(receipt.evidence) == 5
     assert receipt.costs.request_count == 5
-    assert receipt.blockers[0].code == "official-search-form-unavailable"
+    assert receipt.blockers[0].code == "official-source-contract-drift"
 
 
 def test_cheshire_qualification_implementation_is_covered_package_code() -> None:
@@ -1560,9 +1559,7 @@ def test_cheshire_redirected_drift_becomes_a_typed_blocker_receipt(
             body = b"<html>challenge</html>"
             return capture.model_copy(
                 update={
-                    "url": HttpUrl(
-                        "https://pa.cheshireeast.gov.uk/planning/challenge"
-                    ),
+                    "url": HttpUrl("https://pa.cheshireeast.gov.uk/planning/challenge"),
                     "body": body,
                     "digest": EvidenceDigest(sha256(body).hexdigest()),
                 }
@@ -2062,7 +2059,7 @@ def test_cheshire_offline_resume_rejects_semantically_tampered_receipt(
         (("attempted_requests", 0, "method"), "POST"),
         (("attempted_requests", 0, "url"), "https://example.com/evil"),
         (("attempted_requests", 0, "form"), [{"name": "evil", "value": "x"}]),
-        (("attempted_requests", 1, "form", 8, "value"), "Tampered proposal"),
+        (("attempted_requests", 1, "form", 10, "value"), "Tampered proposal"),
         (
             ("evidence", 0, "source_url"),
             "http://pa.cheshireeast.gov.uk/planning/index.html?fa=search",
@@ -2433,6 +2430,30 @@ def test_cheshire_qualification_model_guards_cover_invalid_states(
         module.CheshireEastQualificationBlockerReceiptV2.model_validate(
             {**receipt_payload, "checks": receipt_payload["checks"][:-1]}
         )
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationBlockerReceiptV2.model_validate(
+            {**receipt_payload, "decision_query_key": "not-a-planned-query"}
+        )
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationBlockerReceiptV2.model_validate(
+            {
+                **receipt_payload,
+                "decision_query_key": receipt.attempted_requests[-1].key,
+            }
+        )
+    search_unavailable = module.QualificationBlockerV1(
+        code="official-search-form-unavailable",
+        explanation=module._BLOCKER_EXPLANATIONS["official-search-form-unavailable"],
+    )
+    with pytest.raises(ValidationError):
+        module.CheshireEastQualificationBlockerReceiptV2.model_validate(
+            {
+                **receipt_payload,
+                "decision_query_key": receipt.attempted_requests[0].key,
+                "source_contract": None,
+                "blockers": [search_unavailable.model_dump(mode="json")],
+            }
+        )
 
     proven_weekly = receipt.source_contract.weekly.model_copy(
         update={"reported_total": receipt.source_contract.weekly.row_count}
@@ -2453,6 +2474,12 @@ def test_cheshire_qualification_model_guards_cover_invalid_states(
         captures=(),
         costs=receipt.costs,
     )
+    with pytest.raises(ValueError, match="journal-probe-prefix-mismatch"):
+        module._merge_completed_history(
+            probe,
+            receipt.attempted_requests[1:],
+            (),
+        )
     proven_receipt = module._receipt(
         receipt.scope,
         probe,

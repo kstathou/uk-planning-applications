@@ -29,18 +29,14 @@ class EvidenceStore:
         path = directory / f"{capture.digest}.gz"
         if path.exists():
             return path
-        directory.mkdir(parents=True, exist_ok=True)
+        _mkdir_durable(directory)
         temporary = path.with_suffix(".tmp")
         with temporary.open("wb") as output:
             output.write(gzip.compress(capture.body, mtime=0))
             output.flush()
             os.fsync(output.fileno())
         temporary.replace(path)
-        descriptor = os.open(directory, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        _sync_directory(directory)
         return path
 
     def relative_path(self, path: Path) -> str:
@@ -62,3 +58,22 @@ class EvidenceStore:
             body=gzip.decompress(candidate.read_bytes()),
             digest=digest,
         )
+
+
+def _mkdir_durable(directory: Path) -> None:
+    missing = []
+    candidate = directory
+    while not candidate.exists():
+        missing.append(candidate)
+        candidate = candidate.parent
+    for candidate in reversed(missing):
+        candidate.mkdir(exist_ok=True)
+        _sync_directory(candidate.parent)
+
+
+def _sync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
