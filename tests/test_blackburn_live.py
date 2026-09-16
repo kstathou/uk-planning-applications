@@ -16,7 +16,12 @@ from pydantic import HttpUrl, ValidationError
 
 import yimby.authorities.blackburn_with_darwen.adapter as blackburn
 from yimby import DiscoveryWindow
-from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
+from yimby.domain import (
+    EvidenceCapture,
+    EvidenceDigest,
+    SourceReference,
+    TransportMode,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -67,9 +72,12 @@ def _search_html(*rows: str) -> bytes:
     """.encode()
 
 
-def _capture(body: bytes) -> EvidenceCapture:
+def _capture(
+    body: bytes,
+    url: str = "https://online.blackburn.gov.uk/planning/index.html",
+) -> EvidenceCapture:
     return EvidenceCapture(
-        url=HttpUrl("https://online.blackburn.gov.uk/planning/index.html"),
+        url=HttpUrl(url),
         media_type="text/html",
         body=body,
         digest=EvidenceDigest(sha256(body).hexdigest()),
@@ -83,6 +91,8 @@ class _BlackburnSession:
     ) -> None:
         self.responder = responder
         self.queries: list[blackburn.BlackburnQueryV1] = []
+        self.application_body: bytes | None = None
+        self.application_calls: list[blackburn.BlackburnLocatorV1] = []
 
     async def search(
         self,
@@ -90,6 +100,19 @@ class _BlackburnSession:
     ) -> EvidenceCapture:
         self.queries.append(query)
         return _capture(self.responder(query))
+
+    async def application(
+        self,
+        locator: blackburn.BlackburnLocatorV1,
+    ) -> EvidenceCapture:
+        self.application_calls.append(locator)
+        if self.application_body is None:
+            raise AssertionError
+        return _capture(
+            self.application_body,
+            f"https://online.blackburn.gov.uk/planning/index.html"
+            f"?fa=getApplication&id={locator.record_id}",
+        )
 
     @property
     def requested_urls(self) -> tuple[str, ...]:
@@ -203,6 +226,172 @@ def test_blackburn_query_inventory_splits_caps_and_filters_older_open() -> None:
         assert len(session.queries) == requests_before
 
     asyncio.run(exercise())
+
+
+def _detail_row(label: str, value: str) -> str:
+    return f"""
+    <div class="row pad-bottom-5">
+      <div class="col-md-5"><strong>{label}:</strong></div>
+      <div class="col-md-7">{value}</div>
+    </div>
+    """
+
+
+def _detail_html(reference: str = "10/26/0747", *, documents: int = 2) -> bytes:
+    fields = (
+        ("Application Reference Number", reference),
+        ("Application Type", "Full Planning Application"),
+        ("Proposal", "Change use &amp; provide 14 retail units"),
+        ("Applicant", "Applicant One"),
+        ("Agent", "Agent One"),
+        ("Location", "Q Lounge, Blackburn, BB2 2HB"),
+        ("Grid Reference", "368232, 427893"),
+        ("Ward", "Blackburn Central"),
+        ("Parish / Community", "Blackburn"),
+        ("Officer", "Officer One"),
+        ("Decision Level", "Delegated"),
+        ("Application Status", "Pending Consideration"),
+        ("Received Date", "21-08-2026"),
+        ("Valid Date", "15-09-2026"),
+        ("Expiry Date", "10-11-2026"),
+        ("Extension Of Time", "No"),
+        ("Extension Of Time Due Date", ""),
+        ("Planning Performance Agreement", "No"),
+        ("Planning Performance Agreement Due Date", ""),
+        ("Proposed Committee Date", ""),
+        ("Actual Committee Date", ""),
+        ("Decision Issued Date", ""),
+        ("Decision", ""),
+        ("Appeal Reference", ""),
+        ("Appeal Status", ""),
+        ("Appeal External Decision", ""),
+        ("Appeal External Decision Date", ""),
+    )
+    rows = "".join(
+        f"""
+        <tr>
+          <td data-field-name="document_type">Plan</td>
+          <td data-field-name="description">Drawing {index}</td>
+          <td data-field-name="thumbnail"><img src="https://cdn.test/thumb.png"></td>
+          <td data-field-name="date_document_added"
+              data-date-value="2026-09-{10 + index:02d}">{10 + index}-09-2026</td>
+          <td data-field-name="download"><a
+            href="/planning/?fa=downloadDocument&amp;id={227500 + index}"
+            >Download</a></td>
+        </tr>
+        """
+        for index in range(1, documents + 1)
+    )
+    return f"""
+    <div id="application_details" data-application-id="178041">
+      {"".join(_detail_row(label, value) for label, value in fields)}
+    </div>
+    <table id="application_documents">
+      <thead><tr>
+        <th data-field-name="document_type">Document Type</th>
+        <th data-field-name="description">Description</th>
+        <th data-field-name="thumbnail">Thumbnail</th>
+        <th data-field-name="date_document_added">Date Document Added</th>
+        <th data-field-name="download">Download/View</th>
+      </tr></thead>
+      <tbody>{rows}</tbody>
+    </table>
+    """.encode()
+
+
+def test_blackburn_live_detail_keeps_document_metadata_only() -> None:
+    locator = blackburn.BlackburnLocatorV1(
+        record_id="178041",
+        public_reference="10/26/0747",
+    )
+    reference = SourceReference(
+        source_id=blackburn.SOURCE,
+        reference=locator.public_reference,
+        locator=locator.model_dump_json(),
+    )
+    session = _BlackburnSession(lambda _query: _search_html())
+    session.application_body = _detail_html()
+    adapter = blackburn.BlackburnWithDarwenAdapter()
+
+    snapshot = asyncio.run(adapter.fetch(session, reference))
+    observation = adapter.normalise(snapshot)
+
+    assert snapshot.payload.record_id == "178041"
+    assert snapshot.payload.received_date == date(2026, 8, 21)
+    assert snapshot.payload.valid_date == date(2026, 9, 15)
+    assert [document.title for document in snapshot.payload.documents] == [
+        "Drawing 1",
+        "Drawing 2",
+    ]
+    assert snapshot.completeness.documents.kind == "complete"
+    assert snapshot.completeness.documents.item_count == len(snapshot.payload.documents)
+    assert snapshot.completeness.comments.kind == "unavailable"
+    assert observation.proposal == "Change use & provide 14 retail units"
+    assert observation.status == "pending-consideration"
+    assert observation.metadata.address == "Q Lounge, Blackburn, BB2 2HB"
+    assert observation.metadata.source_url == snapshot.evidence[0].url
+    assert tuple(str(document.url) for document in observation.documents) == (
+        "https://online.blackburn.gov.uk/planning/?fa=downloadDocument&id=227501",
+        "https://online.blackburn.gov.uk/planning/?fa=downloadDocument&id=227502",
+    )
+    assert session.application_calls == [locator]
+    assert session.attachment_body_requests == 0
+
+
+def test_blackburn_detail_requires_locator_agreement_and_document_shape() -> None:
+    locator = blackburn.BlackburnLocatorV1(
+        record_id="178041",
+        public_reference="10/26/0747",
+    )
+    reference = SourceReference(
+        source_id=blackburn.SOURCE,
+        reference=locator.public_reference,
+        locator=locator.model_dump_json(),
+    )
+    adapter = blackburn.BlackburnWithDarwenAdapter()
+
+    mismatch = _BlackburnSession(lambda _query: _search_html())
+    mismatch.application_body = _detail_html("10/26/9999")
+    with pytest.raises(blackburn.BlackburnReferenceMismatchError):
+        asyncio.run(adapter.fetch(mismatch, reference))
+
+    malformed = _BlackburnSession(lambda _query: _search_html())
+    malformed.application_body = _detail_html().replace(
+        b'data-field-name="description"',
+        b'data-field-name="changed"',
+        1,
+    )
+    with pytest.raises(blackburn.BlackburnWithDarwenParseError):
+        asyncio.run(adapter.fetch(malformed, reference))
+
+    for bad_reference in (
+        reference.model_copy(update={"source_id": "wrong"}),
+        reference.model_copy(update={"locator": None}),
+        reference.model_copy(update={"locator": "not-json"}),
+    ):
+        with pytest.raises(blackburn.BlackburnRoutingError):
+            asyncio.run(adapter.fetch(malformed, bad_reference))
+
+
+def test_blackburn_detail_confirms_an_empty_document_table() -> None:
+    locator = blackburn.BlackburnLocatorV1(
+        record_id="178041",
+        public_reference="10/26/0747",
+    )
+    reference = SourceReference(
+        source_id=blackburn.SOURCE,
+        reference=locator.public_reference,
+        locator=locator.model_dump_json(),
+    )
+    session = _BlackburnSession(lambda _query: _search_html())
+    session.application_body = _detail_html(documents=0)
+
+    snapshot = asyncio.run(
+        blackburn.BlackburnWithDarwenAdapter().fetch(session, reference)
+    )
+
+    assert snapshot.payload.documents == ()
+    assert snapshot.completeness.documents.kind == "empty"
 
 
 def test_blackburn_single_day_at_result_cap_fails_closed() -> None:
