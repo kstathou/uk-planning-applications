@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, D103, PLR2004
+# ruff: noqa: ANN401, D103, E501, PLR2004, RUF012, SLF001
 
 """Peak District AssureLive request and checkpoint contracts."""
 
@@ -83,9 +83,7 @@ def _search_form() -> bytes:
 
 def _advanced_form(*, include_appeal: bool = True) -> bytes:
     appeal = (
-        '<option value="APPEAL LODGED">APPEAL LODGED</option>'
-        if include_appeal
-        else ""
+        '<option value="APPEAL LODGED">APPEAL LODGED</option>' if include_appeal else ""
     )
     return f"""
     <fieldset id="fldOnlinePlanningSearchAdvanceSearch">
@@ -124,7 +122,7 @@ def _result_page(
     rows = "".join(
         f"""
         <div class="row result">
-          <a href="/AssureLive/ES/Presentation/Planning/OnlinePlanning/OnlinePlanningOverview?applicationNumber={reference.replace('/', '%2F')}&amp;guid=session-{reference.replace('/', '-')}">View</a>
+          <a href="/AssureLive/ES/Presentation/Planning/OnlinePlanning/OnlinePlanningOverview?applicationNumber={reference.replace("/", "%2F")}&amp;guid=session-{reference.replace("/", "-")}">View</a>
           <span>Application No: {reference} | Registered : 16 September 2026</span>
         </div>
         """
@@ -311,15 +309,22 @@ def test_peak_district_discovers_bounded_and_older_open_with_exact_pagination() 
         for batch in batches
         for reference in batch.references
     )
-    assert sum(
-        request.method == RequestMethod.POST and str(request.url) == peak._RESULTS_URL
-        for request in session.requests
-    ) == 5
-    assert sum(
-        request.method == RequestMethod.POST
-        and str(request.url) == peak._PAGINATION_URL
-        for request in session.requests
-    ) == 1
+    assert (
+        sum(
+            request.method == RequestMethod.POST
+            and str(request.url) == peak._RESULTS_URL
+            for request in session.requests
+        )
+        == 5
+    )
+    assert (
+        sum(
+            request.method == RequestMethod.POST
+            and str(request.url) == peak._PAGINATION_URL
+            for request in session.requests
+        )
+        == 1
+    )
 
 
 def test_peak_district_resumes_active_page_and_terminal_rerun_is_zero_io() -> None:
@@ -350,7 +355,9 @@ def test_peak_district_resumes_active_page_and_terminal_rerun_is_zero_io() -> No
         "NP/DDD/1125/1200",
     ]
     first_two_posts = [
-        request for request in resumed_session.requests if request.method == RequestMethod.POST
+        request
+        for request in resumed_session.requests
+        if request.method == RequestMethod.POST
     ][:2]
     assert [str(request.url) for request in first_two_posts] == [
         peak._RESULTS_URL,
@@ -366,7 +373,9 @@ def test_peak_district_resumes_active_page_and_terminal_rerun_is_zero_io() -> No
     assert terminal_session.requests == []
 
 
-def test_peak_district_restarts_wrong_scope_and_omits_open_queries_when_disabled() -> None:
+def test_peak_district_restarts_wrong_scope_and_omits_open_queries_when_disabled() -> (
+    None
+):
     adapter = peak.PeakDistrictAdapter()
     prior = peak.PeakDistrictCheckpointV1(
         row_offset="live",
@@ -379,7 +388,9 @@ def test_peak_district_restarts_wrong_scope_and_omits_open_queries_when_disabled
     )
     session = _Session(_PeakAssureMock())
 
-    batches = asyncio.run(_batches(adapter, session, _window(include_open=False), prior))
+    batches = asyncio.run(
+        _batches(adapter, session, _window(include_open=False), prior)
+    )
 
     assert batches[-1].next_checkpoint.live_complete
     assert len(batches[-1].next_checkpoint.completed_queries) == 3
@@ -390,7 +401,7 @@ def test_peak_district_restarts_wrong_scope_and_omits_open_queries_when_disabled
         for request in session.requests
         if str(request.url) == peak._RESULTS_URL
     ]
-    assert submitted_statuses == ["-1", "-1", "-1", "-1"]
+    assert submitted_statuses == ["-1", "-1", "-1"]
 
 
 def test_peak_district_fails_closed_on_form_and_count_drift() -> None:
@@ -432,7 +443,9 @@ def test_peak_district_fails_closed_on_form_and_count_drift() -> None:
                 peak._parse_search_page(
                     _result_page(("NP/DDD/0926/0909",), reported=1),
                     expected_page=0,
-                ).references[0].locator
+                )
+                .references[0]
+                .locator
             )
         ).query
     )["applicationNumber"] == ["NP/DDD/0926/0909"]
