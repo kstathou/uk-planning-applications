@@ -38,6 +38,7 @@ from yimby.domain import (
     UnavailableSection,
 )
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+from yimby.transport import SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -356,6 +357,11 @@ def test_leeds_rejects_an_invalid_advanced_page_number() -> None:
             b"<p>No results found</p>",
             page=0,
         )
+    with pytest.raises(LeedsParseError, match="requested result page"):
+        leeds_adapter._parse_search_page(
+            b"<p>No results found</p>",
+            expected_page=0,
+        )
 
 
 def test_leeds_checkpoint_rejects_unroutable_and_conflicting_identities() -> None:
@@ -423,9 +429,10 @@ def test_leeds_terminal_checkpoint_rerun_has_zero_network_io() -> None:
     assert mock.requests == []
 
 
-def _advanced_result_page(reference: str, locator: str) -> bytes:
+def _advanced_result_page(reference: str, locator: str, *, page: int = 1) -> bytes:
     return f"""
     <div data-result-count="2"></div>
+    <input name="searchCriteria.page" value="{page}">
     <li class="searchresult">
       <a href="applicationDetails.do?keyVal={locator}&activeTab=summary">
         <span>Reference</span><span>{reference}</span>
@@ -450,7 +457,11 @@ class _LeedsPagedAdvancedMock(_LeedsSearchMock):
             self.requests.append((request.method, path, fields))
             return httpx.Response(
                 200,
-                content=_advanced_result_page("26/05002/FU", "ADVANCED-B"),
+                content=_advanced_result_page(
+                    "26/05002/FU",
+                    "ADVANCED-B",
+                    page=SECOND_PAGE,
+                ),
             )
         return super().__call__(request)
 
@@ -525,6 +536,26 @@ def test_leeds_resumes_a_paginated_advanced_partition() -> None:
         path.endswith("/pagedSearchResults.do")
         for _method, path, _fields in mock.requests
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        _advanced_result_page("26/05001/FU", "ADVANCED-A"),
+        _advanced_result_page("26/05001/FU", "ADVANCED-A").replace(
+            b'<input name="searchCriteria.page" value="1">',
+            b"",
+        ),
+    ],
+    ids=("repeated-page-one", "missing-page-marker"),
+)
+def test_leeds_rejects_an_unbound_advanced_result_page(body: bytes) -> None:
+    """A lost portal session cannot turn an unbound page into completeness."""
+    with pytest.raises(LeedsParseError, match="result page"):
+        leeds_adapter._parse_advanced_search_page(
+            body,
+            page=SECOND_PAGE,
+        )
 
 
 def test_leeds_repairs_a_complete_inventory_checkpoint_flag() -> None:
@@ -675,7 +706,9 @@ def _documents(
     """
     if header_drift:
         header = header.replace("View", "Download")
+    expected = 0 if header_only else 1
     return f"""
+    <span>Documents ({expected})</span>
     <table summary="Documents">
       {header}
       {row}
@@ -921,11 +954,26 @@ def test_leeds_accepts_an_explicit_empty_document_page() -> None:
     assert isinstance(state, EmptySection)
 
 
+def test_leeds_rejects_a_truncated_document_index() -> None:
+    """The displayed document total must equal every parsed metadata row."""
+    truncated = _documents().replace(b"Documents (1)", b"Documents (2)")
+
+    with pytest.raises(LeedsParseError, match="expected 2 actual 1"):
+        leeds_adapter._parse_documents(truncated)
+
+
 @pytest.mark.parametrize(
     ("body", "message"),
     [
         (_documents() + _documents(header_only=True), "documents table"),
-        (b'<table summary="Documents"></table>', "documents table header"),
+        (
+            _documents().replace(b"<span>Documents (1)</span>", b""),
+            "documents displayed count",
+        ),
+        (
+            b'<span>Documents (0)</span><table summary="Documents"></table>',
+            "documents table header",
+        ),
         (
             _documents().replace(
                 b"</table>",
@@ -935,6 +983,7 @@ def test_leeds_accepts_an_explicit_empty_document_page() -> None:
         ),
         (
             (
+                b"<span>Documents (1)</span>"
                 b'<table summary="Documents">'
                 b"<tr><th>Date Published</th><th>Document Type</th>"
                 b"<th>Description</th><th>View</th></tr>"
@@ -957,6 +1006,7 @@ def test_leeds_accepts_an_explicit_empty_document_page() -> None:
     ],
     ids=(
         "multiple-tables",
+        "missing-count",
         "missing-header",
         "pagination",
         "row-width",
@@ -1058,14 +1108,13 @@ def test_leeds_rejects_a_persistent_document_shell() -> None:
     assert type(raised.value).__name__ == "LeedsDetailUnavailableError"
 
 
-@pytest.mark.parametrize("failure", ["malformed", "unavailable", "header"])
+@pytest.mark.parametrize("failure", ["malformed", "header"])
 def test_leeds_preserves_document_section_failures(failure: str) -> None:
     """An unverified document index remains failed rather than empty."""
     snapshot = asyncio.run(
         _fetch(
             _LeedsDetailMock(
                 malformed_documents=failure == "malformed",
-                failed_documents=failure == "unavailable",
                 document_header_drift=failure == "header",
             )
         )
@@ -1073,6 +1122,12 @@ def test_leeds_preserves_document_section_failures(failure: str) -> None:
 
     assert snapshot.payload.documents == ()
     assert isinstance(snapshot.completeness.documents, FailedSection)
+
+
+def test_leeds_retries_document_transport_failures_as_a_whole_record() -> None:
+    """A document transport outage propagates into the collector retry queue."""
+    with pytest.raises(SourceUnavailableError):
+        asyncio.run(_fetch(_LeedsDetailMock(failed_documents=True)))
 
 
 def test_leeds_rejects_published_reference_disagreement() -> None:

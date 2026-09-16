@@ -244,6 +244,7 @@ def _result_page(
     count: int,
     label: str = "Reference",
     count_text: str | None = None,
+    current_page: int | None = None,
 ) -> bytes:
     rendered = "".join(
         (
@@ -259,7 +260,14 @@ def _result_page(
         if count_text is None
         else f'<span class="showing">{count_text}</span>'
     )
-    return f"{count_markup}<ul>{rendered}</ul>".encode()
+    page_markup = (
+        ""
+        if current_page is None
+        else (
+            f'<input type="hidden" name="searchCriteria.page" value="{current_page}">'
+        )
+    )
+    return f"{count_markup}{page_markup}<ul>{rendered}</ul>".encode()
 
 
 def _uncounted_result_page(
@@ -643,6 +651,11 @@ class _IdoxMock:
                             (self.case.references[3], self.case.locators[3]),
                         ),
                         count=2,
+                        current_page=(
+                            1
+                            if self.case.authority_id == AuthorityId("leeds")
+                            else None
+                        ),
                         count_text=(
                             "Showing 1\N{EN DASH}2 of 2 results"
                             if self.showing_counts
@@ -684,6 +697,9 @@ class _IdoxMock:
                 content=_result_page(
                     validated_rows,
                     count=1 if self.mismatch else 3,
+                    current_page=(
+                        1 if self.case.authority_id == AuthorityId("leeds") else None
+                    ),
                     count_text=("Showing 1-2 of 3" if self.showing_counts else None),
                 ),
             )
@@ -733,7 +749,13 @@ class _IdoxMock:
                     numbered_page=1,
                 )
                 if self.showing_counts
-                else _result_page(rows, count=3)
+                else _result_page(
+                    rows,
+                    count=3,
+                    current_page=(
+                        2 if self.case.authority_id == AuthorityId("leeds") else None
+                    ),
+                )
             )
             return httpx.Response(200, content=content)
         if path.endswith("/applicationDetails.do"):

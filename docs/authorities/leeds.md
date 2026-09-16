@@ -29,7 +29,9 @@ older open applications. One typed, ordered inventory reconciles 43 searches:
 The unpartitioned current search exceeds the portal result cap. A capped query
 is a qualification failure, never an empty result. The adapter therefore
 requires the exact observed case-type taxonomy, exhausts every page, reconciles
-displayed totals, and fails closed if the form or taxonomy drifts.
+displayed totals, binds every response to its requested page, and fails closed
+if the form, taxonomy, or pagination identity drifts. A repeated first page
+cannot advance a resumed checkpoint.
 
 The clean live run completed all ten weekly partitions with totals
 `116, 162, 154, 140, 102, 101, 156, 140, 0, 93`. It then reached page 10 and
@@ -61,6 +63,8 @@ table shapes were observed:
 
 The selection cell may contain the portal's accessibility label and checkbox.
 Unknown headers, row widths, dates, links, or pagination remain failed sections.
+The parsed metadata rows must exactly match the displayed `Documents (N)`
+count, so a truncated or header-only nonzero index cannot pass as complete.
 The exact Leeds permission-denied page maps to unavailable documents rather
 than empty documents. A header-only table or the explicit no-documents wording
 maps to empty.
@@ -68,9 +72,11 @@ maps to empty.
 The portal intermittently returns an HTTP-200 remote-exception shell for
 summary or documents. The adapter retries that exact response three times. A
 persistent shell remains a retryable whole-record failure and never replaces a
-previous section with empty data. Leeds states that public comment text is not
-published, so comments are represented as unavailable and attachment bodies
-are not used as a substitute.
+previous section with empty data. Document transport failures also remain
+whole-record retryable; they are not converted into a successful snapshot with
+a failed section. Leeds states that public comment text is not published, so
+comments are represented as unavailable and attachment bodies are not used as
+a substitute.
 
 ## Qualification and readiness
 

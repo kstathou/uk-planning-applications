@@ -43,7 +43,6 @@ from yimby.transport import (
     PortalRequest,
     RequestIntent,
     RequestMethod,
-    SourceUnavailableError,
 )
 
 if TYPE_CHECKING:
@@ -325,7 +324,7 @@ class LeedsAdapter:
                         page,
                     )
                 )
-                search_page = _parse_search_page(capture.body)
+                search_page = _parse_search_page(capture.body, expected_page=page)
                 next_checkpoint, fresh, last_page = _advance_checkpoint(
                     progress,
                     active_page=_ActivePage(
@@ -856,7 +855,11 @@ def _advanced_request(
     )
 
 
-def _parse_search_page(body: bytes) -> _SearchPage:
+def _parse_search_page(
+    body: bytes,
+    *,
+    expected_page: int | None = None,
+) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
     references = []
     for row in soup.select("li.searchresult"):
@@ -879,6 +882,12 @@ def _parse_search_page(body: bytes) -> _SearchPage:
         if not _is_uncounted_terminal_first_page(soup, row_count=len(references)):
             raise
         reported = len(references)
+    if expected_page is not None:
+        _require_result_page(
+            soup,
+            expected_page=expected_page,
+            row_count=len(references),
+        )
     return _SearchPage(references=tuple(references), reported=reported)
 
 
@@ -888,7 +897,7 @@ def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
         raise LeedsSearchCapError
     if page < 1:
         _raise_parse("advanced result page")
-    return _parse_search_page(body)
+    return _parse_search_page(body, expected_page=page)
 
 
 async def _fetch_summary(
@@ -937,12 +946,9 @@ async def _fetch_documents(
 ) -> tuple[tuple[LeedsDocumentV1, ...], SectionState]:
     attempt = 0
     while True:
-        try:
-            capture = await session.fetch(
-                _detail_request(locator, "documents", RequestIntent.DETAIL)
-            )
-        except SourceUnavailableError:
-            return (), FailedSection(code="source-unavailable")
+        capture = await session.fetch(
+            _detail_request(locator, "documents", RequestIntent.DETAIL)
+        )
         if not _is_remote_exception(capture.body):
             break
         attempt += 1
@@ -979,6 +985,7 @@ def _parse_documents(
     if len(tables) != 1:
         _raise_parse("documents table")
     table = tables[0]
+    expected = _section_count(soup, "documents")
     rows = table.select("tr")
     if not rows:
         _raise_parse("documents table header")
@@ -1006,6 +1013,7 @@ def _parse_documents(
     if table.select_one('a[href*="pagedSearchResults.do"]') is not None:
         _raise_parse("documents pagination")
     documents = [_parse_document_row(row, compact=compact) for row in rows[1:]]
+    _assert_count("documents", expected, len(documents))
     return tuple(documents), collection_state(len(documents))
 
 
@@ -1047,19 +1055,28 @@ def _parse_document_row(row: Tag, *, compact: bool) -> LeedsDocumentV1:
     )
 
 
-def _reported_count(
+def _section_count(soup: BeautifulSoup, label: str) -> int:
+    match = re.search(
+        rf"{re.escape(label)}\s*\((\d+)\)",
+        soup.get_text(" ", strip=True),
+        re.IGNORECASE,
+    )
+    if match is None:
+        _raise_parse(f"{label} displayed count")
+    return int(match.group(1))
+
+
+def _assert_count(section: str, expected: int, actual: int) -> None:
+    if expected != actual:
+        raise LeedsCountMismatchError(section, expected, actual)
+
+
+def _showing_ranges(
     soup: BeautifulSoup,
     *,
     row_count: int,
-    allow_empty_first_page_marker: bool = False,
-) -> int:
-    element = soup.select_one("[data-result-count]")
-    if isinstance(element, Tag):
-        return int(str(element.get("data-result-count")))
-    text = soup.get_text(" ", strip=True)
-    if "no results found" in text.casefold():
-        return 0
-    showing_ranges = []
+) -> tuple[tuple[int, int, int], ...]:
+    ranges = []
     for marker in soup.select(".showing"):
         match = re.fullmatch(
             r"showing\s+(\d+)\s*[-\N{EN DASH}]\s*(\d+)\s+of\s+"
@@ -1072,7 +1089,23 @@ def _reported_count(
         first, last, total = (int(match.group(index)) for index in range(1, 4))
         if not 1 <= first <= last <= total or last - first + 1 != row_count:
             _raise_parse("reported result count")
-        showing_ranges.append((first, last, total))
+        ranges.append((first, last, total))
+    return tuple(ranges)
+
+
+def _reported_count(
+    soup: BeautifulSoup,
+    *,
+    row_count: int,
+    allow_empty_first_page_marker: bool = False,
+) -> int:
+    element = soup.select_one("[data-result-count]")
+    if isinstance(element, Tag):
+        return int(str(element.get("data-result-count")))
+    text = soup.get_text(" ", strip=True)
+    if "no results found" in text.casefold():
+        return 0
+    showing_ranges = _showing_ranges(soup, row_count=row_count)
     if showing_ranges:
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
@@ -1108,6 +1141,38 @@ def _reported_count(
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _require_result_page(
+    soup: BeautifulSoup,
+    *,
+    expected_page: int,
+    row_count: int,
+) -> None:
+    if expected_page < 1:
+        _raise_parse("requested result page")
+    showing_ranges = _showing_ranges(soup, row_count=row_count)
+    if showing_ranges:
+        visible_page = _visible_result_page(soup, showing_ranges[0])
+        pages = (
+            (visible_page,)
+            if visible_page is not None
+            else _current_result_pages(
+                soup,
+                allow_empty_first_page_marker=expected_page == 1,
+            )
+        )
+    else:
+        pages = _current_result_pages(
+            soup,
+            allow_empty_first_page_marker=expected_page == 1,
+        )
+    if not pages:
+        if expected_page == 1:
+            return
+        _raise_parse("requested result page")
+    if any(page != expected_page for page in pages):
+        _raise_parse("requested result page")
 
 
 def _visible_result_page(

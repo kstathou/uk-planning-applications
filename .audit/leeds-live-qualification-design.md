@@ -90,8 +90,10 @@ class LeedsCheckpointV1(FrozenModel):
 The same reference cannot acquire another locator. A terminal checkpoint returns
 a complete empty batch before form access. A resumed page above one replays the
 query's first-page POST to restore the portal session, then requests the saved
-page. One `_advance_checkpoint` helper owns state transitions after row and
-reported-total checks pass.
+page. Every paged response must identify the requested page through the
+canonical visible pager or current-page control; a repeated first page or an
+unbound later page fails closed. One `_advance_checkpoint` helper owns state
+transitions after page identity, row, and reported-total checks pass.
 
 ## Detail boundary
 
@@ -106,8 +108,11 @@ label and checkbox. The four-cell compact shape omits selection and measure.
 The parser stores metadata and resolved view URLs but never requests them. A
 header-only table or explicit no-documents response is empty. The exact
 permission-denied response is unavailable. Every other missing or malformed
-table remains failed. Public comment text is `UnavailableSection` under the
-verified Leeds policy, and comment tabs are not fetched.
+table remains failed. Parsed rows must exactly equal the portal's displayed
+`Documents (N)` count, including zero. A document transport failure propagates
+to the collector's bounded whole-record retry rather than becoming a successful
+snapshot with a failed section. Public comment text is `UnavailableSection`
+under the verified Leeds policy, and comment tabs are not fetched.
 
 Normalisation maps proposal, status, optional address and validated date, and document metadata. It retains appeal fields only in the native payload and advances to `leeds-v2`.
 
