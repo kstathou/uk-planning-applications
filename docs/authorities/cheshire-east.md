@@ -50,12 +50,12 @@ The parser treats only the rendered `strong.text-danger` value `No Results
 Found.` inside the unique `div.application-list > div.push-30-t` result
 boundary as terminal for that zero response. Hidden, duplicated, unscoped, or
 mixed result boundaries fail closed, including non-rendering ancestors,
-Bootstrap hide and closed-collapse states, and closed native containers. The
-same rendered-boundary check rejects ambiguous duplicate inline declarations
-and applies to a positive table. A positive result table publishes no result
-total, pagination boundary, or all-results-loaded marker, so a non-empty page
-remains explicitly unproved rather than being treated as the complete 30-day
-inventory.
+Bootstrap hide and closed-collapse states, closed native containers, unopened
+popovers, and native fallback content. The same rendered-boundary check rejects
+ambiguous duplicate inline declarations, CSS comments, and CSS escapes, and
+applies to a positive table. A positive result table publishes no result total,
+pagination boundary, or all-results-loaded marker, so a non-empty page remains
+explicitly unproved rather than being treated as the complete 30-day inventory.
 
 The register states that appeals are not visible and points users to the
 Planning Inspectorate.

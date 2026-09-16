@@ -143,10 +143,11 @@ without constructing a portal session. Validation reparses the retained source
 bodies and binds the reconstructed forms, result boundaries, detail, and
 document metadata to the recorded contract. Complete parsed result rows,
 locators, weekly rows, detail coordinates, and code-specific blocker text are
-included in that equality. A missing receipt makes
-`--resume` fail before source I/O. The command exits with status 1 for the
-recorded blocker and does not create an operational SQLite store. The authority
-must remain blocked until both enumeration gaps and automated source access are
+included in that equality. Missing both the receipt and a durable journal makes
+`--resume` fail before source I/O; a retained journal instead resumes its first
+incomplete source stage. The command exits with status 1 for the recorded
+blocker and does not create an operational SQLite store. The authority must
+remain blocked until both enumeration gaps and automated source access are
 resolved, followed by a complete bootstrap and two real weekly cycles.
 
 Attachment bodies are outside policy. The transport blocks known attachment
