@@ -46,7 +46,10 @@ source-reported count remains null. It never labels a link count as a reported
 count. Each membership link must occur in exactly one validated result-table
 row; matching links outside the table fail closed. All search form and result
 HTML used for the qualification is retained by digest, and the receipt reparses
-it against the exact per-query reference membership and checkpoint count.
+it against the exact per-query reference membership and checkpoint count. Each
+digest is also paired with the exact POST URL, method, and ordered form fields;
+qualification reconstructs that request from the retained source forms and
+rejects any mismatch.
 
 ## Application and document records
 
@@ -77,8 +80,11 @@ The persisted qualification on 16 September 2026 used the inclusive window
 received rows, 118 decided rows, and 529 rows across the 58 non-overlapping
 older-open partitions into 648 unique references. In this snapshot, received
 overlaps decided by 7 references and older-open by 81; decided and older-open
-are disjoint. All 648 applications were materialised with two evidence captures
-each (detail and document index), for 1,296 verified content digests.
+are disjoint. All 648 portal records were materialised with two evidence
+captures each (detail and document index), for 1,296 verified content digests.
+The source itself includes three explicit test/dummy records (`DUMMY_P`,
+`H/1/18/PL`, and `H/5/26/PL`); they remain in the exact source population and
+are not represented as ordinary real-world applications.
 
 The completed schema-version-3 qualification accounts for 1,373 official-page
 requests and 11,499,963 transferred bytes across the whole bootstrap history.
@@ -91,7 +97,7 @@ each made zero requests and transferred zero bytes. The completed snapshot has
 zero pending retries, failed current sections, unmapped records, and
 attachment-body requests.
 
-The 648 native rows retain 648 received dates, 395 validated dates, 396
+The 648 native portal-record rows retain 648 received dates, 395 validated dates, 396
 decision-by dates, 323 comment-by dates, 38 target-committee dates, 119 decision
 dates, and 648 native decision statuses. Decision-by, comment-by, and
 target-committee values are also normalised as 396 `decision-due`, 323
@@ -99,7 +105,7 @@ target-committee values are also normalised as 396 `decision-due`, 323
 provenance. Retained detail evidence also proves 4 appeal identifiers, 3 appeal
 statuses, 2 appeal-lodged dates, and 3 appeal-decision dates. These are
 normalised as 4 appeal relationships, 2 `appeal-lodged` events, and 3
-`appeal-decision` events. All 648 current application sections use the
+`appeal-decision` events. All 648 current application-table sections use the
 `arun-v5` normaliser;
 the Unicode whitespace in the 253 `Undecided (On Hold)` source statuses is
 collapsed to the stable `undecided-(on-hold)` value. The receipt records 73 search captures and 1,296 application
@@ -121,7 +127,8 @@ The canonical local receipt is
 the typed full query inventory, the optional source-reported count, exact
 enumerated count and references for every query, exact durable reference sets,
 separate search and application evidence digest inventories, Arun-scoped costs
-and run outcomes, check results, and pending weekly-cycle dates. The superseded
+and run outcomes, exact request metadata for every result capture, check
+results, and pending weekly-cycle dates. The superseded
 v2 receipt remains beside it for audit history, and the pre-v2 snapshot is preserved at
 `.yimby/qualification-arun-2026-09-16-pre-v2` for diagnosis only.
 

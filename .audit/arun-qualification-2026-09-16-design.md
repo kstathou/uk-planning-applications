@@ -53,7 +53,11 @@ per-query evidence.
 The canonical plan is also the source for checkpoint validation and the receipt
 query inventory. Completed query summaries retain the query key, exact
 reference membership, optional source-reported count, enumerated count, and
-initial and expanded result-evidence digests. The final receipt retains the full
+initial and expanded result-evidence digests. They also retain the exact POST
+URL, method, and ordered form fields that produced each capture. Qualification
+reconstructs those requests from the retained search/result forms and rejects
+any checkpoint mismatch, so even a complete result page with no echoed query
+fields remains bound to its canonical query. The final receipt retains the full
 typed inventory and all exact durable reference sets rather than only aggregate
 counts or a digest.
 
@@ -112,8 +116,9 @@ schema-version-3 receipt atomically. The receipt proves:
   integrity, including reparsing every retained result capture against its
   recorded query membership;
 - exact checkpoint/source-count equality, including null source totals, and
-  exact native appeal/application-type and document agreement with retained
-  detail and document-index evidence;
+  exact request-to-result binding for every query, plus exact native reference,
+  appeal/application-type, and document agreement with retained detail and
+  document-index evidence;
 - complete current application and document sections for every retained record;
 - a successful completed run plus an immediate successful rerun with a
   byte-for-byte semantic fingerprint match; all historical run outcomes and
@@ -124,6 +129,10 @@ schema-version-3 receipt atomically. The receipt proves:
 The native coverage summary is an optional additive schema-version-3 field:
 older v3 receipts still decode, while newly published receipts always populate
 it and validate it against retained source evidence.
+
+The exact 648-record portal population includes the source-published test/dummy
+references `DUMMY_P`, `H/1/18/PL`, and `H/5/26/PL`. They remain in the source
+inventory and are labelled as portal records rather than ordinary applications.
 
 Two weekly refresh targets remain explicitly pending. The registry stays
 `DISCOVERY_ONLY`; a successful bootstrap receipt does not promote Arun to

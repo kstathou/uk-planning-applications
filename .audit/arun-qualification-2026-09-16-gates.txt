@@ -314,3 +314,105 @@ COMMAND: git diff --check
 EXIT STATUS: 0
 OUTPUT:
 <empty>
+
+Third fresh-review remediation verification
+Recorded complete: 2026-09-16T14:03:31Z
+The commands below were executed after the request-binding and parser-ownership
+remediation. Each command exited 0.
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv lock --check
+OUTPUT:
+Resolved 73 packages in 9ms
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --output-format=github .
+OUTPUT:
+<empty>
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff format --check .
+OUTPUT:
+119 files already formatted
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen mypy
+OUTPUT:
+Success: no issues found in 80 source files
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --no-cache --extend-select RUF100 .
+OUTPUT:
+All checks passed!
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen pytest
+OUTPUT:
+collected 393 items
+tests/test_arun_live.py ................................................ [ 12%]
+......                                                                   [ 13%]
+tests/test_barnet_live.py .........                                      [ 16%]
+tests/test_browser_authorities_live.py ....................              [ 21%]
+tests/test_cli.py ...                                                    [ 21%]
+tests/test_collection.py .........                                       [ 24%]
+tests/test_contract_live.py ............                                 [ 27%]
+tests/test_idox_live.py ................................................ [ 39%]
+........................................................................ [ 57%]
+........................................................................ [ 76%]
+..................                                                       [ 80%]
+tests/test_operations.py ...............                                 [ 84%]
+tests/test_pilot.py ................................                     [ 92%]
+tests/test_runtime.py .............................                      [100%]
+TOTAL    6316      0   1612      0   100%
+Required test coverage of 100% reached. Total coverage: 100.00%
+393 passed in 13.41s
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv build --no-sources
+OUTPUT:
+Building source distribution...
+Building wheel from source distribution...
+Successfully built dist/yimby-0.1.0.tar.gz
+Successfully built dist/yimby-0.1.0-py3-none-any.whl
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --all-files
+OUTPUT:
+check for added large files..............................................Passed
+check python ast.........................................................Passed
+check for case conflicts.................................................Passed
+check json...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check toml...............................................................Passed
+check yaml...............................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+fix end of files.........................................................Passed
+mixed line ending........................................................Passed
+trim trailing whitespace.................................................Passed
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --hook-stage pre-push --all-files
+OUTPUT:
+check for added large files..............................................Passed
+check python ast.........................................................Passed
+check for case conflicts.................................................Passed
+check json...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check toml...............................................................Passed
+check yaml...............................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+fix end of files.........................................................Passed
+mixed line ending........................................................Passed
+trim trailing whitespace.................................................Passed
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+pytest...................................................................Passed
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python scripts/verify_pilot.py
+OUTPUT:
+<empty>
+
+COMMAND: typed schema-v3 receipt, checkpoint, request-binding, source-freshness, zero-I/O refresh, dummy/test-record, and SQLite-integrity assertions (PYTHONPATH=scripts uv run --frozen python -c)
+OUTPUT:
+{"checks_ok": 22, "dummy_test_records": 3, "expanded_requests": 12, "initial_requests": 60, "last_source_success_at": "2026-09-16T12:06:26.180505+00:00", "memberships": 736, "queries": 60, "refresh_requests": 0, "schema": 3, "unique_portal_records": 648}
+
+COMMAND: git diff --check
+OUTPUT:
+<empty>

@@ -269,6 +269,35 @@ def _qualification_module() -> "ModuleType":
     return module
 
 
+def _assert_first_receipt_request_is_bound(receipt: dict[str, object]) -> None:
+    query_inventory = cast("list[dict[str, object]]", receipt["query_inventory"])
+    initial = cast("dict[str, object]", query_inventory[0]["initial_request"])
+    expanded = cast("dict[str, object]", query_inventory[0]["expanded_request"])
+    assert initial["method"] == "POST"
+    assert expanded["method"] == "POST"
+    form = cast("list[dict[str, str]]", initial["form"])
+    assert [field["name"] for field in form] == [
+        "reference",
+        "location",
+        "OcellaPlanningSearch.postcode",
+        "area",
+        "applicant",
+        "agent",
+        "undecided",
+        "type",
+        "receivedFrom",
+        "receivedTo",
+        "decidedFrom",
+        "decidedTo",
+        "action",
+    ]
+
+
+def _assert_sessions_closed_and_rerun_empty(sessions: list[_Session]) -> None:
+    assert all(session.closed for session in sessions)
+    assert sessions[1].requested_urls == ()
+
+
 async def _batches(
     adapter: arun.ArunAdapter,
     session: _Session,
@@ -460,7 +489,7 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
         b"<table><tr><th>Reference</th><th>Location</th><th>Proposal</th>"
         b'<th>Status</th></tr><tr><td><a href="planningDetails?reference=A">A</a>'
         b"</td><td>Site</td><td>Proposal</td><td>Open</td></tr>"
-        b'<tr><td><a href="planningDetails?reference=A">A again</a></td>'
+        b'<tr><td><a href="planningDetails?reference=A">A</a></td>'
         b"<td>Site</td><td>Proposal</td><td>Open</td></tr></table>"
         b"<strong>First 20 results shown, there are 2 in total</strong>"
     )
@@ -562,6 +591,8 @@ def test_arun_result_membership_is_owned_by_each_validated_table_row() -> None:
                 b'<a href="planningDetails?from=planningSearch">INSIDE/1</a>',
             )
         )
+    with pytest.raises(arun.ArunParseError, match="result reference label"):
+        arun._parse_search_results(base.replace(b">INSIDE/1</a>", b">OTHER/1</a>"))
 
 
 def test_arun_fetch_rejects_an_untrusted_retained_locator() -> None:
@@ -1140,6 +1171,29 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
     )
     assert without_locator.payload.ocella_reference == reference.reference
 
+    retained = RetainedNativeRecord(
+        application_id=ApplicationId("arun-reference-proof"),
+        authority_id=AuthorityId("arun"),
+        reference=reference,
+        native_schema="ArunApplicationV1",
+        native_json=snapshot.payload.model_dump_json(),
+        observed_at=snapshot.observed_at,
+        completeness=snapshot.completeness,
+        evidence=snapshot.evidence,
+    )
+    agrees = _qualification_module()._native_evidence_agrees
+    assert agrees(retained, snapshot.payload)
+    assert not agrees(
+        retained.model_copy(
+            update={"reference": reference.model_copy(update={"reference": "OTHER/1"})}
+        ),
+        snapshot.payload,
+    )
+    assert not agrees(
+        retained,
+        snapshot.payload.model_copy(update={"ocella_reference": "OTHER/1"}),
+    )
+
 
 def test_arun_appeal_block_is_preserved_without_becoming_application_type() -> None:
     reference = SourceReference(
@@ -1308,6 +1362,28 @@ def test_arun_document_action_and_index_fail_closed_on_ambiguous_shapes() -> Non
         arun._parse_document_index(
             _document_index().replace(b'value="" selected', b'value="PLAN" selected')
         )
+    with pytest.raises(arun.ArunParseError, match="document filter"):
+        arun._parse_document_index(
+            _document_index().replace(
+                b'<option value="" selected>All</option>',
+                b'<option value="PLAN">Plan</option>',
+            )
+        )
+    with pytest.raises(arun.ArunParseError, match="document filter"):
+        arun._parse_document_index(
+            _document_index().replace(
+                b'<option value="" selected>All</option>',
+                b"",
+            )
+        )
+    with pytest.raises(arun.ArunParseError, match="document filter"):
+        arun._parse_document_index(
+            _document_index().replace(
+                b'<option value="" selected>All</option>',
+                b'<option value="" selected>All</option>'
+                b'<option value="PLAN" selected>Plan</option>',
+            )
+        )
     with pytest.raises(arun.ArunParseError, match="document table"):
         arun._parse_document_index(b"No documents found in unrelated help text")
 
@@ -1360,6 +1436,11 @@ def test_arun_document_index_rejects_ambiguous_empty_and_link_shapes() -> None:
     )
     with pytest.raises(arun.ArunParseError, match="document link"):
         arun._parse_document_index(unrelated)
+    with pytest.raises(arun.ArunParseError, match="outside table"):
+        arun._parse_document_index(
+            _document_index()
+            + b'<a href="viewDocument?file=outside.pdf&amp;module=pl">outside</a>'
+        )
 
 
 def test_arun_appeal_block_rejects_ambiguous_or_incomplete_shapes() -> None:
@@ -1591,9 +1672,8 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
 
     assert result == 0
     assert len(sessions) == 2
-    assert all(session.closed for session in sessions)
+    _assert_sessions_closed_and_rerun_empty(sessions)
     assert len(sessions[0].requested_urls) == 66
-    assert sessions[1].requested_urls == ()
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["schema_version"] == 3
     assert receipt["authority_id"] == "arun"
@@ -1608,6 +1688,7 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
     }
     assert len(receipt["query_inventory"][0]["initial_evidence_digest"]) == 64
     assert len(receipt["query_inventory"][0]["expanded_evidence_digest"]) == 64
+    _assert_first_receipt_request_is_bound(receipt)
     assert receipt["query_inventory"][0]["source_reported_count"] == 2
     assert receipt["query_inventory"][0]["enumerated_count"] == 2
     assert receipt["query_inventory"][0]["references"] == [
@@ -1631,6 +1712,14 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
     }
     prior_v3 = dict(receipt)
     prior_v3.pop("native_coverage")
+    prior_v3["query_inventory"] = [
+        {
+            key: value
+            for key, value in query.items()
+            if key not in {"initial_request", "expanded_request"}
+        }
+        for query in receipt["query_inventory"]
+    ]
     assert (
         module.ArunQualificationReceiptV3.model_validate(prior_v3).native_coverage
         is None
@@ -1697,6 +1786,51 @@ def test_arun_qualification_rejects_checkpoint_source_count_tampering(
         )
         assert payload["cursor"]["progress"]["completed"][4]["reported_count"] is None
         payload["cursor"]["progress"]["completed"][4]["reported_count"] = 1
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'arun'",
+            (json.dumps(payload, separators=(",", ":")),),
+        )
+        connection.commit()
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "terminal-checkpoint" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
+
+
+def test_arun_qualification_rejects_checkpoint_request_tampering(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "request-tampering"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    def factory() -> _Session:
+        return _Session(_QualificationResponder())
+
+    assert module.main(args, session_factory=factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM checkpoints WHERE authority_id = 'arun'"
+            ).fetchone()[0]
+        )
+        first = payload["cursor"]["progress"]["completed"][0]
+        first["initial_request"]["form"][8]["value"] = "19-08-26"
         connection.execute(
             "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'arun'",
             (json.dumps(payload, separators=(",", ":")),),

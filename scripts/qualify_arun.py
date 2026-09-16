@@ -33,15 +33,21 @@ from yimby.authorities.arun.adapter import (
     ArunQuery,
     ArunQueryReplayError,
     ArunReferenceMismatchError,
+    ArunRequestEvidence,
     ArunResultCapError,
     ArunRoutingError,
+    ArunSearchForm,
     _canonical_query_plan,
+    _initial_search_request,
     _optional_field,
     _parse_appeal_fields,
     _parse_document_index,
     _parse_labelled_fields,
     _parse_search_form,
     _parse_search_results,
+    _request_evidence,
+    _required_field,
+    _show_all_request,
 )
 from yimby.collection import Collector
 from yimby.domain import (
@@ -100,6 +106,8 @@ class QualificationQuery(FrozenModel):
     references: tuple[str, ...]
     initial_evidence_digest: EvidenceDigest
     expanded_evidence_digest: EvidenceDigest | None = None
+    initial_request: ArunRequestEvidence | None = None
+    expanded_request: ArunRequestEvidence | None = None
 
 
 class QualificationReferences(FrozenModel):
@@ -361,7 +369,7 @@ def _terminal_inventory(  # noqa: PLR0911
         form_capture = store.evidence_capture(cursor.search_form_evidence)
         if form_capture is None or not _capture_is_valid(form_capture):
             return None
-        _parse_search_form(form_capture.body)
+        form = _parse_search_form(form_capture.body)
         inventory = []
         search_digests = [cursor.search_form_evidence]
         for query, completed in zip(
@@ -369,7 +377,7 @@ def _terminal_inventory(  # noqa: PLR0911
             cursor.progress.completed,
             strict=True,
         ):
-            validated = _validate_query_evidence(store, query, completed)
+            validated = _validate_query_evidence(store, form, query, completed)
             if validated is None:
                 return None
             inventory.append(validated.inventory)
@@ -389,6 +397,7 @@ def _capture_is_valid(capture: EvidenceCapture) -> bool:
 
 def _validate_query_evidence(  # noqa: PLR0911
     store: SqliteStore,
+    form: ArunSearchForm,
     query: ArunQuery,
     completed: ArunCompletedQuery,
 ) -> _ValidatedQueryEvidence | None:
@@ -396,7 +405,11 @@ def _validate_query_evidence(  # noqa: PLR0911
     if initial is None or not _capture_is_valid(initial):
         return None
     parsed_initial = _parse_search_results(initial.body)
-    if parsed_initial.reported != completed.reported_count:
+    expected_initial_request = _request_evidence(_initial_search_request(form, query))
+    if (
+        parsed_initial.reported != completed.reported_count
+        or completed.initial_request != expected_initial_request
+    ):
         return None
     digests = [completed.initial_evidence]
     parsed_final = parsed_initial
@@ -415,6 +428,8 @@ def _validate_query_evidence(  # noqa: PLR0911
             parsed_initial.reported is None
             or parsed_final.has_show_all
             or parsed_final.reported not in (None, parsed_initial.reported)
+            or completed.expanded_request
+            != _request_evidence(_show_all_request(parsed_initial.show_all_form, query))
         ):
             return None
     final_references = tuple(
@@ -433,6 +448,8 @@ def _validate_query_evidence(  # noqa: PLR0911
             references=final_references,
             initial_evidence_digest=completed.initial_evidence,
             expanded_evidence_digest=completed.expanded_evidence,
+            initial_request=completed.initial_request,
+            expanded_request=completed.expanded_request,
         ),
         digests=tuple(digests),
     )
@@ -528,7 +545,11 @@ def _native_evidence_agrees(
     source_appeal = _parse_appeal_fields(record.evidence[0].body)
     source_documents = _parse_document_index(record.evidence[1].body)
     return (
-        native.application_type == _optional_field(source_fields, "application type")
+        native.ocella_reference == record.reference.reference
+        and native.ocella_reference
+        == _required_field(source_fields, "reference", "application reference")
+        and native.application_type
+        == _optional_field(source_fields, "application type")
         and native.appeal_reference == source_appeal.reference
         and native.appeal_status == source_appeal.status
         and native.appeal_lodged_date == source_appeal.lodged_date

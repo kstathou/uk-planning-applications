@@ -27,7 +27,7 @@ requirement.
 | Haringey | Verified | Dynamic seven-day pagination, detail, explicit empty comments, and six file rows recorded | Authority-owned browser adapter for the rolling seven-day path; arbitrary windows and older-open unresolved | Open | Open |
 | Devon County Council | Verified | Discovery and detail routes recorded; child sections partial | Rolling 90-day received adapter with disclaimer handling and hidden document metadata | Open | Open |
 | Peak District National Park Authority | Verified | Migrated discovery and detail routes recorded; child sections partial | Rolling-week legacy adapter; client-loaded child sections explicitly failed | Open | Open |
-| Arun | Verified | Exact received/decided/open searches, Show All, detail, document index, and empty documents recorded | Resumable 60-query adapter; exact counts, metadata-only documents, and completeness checks | Proved 2026-09-16: 648 applications | Pending: 2026-09-23 and 2026-09-30 |
+| Arun | Verified | Exact received/decided/open searches, Show All, detail, document index, and empty documents recorded | Resumable 60-query adapter; exact counts, metadata-only documents, and completeness checks | Proved 2026-09-16: 648 portal records, including 3 source test/dummy records | Pending: 2026-09-23 and 2026-09-30 |
 | Old Oak and Park Royal Development Corporation | Verified | Source blocked | Blocked | Open | Open |
 | Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
@@ -41,7 +41,8 @@ requirement.
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
 As of 16 September 2026, Arun has completed a verified live bootstrap. Its
-schema-version-3 receipt reconciles 648 unique references and applications, 73
+schema-version-3 receipt reconciles 648 unique portal references and persisted
+records, including three source-published test/dummy records, plus 73
 search captures, 1,296 application captures, zero pending retries, zero failed
 current sections, zero unmapped records, and a zero-network-I/O immediate
 rerun. It remains discovery-only

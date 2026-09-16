@@ -126,6 +126,14 @@ type ArunQuery = Annotated[
 ]
 
 
+class ArunRequestEvidence(FrozenModel):
+    """Exact request metadata binding one result capture to its query."""
+
+    url: HttpUrl
+    method: RequestMethod
+    form: tuple[FormField, ...]
+
+
 def _canonical_query_plan(scope: ArunDiscoveryScope) -> tuple[ArunQuery, ...]:
     plan: list[ArunQuery] = [
         ArunReceivedQuery(start=scope.start, end=scope.end),
@@ -180,6 +188,8 @@ class ArunCompletedQuery(FrozenModel):
     references: tuple[str, ...]
     initial_evidence: EvidenceDigest
     expanded_evidence: EvidenceDigest | None = None
+    initial_request: ArunRequestEvidence | None = None
+    expanded_request: ArunRequestEvidence | None = None
 
     @model_validator(mode="after")
     def counts_agree(self) -> Self:
@@ -215,6 +225,7 @@ class ArunAwaitingShowAll(FrozenModel):
     reported_count: int = Field(gt=0, lt=_RESULT_CAP)
     initial_references: tuple[str, ...] = Field(min_length=1)
     initial_evidence: EvidenceDigest
+    initial_request: ArunRequestEvidence | None = None
     seen_references: tuple[str, ...] = ()
 
 
@@ -484,7 +495,9 @@ class ArunAdapter:
                 return
             progress = cast("ArunReady | ArunAwaitingShowAll", progress)
             query = cursor.plan[progress.next_query]
-            initial_capture = await session.fetch(_initial_search_request(form, query))
+            initial_request = _initial_search_request(form, query)
+            initial_request_evidence = _request_evidence(initial_request)
+            initial_capture = await session.fetch(initial_request)
             initial = _parse_search_results(initial_capture.body)
             query_evidence: tuple[EvidenceCapture, ...] = (
                 *pending_evidence,
@@ -519,7 +532,7 @@ class ArunAdapter:
                                 query,
                                 initial.reported,
                                 initial.references,
-                                initial_capture.digest,
+                                (initial_capture.digest, initial_request_evidence),
                                 None,
                             ),
                         )
@@ -543,6 +556,7 @@ class ArunAdapter:
                             reference.reference for reference in initial.references
                         ),
                         initial_evidence=initial_capture.digest,
+                        initial_request=initial_request_evidence,
                         seen_references=progress.seen_references,
                     )
                     cursor = cursor.model_copy(update={"progress": progress})
@@ -555,7 +569,10 @@ class ArunAdapter:
                     query_evidence = ()
                 else:
                     progress = progress.model_copy(
-                        update={"initial_evidence": initial_capture.digest}
+                        update={
+                            "initial_evidence": initial_capture.digest,
+                            "initial_request": initial_request_evidence,
+                        }
                     )
                     cursor = cursor.model_copy(update={"progress": progress})
             else:
@@ -575,7 +592,7 @@ class ArunAdapter:
                             query,
                             initial.reported,
                             initial.references,
-                            initial_capture.digest,
+                            (initial_capture.digest, initial_request_evidence),
                             None,
                         ),
                     )
@@ -599,6 +616,7 @@ class ArunAdapter:
                         reference.reference for reference in initial.references
                     ),
                     initial_evidence=initial_capture.digest,
+                    initial_request=initial_request_evidence,
                     seen_references=progress.seen_references,
                 )
                 cursor = cursor.model_copy(update={"progress": progress})
@@ -609,9 +627,9 @@ class ArunAdapter:
                     evidence=query_evidence,
                 )
                 query_evidence = ()
-            expanded_capture = await session.fetch(
-                _show_all_request(initial.show_all_form, query)
-            )
+            expanded_request = _show_all_request(initial.show_all_form, query)
+            expanded_request_evidence = _request_evidence(expanded_request)
+            expanded_capture = await session.fetch(expanded_request)
             expanded = _parse_search_results(expanded_capture.body)
             if (
                 expanded.has_show_all
@@ -632,8 +650,11 @@ class ArunAdapter:
                     query,
                     progress.reported_count,
                     expanded.references,
-                    progress.initial_evidence,
-                    expanded_capture.digest,
+                    (
+                        progress.initial_evidence,
+                        cast("ArunRequestEvidence", progress.initial_request),
+                    ),
+                    (expanded_capture.digest, expanded_request_evidence),
                 ),
             )
             yield DiscoveryBatch(
@@ -988,6 +1009,15 @@ def _show_all_request(
     )
 
 
+def _request_evidence(request: PortalRequest) -> ArunRequestEvidence:
+    """Retain the exact ordered request that produced result evidence."""
+    return ArunRequestEvidence(
+        url=request.url,
+        method=request.method,
+        form=request.form,
+    )
+
+
 def _parse_search_results(
     body: bytes,
 ) -> _SearchResults:
@@ -1052,6 +1082,8 @@ def _parse_result_references(  # noqa: C901
         if len(references) != 1 or not references[0]:
             _raise_parse("result reference")
         reference = references[0]
+        if unescape(link.get_text(" ", strip=True)) != reference:
+            _raise_parse("result reference label")
         locator = _validated_detail_locator(resolved, reference)
         if reference in seen:
             _raise_parse("duplicate result reference")
@@ -1255,8 +1287,12 @@ def _parse_document_index(  # noqa: C901
     if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
         _raise_parse("document pagination")
     for selected_type in soup.select('select[name="selectedtype"]'):
-        selected = selected_type.select_one("option[selected]")
-        if isinstance(selected, Tag) and str(selected.get("value", "")):
+        selected_options = tuple(selected_type.select("option[selected]"))
+        options = tuple(selected_type.select("option"))
+        if len(selected_options) > 1 or not options:
+            _raise_parse("document filter")
+        effective = selected_options[0] if selected_options else options[0]
+        if str(effective.get("value", "")):
             _raise_parse("document filter")
     empty_markers = _document_empty_markers(soup)
     if _is_explicit_empty_document_page(soup, empty_markers):
@@ -1278,6 +1314,12 @@ def _parse_document_index(  # noqa: C901
         _raise_parse("document table")
     if len(tables) != 1:
         _raise_parse("document table")
+    all_links = tuple(soup.select('a[href*="viewDocument"]'))
+    table_links = tuple(tables[0].select('a[href*="viewDocument"]'))
+    if len(all_links) != len(table_links) or any(
+        link not in table_links for link in all_links
+    ):
+        _raise_parse("document link outside table")
     documents = []
     for row in tables[0].select("tr"):
         cells = row.find_all("td", recursive=False)
@@ -1495,16 +1537,18 @@ def _completed_query(
     query: ArunQuery,
     reported_count: int | None,
     references: tuple[SourceReference, ...],
-    initial_evidence: EvidenceDigest,
-    expanded_evidence: EvidenceDigest | None,
+    initial: tuple[EvidenceDigest, ArunRequestEvidence],
+    expanded: tuple[EvidenceDigest, ArunRequestEvidence] | None,
 ) -> ArunCompletedQuery:
     return ArunCompletedQuery(
         key=query.key,
         reported_count=reported_count,
         enumerated_count=len(references),
         references=tuple(reference.reference for reference in references),
-        initial_evidence=initial_evidence,
-        expanded_evidence=expanded_evidence,
+        initial_evidence=initial[0],
+        expanded_evidence=None if expanded is None else expanded[0],
+        initial_request=initial[1],
+        expanded_request=None if expanded is None else expanded[1],
     )
 
 
