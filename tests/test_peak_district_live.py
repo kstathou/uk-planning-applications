@@ -9,14 +9,14 @@ import asyncio
 import importlib.util
 import json
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+from bs4 import BeautifulSoup
 
 import yimby.authorities.peak_district.adapter as peak
 from yimby.domain import (
@@ -31,6 +31,7 @@ from yimby.transport import PortalRequest, RequestMethod, SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
+    from types import ModuleType
 
 
 class _Session:
@@ -400,8 +401,8 @@ class _PeakAssureMock:
 
 def _window(*, include_open: bool = True) -> DiscoveryWindow:
     return DiscoveryWindow(
-        start=peak.date(2026, 8, 18),
-        end=peak.date(2026, 9, 16),
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
         include_open=include_open,
     )
 
@@ -559,8 +560,8 @@ def test_peak_district_restarts_wrong_scope_and_omits_open_queries_when_disabled
     prior = peak.PeakDistrictCheckpointV1(
         row_offset="live",
         live_scope=peak.PeakDistrictDiscoveryScope(
-            start=peak.date(2026, 8, 17),
-            end=peak.date(2026, 9, 15),
+            start=date(2026, 8, 17),
+            end=date(2026, 9, 15),
             include_open=True,
         ),
         live_complete=True,
@@ -654,7 +655,7 @@ def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
     assert snapshot.payload.case_status == "REGISTERED: Valid"
     assert snapshot.payload.parish == "Bakewell"
     assert snapshot.payload.development_address == "1 Moor Road Bakewell"
-    assert snapshot.payload.validated_date == peak.date(2026, 9, 15)
+    assert snapshot.payload.validated_date == date(2026, 9, 15)
     assert [document.title for document in snapshot.payload.documents] == [
         "Application Form.pdf",
         "Design Statement.pdf",
@@ -685,7 +686,7 @@ def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
         "Applicant One",
         "Agent One",
     )
-    assert normalised.metadata.validated_date == peak.date(2026, 9, 15)
+    assert normalised.metadata.validated_date == date(2026, 9, 15)
 
 
 def test_peak_district_classifies_empty_and_failed_document_sections() -> None:
@@ -738,6 +739,378 @@ def test_peak_district_detail_identity_and_routing_fail_closed() -> None:
                 _reference().model_copy(update={"reference": "WRONG/1"}),
             )
         )
+
+
+def test_peak_district_checkpoint_and_request_failure_boundaries() -> None:
+    window = _window()
+    queries = peak.peak_district_query_inventory(window)
+    keys = tuple(query.key for query in queries)
+    scope = peak.PeakDistrictDiscoveryScope(
+        start=window.start,
+        end=window.end,
+        include_open=True,
+    )
+    invalid = (
+        peak.PeakDistrictCheckpointV1(
+            live_scope=scope,
+            completed_queries=(keys[0], keys[0]),
+        ),
+        peak.PeakDistrictCheckpointV1(
+            live_scope=scope,
+            completed_queries=(keys[1],),
+        ),
+        peak.PeakDistrictCheckpointV1(
+            live_scope=scope,
+            active_query="unknown",
+        ),
+        peak.PeakDistrictCheckpointV1(
+            live_scope=scope,
+            completed_queries=(keys[0],),
+            active_query=keys[0],
+        ),
+        peak.PeakDistrictCheckpointV1(
+            live_scope=scope,
+            seen_references=("A", "A"),
+        ),
+        peak.PeakDistrictCheckpointV1(
+            live_scope=scope,
+            live_complete=True,
+        ),
+    )
+    for checkpoint in invalid:
+        with pytest.raises(peak.PeakDistrictCheckpointError):
+            peak._assert_checkpoint(checkpoint, keys)
+
+    partial = peak.PeakDistrictCheckpointV1(
+        row_offset="live",
+        window_start=window.start,
+        window_end=window.end,
+        live_scope=scope,
+        completed_queries=(keys[0],),
+        seen_references=(
+            "NP/DDD/0926/0909",
+            "NP/DIS/0926/0917",
+            "NP/SM/0826/0810",
+        ),
+    )
+    session = _Session(_PeakAssureMock())
+    batches = asyncio.run(
+        _batches(peak.PeakDistrictAdapter(), session, window, partial)
+    )
+    assert batches[-1].next_checkpoint.live_complete
+    assert (
+        sum(str(request.url) == peak._RESULTS_URL for request in session.requests) == 4
+    )
+
+    form = peak._parse_search_form(_search_form(), _advanced_form())
+    bad_bounded = queries[0].model_copy(update={"value": "invalid"})
+    with pytest.raises(peak.PeakDistrictParseError, match="bounded query"):
+        peak._query_request(form, bad_bounded)
+    bad_open = queries[-1].model_copy(update={"value": "COMPLETE"})
+    with pytest.raises(peak.PeakDistrictParseError, match="open query"):
+        peak._query_request(form, bad_open)
+    with pytest.raises(peak.PeakDistrictParseError, match="pagination form"):
+        peak._pagination_request(form, None, 1)
+    with pytest.raises(peak.PeakDistrictCountMismatchError):
+        peak._advance_checkpoint(
+            peak.PeakDistrictCheckpointV1(),
+            active_page=peak._ActivePage(
+                query_key=keys[0],
+                page_index=0,
+                row_count=1,
+            ),
+            search_page=peak._SearchPage(
+                references=(),
+                reported=2,
+                page_index=0,
+                page_size=1,
+                form=(),
+            ),
+            all_query_keys=keys,
+        )
+
+
+def test_peak_district_form_and_search_parser_failure_boundaries() -> None:
+    with pytest.raises(peak.PeakDistrictParseError, match="search form"):
+        peak._parse_search_form(b"<html></html>", _advanced_form())
+    with pytest.raises(peak.PeakDistrictParseError, match="search route"):
+        peak._parse_search_form(
+            _search_form().replace(b"OnlinePlanningSearchResults", b"Changed"),
+            _advanced_form(),
+        )
+    with pytest.raises(peak.PeakDistrictParseError, match="advanced search form"):
+        peak._parse_search_form(_search_form(), b"<html></html>")
+    with pytest.raises(peak.PeakDistrictParseError, match="open status options"):
+        peak._parse_search_form(
+            _search_form(),
+            _advanced_form().replace(
+                b'name="AdvanceSearch.SelectedApplicationStatus"',
+                b'name="changed"',
+            ),
+        )
+    with pytest.raises(peak.PeakDistrictParseError, match="advanced date field"):
+        peak._parse_search_form(
+            _search_form(),
+            _advanced_form().replace(
+                b'name="AdvanceSearch.ReceivedToDate"',
+                b'name="changed"',
+            ),
+        )
+
+    controls = BeautifulSoup(
+        """
+        <form>
+          <input name="disabled" value="x" disabled>
+          <input name="submit" type="submit" value="x">
+          <input name="unchecked" type="checkbox" value="x">
+          <input name="checked" type="checkbox" value="yes" checked>
+          <select name="empty"></select>
+          <textarea name="notes"> value </textarea>
+        </form>
+        """,
+        "html.parser",
+    ).form
+    assert controls is not None
+    assert [
+        (field.name, field.value) for field in peak._successful_controls(controls)
+    ] == [
+        ("checked", "yes"),
+        ("empty", ""),
+        ("notes", "value"),
+    ]
+
+    valid = _result_page(("NP/DDD/0926/0909",), reported=1)
+    failures = (
+        (
+            valid.replace(b'id="divOnlinePlanningSearchResults"', b'id="changed"'),
+            "search results",
+        ),
+        (valid.replace(b"Total record(s): 1", b"Unknown"), "reported result count"),
+        (
+            valid.replace(
+                b'name="PagingParameters.PageSize" value="2"',
+                b'name="PagingParameters.PageSize" value="0"',
+            ),
+            "result page size",
+        ),
+        (_result_page(("NP/DDD/0926/0909",), reported=2), "reported 2 results"),
+        (valid.replace(b"PagingClick('0')", b"NoPaging()"), "pagination inventory"),
+    )
+    for body, message in failures:
+        with pytest.raises(
+            (peak.PeakDistrictParseError, peak.PeakDistrictCountMismatchError),
+            match=message,
+        ):
+            peak._parse_search_page(body, expected_page=0)
+    with pytest.raises(peak.PeakDistrictParseError, match="result control"):
+        peak._required_control_int(BeautifulSoup("<p></p>", "html.parser"), "missing")
+    with pytest.raises(peak.PeakDistrictParseError, match="result control"):
+        peak._required_control_int(
+            BeautifulSoup('<input name="value" value="bad">', "html.parser"),
+            "value",
+        )
+
+    no_application = valid.replace(
+        b"applicationNumber=NP%2FDDD%2F0926%2F0909",
+        b"other=value",
+    )
+    with pytest.raises(peak.PeakDistrictParseError, match="application number"):
+        peak._parse_search_page(no_application, expected_page=0)
+    no_row = valid.replace(b'<div class="row result">', b"<section>").replace(
+        b"</div>\n        ", b"</section>\n        ", 1
+    )
+    with pytest.raises(peak.PeakDistrictParseError, match="result row"):
+        peak._parse_search_page(no_row, expected_page=0)
+    no_reference = valid.replace(b"Application No:", b"Reference:")
+    with pytest.raises(peak.PeakDistrictParseError, match="result reference"):
+        peak._parse_search_page(no_reference, expected_page=0)
+    duplicate = valid.replace(
+        b"</span>\n        </div>",
+        b'</span><a href="/AssureLive/ES/Presentation/Planning/OnlinePlanning/OnlinePlanningOverview?applicationNumber=NP%2FDDD%2F0926%2F0909&amp;guid=other">View</a></div>',
+        1,
+    )
+    with pytest.raises(
+        peak.PeakDistrictParseError, match="conflicting result locators"
+    ):
+        peak._parse_search_page(duplicate, expected_page=0)
+
+
+def test_peak_district_detail_and_document_parser_failure_boundaries() -> None:  # noqa: PLR0915
+    valid_detail = _detail()
+    detail_failures = (
+        (
+            valid_detail.replace(b'id="applicationReference"', b'id="changed"'),
+            "application reference",
+        ),
+        (valid_detail.replace(b"Listed Building Consent", b"", 1), "record type"),
+        (
+            valid_detail.replace(b'id="spnApplicationId"', b'id="changed"'),
+            "detail reference",
+        ),
+        (valid_detail.replace(b"REGISTERED: Valid", b""), "detail status"),
+    )
+    for body, message in detail_failures:
+        with pytest.raises(peak.PeakDistrictParseError, match=message):
+            peak._parse_assure_detail(body)
+    without_optional = valid_detail.replace(
+        b'<div class="col-xs-12"><label id="applicationDisplayAddress">1 Moor Road\nBakewell</label></div>',
+        b"",
+    ).replace(
+        b'<div id="divDisplayDocumentsUrl" data-url="/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments"></div>',
+        b"",
+    )
+    parsed = peak._parse_assure_detail(without_optional)
+    assert parsed.address is None
+    assert parsed.documents_endpoint is None
+    with_short_row = valid_detail.replace(
+        b'<table class="boxBorderLightGrey">',
+        b'<table class="boxBorderLightGrey"><tr><td>orphan</td></tr>',
+        1,
+    )
+    assert peak._parse_assure_detail(with_short_row).reference == "NP/DDD/0926/0909"
+
+    def comments_responder(request: PortalRequest) -> bytes:
+        if "OnlinePlanningOverview" in str(request.url):
+            return _detail(comments_tab=True)
+        return _documents_page((), reported=0)
+
+    comments = asyncio.run(
+        peak.PeakDistrictAdapter().fetch(_Session(comments_responder), _reference())
+    )
+    assert comments.completeness.comments.kind == "failed"
+    invalid_locator = _reference().model_copy(
+        update={"locator": "https://example.com/"}
+    )
+    with pytest.raises(peak.PeakDistrictRoutingError):
+        asyncio.run(
+            peak.PeakDistrictAdapter().fetch(
+                _Session(_PeakDetailMock()),
+                invalid_locator,
+            )
+        )
+
+    with pytest.raises(peak.PeakDistrictParseError, match="documents container"):
+        peak._parse_document_page(b"<html></html>", reference="A/1", expected_page=0)
+    empty = _documents_page((), reported=0)
+    with pytest.raises(peak.PeakDistrictParseError, match="empty state"):
+        peak._parse_document_page(empty, reference="A/1", expected_page=1)
+    document = _PeakDetailMock.documents[:1]
+    page = _documents_page(document, reported=1)
+    document_failures = (
+        (page.replace(b"Total record(s): 1", b"Unknown"), "reported count"),
+        (
+            page.replace(
+                b'name="DocumentCount" value="1"', b'name="DocumentCount" value="2"'
+            ),
+            "reported 1 results",
+        ),
+        (
+            page.replace(
+                b'name="PagingParameters.CurrentPageIndex" value="0"',
+                b'name="PagingParameters.CurrentPageIndex" value="1"',
+            ),
+            "page index",
+        ),
+        (
+            page.replace(
+                b'name="PagingParameters.PageSize" value="2"',
+                b'name="PagingParameters.PageSize" value="0"',
+            ),
+            "page size",
+        ),
+        (_documents_page((), reported=1), "reported 1 results"),
+        (page.replace(b"PagingClick('0')", b"NoPaging()"), "pagination inventory"),
+    )
+    for body, message in document_failures:
+        with pytest.raises(
+            (peak.PeakDistrictParseError, peak.PeakDistrictCountMismatchError),
+            match=message,
+        ):
+            peak._parse_document_page(
+                body,
+                reference="NP/DDD/0926/0909",
+                expected_page=0,
+            )
+
+    valid_link = BeautifulSoup(page, "html.parser").select_one("a[href]")
+    assert valid_link is not None
+    bad_link = BeautifulSoup(
+        str(valid_link).replace("aspectGuid=one", "other=one"), "html.parser"
+    ).a
+    assert bad_link is not None
+    with pytest.raises(peak.PeakDistrictParseError, match="metadata link"):
+        peak._parse_document_link(bad_link, "NP/DDD/0926/0909")
+    orphan = BeautifulSoup(str(valid_link), "html.parser").a
+    assert orphan is not None
+    with pytest.raises(peak.PeakDistrictParseError, match="metadata row"):
+        peak._parse_document_link(orphan, "NP/DDD/0926/0909")
+    short_row = BeautifulSoup(f'<div class="row">{valid_link}</div>', "html.parser").a
+    assert short_row is not None
+    with pytest.raises(peak.PeakDistrictParseError, match="metadata row"):
+        peak._parse_document_link(short_row, "NP/DDD/0926/0909")
+    bad_metadata = BeautifulSoup(
+        str(page).replace("14 September 2026", "bad date"), "html.parser"
+    ).select_one("a[href]")
+    assert bad_metadata is not None
+    with pytest.raises(peak.PeakDistrictParseError, match="document metadata"):
+        peak._parse_document_link(bad_metadata, "NP/DDD/0926/0909")
+
+    malformed_documents, malformed_state = asyncio.run(
+        peak._fetch_assure_documents(
+            _Session(lambda _request: b"<html></html>"),
+            "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
+            "NP/DDD/0926/0909",
+            [],
+        )
+    )
+    assert malformed_documents == ()
+    assert malformed_state.kind == "failed"
+
+    count_mismatch_page = page.replace(
+        b'name="DocumentCount" value="1"',
+        b'name="DocumentCount" value="2"',
+    )
+    mismatched_documents, mismatched_state = asyncio.run(
+        peak._fetch_assure_documents(
+            _Session(lambda _request: count_mismatch_page),
+            "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
+            "NP/DDD/0926/0909",
+            [],
+        )
+    )
+    assert mismatched_documents == ()
+    assert mismatched_state.kind == "failed"
+
+    duplicate_pages = (
+        _documents_page(document, reported=2, page=0, page_size=1),
+        _documents_page(document, reported=2, page=1, page_size=1),
+    )
+
+    def duplicate_responder(request: PortalRequest) -> bytes:
+        page_index = int(
+            parse_qs(urlsplit(str(request.url)).query)["currentPageIndex"][0]
+        )
+        return duplicate_pages[page_index]
+
+    duplicate_documents, duplicate_state = asyncio.run(
+        peak._fetch_assure_documents(
+            _Session(duplicate_responder),
+            "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
+            "NP/DDD/0926/0909",
+            [],
+        )
+    )
+    assert duplicate_documents == ()
+    assert duplicate_state.kind == "failed"
+
+    assert peak._optional_field({"second": "value"}, "first", "second") == "value"
+    assert peak._optional_field({}, "missing") is None
+    with pytest.raises(peak.PeakDistrictParseError, match="detail missing"):
+        peak._required_field({}, "missing")
+    assert peak._optional_date({}, "date") is None
+    with pytest.raises(peak.PeakDistrictParseError, match="date date"):
+        peak._optional_date({"date": "bad"}, "date")
+    assert peak._parse_date("unknown") is None
 
 
 def test_peak_district_qualification_requires_safe_exact_scope(
