@@ -529,7 +529,8 @@ def _reported_count(soup: BeautifulSoup) -> int:
     if "no results found" in text.casefold():
         return 0
     match = re.search(
-        r"(?:displaying.*?of|total)\s+(\d+)\s+results?",
+        r"(?:showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of|"
+        r"displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
         text,
         re.IGNORECASE,
     )
@@ -548,6 +549,7 @@ def _is_uncounted_terminal_first_page(
         row_count == 0
         or len(page_inputs) != 1
         or str(page_inputs[0].get("value", "")).strip() != "1"
+        or soup.select_one(".showing") is not None
     ):
         return False
     selected_capacities = soup.select(

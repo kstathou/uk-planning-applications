@@ -150,6 +150,7 @@ def _result_page(
     *,
     count: int,
     label: str = "Reference",
+    count_text: str | None = None,
 ) -> bytes:
     rendered = "".join(
         (
@@ -160,7 +161,12 @@ def _result_page(
         )
         for reference, locator in rows
     )
-    return (f'<div data-result-count="{count}"></div><ul>{rendered}</ul>').encode()
+    count_markup = (
+        f'<div data-result-count="{count}"></div>'
+        if count_text is None
+        else f'<span class="showing">{count_text}</span>'
+    )
+    return f"{count_markup}<ul>{rendered}</ul>".encode()
 
 
 def _uncounted_result_page(
@@ -292,6 +298,7 @@ class _IdoxMock:
         search_type: str = "Application",
         uncounted_terminal: bool = False,
         uncounted_label: str = "Ref. No",
+        showing_counts: bool = False,
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -306,6 +313,7 @@ class _IdoxMock:
         self.search_type = search_type
         self.uncounted_terminal = uncounted_terminal
         self.uncounted_label = uncounted_label
+        self.showing_counts = showing_counts
         self.current_date_type = ""
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
@@ -356,6 +364,11 @@ class _IdoxMock:
                             (self.case.references[3], self.case.locators[3]),
                         ),
                         count=2,
+                        count_text=(
+                            "Showing 1\N{EN DASH}2 of 2 results"
+                            if self.showing_counts
+                            else None
+                        ),
                     ),
                 )
             return httpx.Response(
@@ -366,6 +379,7 @@ class _IdoxMock:
                         (self.case.references[1], self.case.locators[1]),
                     ),
                     count=1 if self.mismatch else 3,
+                    count_text=("Showing 1-2 of 3" if self.showing_counts else None),
                 ),
             )
         if path.endswith("/pagedSearchResults.do"):
@@ -377,7 +391,13 @@ class _IdoxMock:
             )
             return httpx.Response(
                 200,
-                content=_result_page(rows, count=3),
+                content=_result_page(
+                    rows,
+                    count=3,
+                    count_text=(
+                        "Showing 3-3 of 3 result" if self.showing_counts else None
+                    ),
+                ),
             )
         if path.endswith("/applicationDetails.do"):
             locator = request.url.params["keyVal"]
@@ -594,6 +614,29 @@ def test_authority_weekly_discovery_resumes_deduplicates_and_counts(
             path.endswith("/pagedSearchResults.do")
             for _, path, _ in resumed_mock.requests
         )
+        == 1
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+def test_authority_showing_totals_drive_public_pagination(case: _Case) -> None:
+    """Displayed Showing totals drive one bounded page request to completeness."""
+    mock = _IdoxMock(case, showing_counts=True)
+    session = _session(mock)
+    package = pilot_registry().get(case.authority_id)
+
+    async def discover_all() -> list[DurableDiscoveryBatch]:
+        batches = [batch async for batch in package.discover(session, WEEK, None)]
+        await session.aclose()
+        return batches
+
+    batches = asyncio.run(discover_all())
+    assert [
+        reference.reference for batch in batches for reference in batch.references
+    ] == list(case.references)
+    assert batches[-1].complete
+    assert (
+        sum(path.endswith("/pagedSearchResults.do") for _, path, _ in mock.requests)
         == 1
     )
 
@@ -836,7 +879,7 @@ def test_authority_search_result_reference_labels(case: _Case, label: str) -> No
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
 @pytest.mark.parametrize(
     ("separator", "suffix"),
-    [("-", ""), ("\N{EN DASH}", " results")],
+    [("-", ""), ("-", " result"), ("\N{EN DASH}", " results")],
 )
 def test_authority_accepts_explicit_showing_result_total(
     case: _Case,
@@ -874,6 +917,19 @@ def test_authority_rejects_malformed_showing_result_total(
         getattr(case.module, "_parse_search_page")(
             _paginated_result_page(_ten_result_rows(case), count_text)
         )
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+def test_authority_does_not_treat_malformed_showing_as_uncounted(
+    case: _Case,
+) -> None:
+    """A malformed displayed count cannot become an inferred terminal total."""
+    parse_error = _member(case, "ParseError")
+    body = b'<span class="showing">Showing 1 to 1 of 1</span>' + _uncounted_result_page(
+        ((case.references[0], case.locators[0]),)
+    )
+    with pytest.raises(parse_error, match="reported result count"):
+        getattr(case.module, "_parse_search_page")(body)
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
@@ -969,6 +1025,7 @@ def test_authority_form_search_and_date_parser_boundaries(case: _Case) -> None:
     assert fallback.reported == 1
     reported_count = getattr(case.module, "_reported_count")
     assert reported_count(BeautifulSoup("<p>No results found</p>", "html.parser")) == 0
+    assert reported_count(BeautifulSoup("<p>Total 2 results</p>", "html.parser")) == 2
     with pytest.raises(parse_error, match="reported result count"):
         reported_count(BeautifulSoup("<p>Unknown</p>", "html.parser"))
 
