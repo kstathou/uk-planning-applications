@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 _SEARCH_URL = f"{BASE_URL}/index.html?fa=search"
 _FORM_PATH = "/planning/index.html"
 _MINIMUM_GAP_SECONDS = 2.0
+_HIDDEN_FORM_VARIANTS = (("", ""), ("search", "true"))
 _DATE_FIELDS = {
     BlackburnQueryKind.RECEIVED: ("received_date_from", "received_date_to"),
     BlackburnQueryKind.VALID: ("valid_date_from", "valid_date_to"),
@@ -131,12 +132,14 @@ async def _assert_search_form(page: Page) -> None:
         or resolved.query
     ):
         _raise_form("POST /planning/index.html form")
+    hidden_values = []
     for name in ("fa", "submitted"):
         control = page.locator(f'input[name="{name}"]')
         if await control.count() != 1:
             _raise_form(f"single hidden {name} control")
-        if await control.get_attribute("value") not in (None, ""):
-            _raise_form(f"empty hidden {name} control")
+        hidden_values.append(await control.get_attribute("value") or "")
+    if tuple(hidden_values) not in _HIDDEN_FORM_VARIANTS:
+        _raise_form("known hidden control values")
 
 
 async def _fill_date(page: Page, name: str, value: str) -> None:
