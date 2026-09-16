@@ -333,7 +333,7 @@ def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
     <script>var easting = 300476; var northing = 91039;</script>
     <div id="PlanningdocTable" aria-label="Document grid"></div>
     <table class="tblTest table sortable document-list">
-      <thead><tr><th>All</th><th>Description</th><th>Created date</th></tr></thead>
+      <thead><tr><th>All</th><th>Description <span class="sorted">&#9660;</span></th><th>Created date <span class="sorted"></span></th></tr></thead>
       <tbody>
         <tr class="header active"><th colspan="3">PLANS &amp; DRAWINGS</th></tr>
         <tr><td><input type="checkbox"></td><td>
