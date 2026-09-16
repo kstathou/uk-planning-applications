@@ -26,9 +26,11 @@ _AUTHORITY_ID = "barnet"
 _RECEIPT_NAME = "barnet-qualification-v1.json"
 _QUALIFICATION_NAME = "barnet-live-v1"
 _RETAINED_FAILURE_CODES = ("SourceUnavailableError", "RateLimitedError")
+_LEGACY_LINEAGE_MIGRATION = (6, "006_qualification_lineage.sql")
+_CURRENT_LINEAGE_MIGRATION = (9, "009_qualification_lineage.sql")
 _LINEAGE_MIGRATIONS = (
-    ((6, "006_qualification_lineage.sql"),),
-    ((9, "009_qualification_lineage.sql"),),
+    (_LEGACY_LINEAGE_MIGRATION,),
+    (_CURRENT_LINEAGE_MIGRATION,),
 )
 _INCLUSIVE_WINDOW_SPAN_DAYS = 29
 _SHA256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
@@ -241,7 +243,7 @@ def derive_barnet_blocker(
             WHERE type = 'table' AND name = 'qualification_lineage'
             """
         ).fetchone()
-        lineage_migrations = tuple(
+        migration_rows = tuple(
             (row["version"], row["name"])
             for row in connection.execute(
                 """
@@ -249,6 +251,19 @@ def derive_barnet_blocker(
                 WHERE version IN (6, 9) ORDER BY version
                 """
             )
+        )
+        _require(
+            condition=all(
+                version != _CURRENT_LINEAGE_MIGRATION[0]
+                or name == _CURRENT_LINEAGE_MIGRATION[1]
+                for version, name in migration_rows
+            ),
+            code="qualification-lineage-migration-invalid",
+        )
+        lineage_migrations = tuple(
+            migration
+            for migration in migration_rows
+            if migration in (_LEGACY_LINEAGE_MIGRATION, _CURRENT_LINEAGE_MIGRATION)
         )
         if lineage_table is None:
             _require(

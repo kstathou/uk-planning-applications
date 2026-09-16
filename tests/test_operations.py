@@ -862,6 +862,40 @@ def test_legacy_barnet_lineage_migration_releases_reserved_version(  # noqa: D10
         _store(missing_schema_root)
 
 
+@pytest.mark.parametrize(
+    "phase_column",
+    [
+        "phase TEXT NOT NULL",
+        "phase TEXT NOT NULL CHECK (phase = 'other')",
+    ],
+)
+def test_lineage_migration_requires_exact_phase_semantics(
+    phase_column: str,
+    tmp_path: Path,
+) -> None:
+    """Column metadata alone cannot prove the required phase constraint."""
+    root = tmp_path / "invalid-phase"
+    store = _store(root)
+    store.close()
+    with closing(sqlite3.connect(root / "yimby.sqlite3")) as connection:
+        connection.execute("DROP TABLE qualification_lineage")
+        connection.execute(
+            f"""
+            CREATE TABLE qualification_lineage (
+                authority_id TEXT NOT NULL,
+                qualification TEXT NOT NULL,
+                {phase_column},
+                scope_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (authority_id, qualification)
+            )
+            """
+        )
+        connection.commit()
+    with pytest.raises(sqlite3.IntegrityError, match="phase is invalid"):
+        _store(root)
+
+
 class _CancellingSession:
     def __init__(self, search_url: str) -> None:
         self._inner = FixtureSession(

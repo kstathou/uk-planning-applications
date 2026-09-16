@@ -372,6 +372,17 @@ def test_barnet_blocker_artifact_is_state_bound_sanitized_and_strict(
     assert artifact.sqlite_integrity == "ok"
     assert [cycle.ordinal for cycle in artifact.later_cycles] == [1, 2]
 
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) "
+            "VALUES (6, '006_opdc.sql', 'integrated')"
+        )
+        connection.commit()
+    assert derive_barnet_blocker(data_dir, official_http_429_confirmed=True) == artifact
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute("DELETE FROM schema_migrations WHERE version = 6")
+        connection.commit()
+
     serialized = artifact.model_dump_json()
     assert all(identity not in serialized for identity in mock.references)
     assert all(locator not in serialized for locator in mock.references.values())
@@ -579,6 +590,21 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
     ):
         derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
     with closing(sqlite3.connect(database)) as connection:
+        connection.execute("DELETE FROM qualification_lineage")
+        connection.execute(
+            "UPDATE schema_migrations SET name = '009_other.sql' WHERE version = 9"
+        )
+        connection.commit()
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="lineage-migration-invalid",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE schema_migrations SET name = '009_qualification_lineage.sql' "
+            "WHERE version = 9"
+        )
         connection.execute("DROP TABLE qualification_lineage")
         connection.commit()
     with pytest.raises(
@@ -588,6 +614,10 @@ def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
         derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
     with closing(sqlite3.connect(database)) as connection:
         connection.execute("DELETE FROM schema_migrations WHERE version = 9")
+        connection.execute(
+            "INSERT INTO schema_migrations(version, name, applied_at) "
+            "VALUES (6, '006_opdc.sql', 'integrated-pre-lineage')"
+        )
         connection.commit()
 
     retained_path = data_dir / "evidence" / evidence_path

@@ -1307,6 +1307,40 @@ class SqliteStore:
         ):
             message = "migration 009 Barnet qualification lineage schema is invalid"
             raise sqlite3.IntegrityError(message)
+        self._validate_qualification_lineage_phase()
+
+    def _validate_qualification_lineage_phase(self) -> None:
+        message = "migration 009 Barnet qualification lineage phase is invalid"
+        probe = str(uuid4())
+        self._connection.execute("SAVEPOINT validate_qualification_lineage")
+        try:
+            try:
+                self._connection.execute(
+                    """
+                    INSERT INTO qualification_lineage(
+                        authority_id, qualification, phase, scope_json, created_at
+                    ) VALUES (?, ?, 'qualified', '{}', '2000-01-01T00:00:00+00:00')
+                    """,
+                    (f"__schema_probe__{probe}", "valid"),
+                )
+            except sqlite3.IntegrityError as error:
+                raise sqlite3.IntegrityError(message) from error
+            try:
+                self._connection.execute(
+                    """
+                    INSERT INTO qualification_lineage(
+                        authority_id, qualification, phase, scope_json, created_at
+                    ) VALUES (?, ?, 'invalid', '{}', '2000-01-01T00:00:00+00:00')
+                    """,
+                    (f"__schema_probe__{probe}", "invalid"),
+                )
+            except sqlite3.IntegrityError:
+                pass
+            else:
+                raise sqlite3.IntegrityError(message)
+        finally:
+            self._connection.execute("ROLLBACK TO validate_qualification_lineage")
+            self._connection.execute("RELEASE validate_qualification_lineage")
 
     def _application_id(self, normalised: NormalisedObservation) -> ApplicationId:
         return ApplicationId(

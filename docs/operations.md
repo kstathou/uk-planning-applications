@@ -131,8 +131,12 @@ September snapshot is committed at
 `docs/evidence/barnet-qualification-blocker-2026-09-16.json`.
 
 A missing lineage table is accepted by the exporter only for genuine
-pre-lineage history with neither migration 006 nor 009 recorded. Once either
-lineage migration is recorded, its expected table must be present.
+pre-lineage history with neither Barnet's legacy 006 filename nor its current
+009 filename recorded. Once either Barnet lineage migration is recorded, its
+expected table must be present.
+Migration 006 owned by OPDC is not classified as Barnet lineage, so both an
+integrated OPDC-006/current-Barnet-009 database and a pre-lineage OPDC-006
+database remain valid inputs.
 
 Requalifying an already terminal target with zero live requests preserves the
 original receipt timestamp and the two follow-up due dates. The same anchor is
@@ -153,8 +157,10 @@ the earlier Barnet branch is reconciled from the legacy
 `006_qualification_lineage.sql` history row to 009 before migration discovery.
 That releases version 006 for OPDC rather than causing its integration migration
 to be skipped. Startup independently verifies migration 009's owning filename
-and exact required table shape, so an incompatible row or missing/malformed
-lineage table fails closed even when no legacy 006 row is present.
+and exact required table shape. A rolled-back schema probe also proves that the
+`qualified` phase is accepted and every other phase is rejected. An
+incompatible row, missing/malformed lineage table, or wrong phase constraint
+therefore fails closed even when no legacy 006 row is present.
 
 Cornwall, Durham, Leeds, and West Suffolk use the same safe opt-in boundary:
 
