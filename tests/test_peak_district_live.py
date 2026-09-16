@@ -839,7 +839,7 @@ def test_peak_district_form_and_search_parser_failure_boundaries() -> None:
             _search_form().replace(b"OnlinePlanningSearchResults", b"Changed"),
             _advanced_form(),
         )
-    with pytest.raises(peak.PeakDistrictParseError, match="advanced search form"):
+    with pytest.raises(peak.PeakDistrictParseError, match="open status options"):
         peak._parse_search_form(_search_form(), b"<html></html>")
     with pytest.raises(peak.PeakDistrictParseError, match="open status options"):
         peak._parse_search_form(
