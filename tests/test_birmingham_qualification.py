@@ -78,6 +78,33 @@ _QUERY_NAMES = (
     "unresolved-candidate-profile",
     "unresolved-oldest-sample",
 )
+_FIELD_SCHEMA = (
+    ("OBJECTID", "OBJECTID", "esriFieldTypeOID", None),
+    ("SHAPE", "SHAPE", "esriFieldTypeGeometry", None),
+    ("REFERENCE", "REFERENCE", "esriFieldTypeString", 13),
+    ("application_type_code", "application_type_code", "esriFieldTypeString", 12),
+    ("TYPE", "TYPE", "esriFieldTypeString", 40),
+    ("Stat_Return_Code", "Stat_Return_Code", "esriFieldTypeString", 12),
+    ("Sub_Cat", "Sub_Cat", "esriFieldTypeString", 40),
+    ("Received", "Received", "esriFieldTypeDate", 8),
+    ("LOCATION", "LOCATION", "esriFieldTypeString", 120),
+    ("Dev", "DEV", "esriFieldTypeString", 254),
+    ("Date_Accepted", "Date_Accepted", "esriFieldTypeDate", 8),
+    ("AGENT", "AGENT", "esriFieldTypeString", 100),
+    ("Decision_Level", "DECISION_LEVEL", "esriFieldTypeString", 10),
+    ("APPLICATION_DECISION", "APPLICATION_DECISION", "esriFieldTypeString", 40),
+    ("Decision_Date", "Decision_Date", "esriFieldTypeDate", 8),
+    ("Date_Issued", "Date_Issued", "esriFieldTypeDate", 8),
+    ("APPEAL_DECISION", "APPEAL_DECISION", "esriFieldTypeString", 40),
+    ("Appeal_Decision_Date", "Appeal_Decision_Date", "esriFieldTypeDate", 8),
+    ("Officer", "Officer", "esriFieldTypeString", 50),
+    ("PGP_PK", "PGP_PK", "esriFieldTypeInteger", None),
+    ("PA_NO", "PA_NO", "esriFieldTypeString", 20),
+    ("Number", "Number", "esriFieldTypeString", 20),
+    ("TypeOfObj", "TypeOfObj", "esriFieldTypeString", 10),
+    ("SHAPE_Length", "SHAPE_Length", "esriFieldTypeDouble", None),
+    ("SHAPE_Area", "SHAPE_Area", "esriFieldTypeDouble", None),
+)
 
 
 class _NeverFetchSession:
@@ -173,33 +200,16 @@ def _json_bytes(value: object) -> bytes:
 
 
 def _arcgis_bodies() -> tuple[bytes, ...]:
-    fields = (
-        "OBJECTID",
-        "SHAPE",
-        "REFERENCE",
-        "application_type_code",
-        "TYPE",
-        "Stat_Return_Code",
-        "Sub_Cat",
-        "Received",
-        "LOCATION",
-        "Dev",
-        "Date_Accepted",
-        "AGENT",
-        "Decision_Level",
-        "APPLICATION_DECISION",
-        "Decision_Date",
-        "Date_Issued",
-        "APPEAL_DECISION",
-        "Appeal_Decision_Date",
-        "Officer",
-        "PGP_PK",
-        "PA_NO",
-        "Number",
-        "TypeOfObj",
-        "SHAPE_Length",
-        "SHAPE_Area",
-    )
+    fields = [
+        {
+            "name": name,
+            "alias": alias,
+            "type": field_type,
+            "domain": None,
+            **({"length": length} if length is not None else {}),
+        }
+        for name, alias, field_type, length in _FIELD_SCHEMA
+    ]
     metadata = {
         "id": 12,
         "name": "Post 1990 Planning Application",
@@ -207,12 +217,31 @@ def _arcgis_bodies() -> tuple[bytes, ...]:
         "maxRecordCount": 1000,
         "hasAttachments": False,
         "relationships": [],
-        "fields": [{"name": field, "type": "esriFieldTypeString"} for field in fields],
+        "subLayers": [],
+        "displayField": "REFERENCE",
+        "geometryField": {
+            "name": "SHAPE",
+            "alias": "SHAPE",
+            "type": "esriFieldTypeGeometry",
+        },
+        "geometryType": "esriGeometryPolygon",
+        "supportedQueryFormats": "JSON, AMF, geoJSON",
+        "supportsAdvancedQueries": True,
+        "supportsStatistics": True,
+        "useStandardizedQueries": True,
+        "fields": fields,
         "advancedQueryCapabilities": {
+            "supportsCountDistinct": True,
             "supportsPagination": True,
             "supportsStatistics": True,
             "supportsOrderBy": True,
             "supportsDistinct": True,
+            "supportsHavingClause": True,
+            "supportsQueryWithDistance": True,
+            "supportsReturningQueryExtent": True,
+            "supportsSqlExpression": True,
+            "supportsTrueCurve": True,
+            "useStandardizedQueries": True,
         },
     }
     recent_features = [
@@ -397,6 +426,14 @@ def _args(data_dir: Path) -> list[str]:
         "2026-09-16",
         "--include-open",
     ]
+
+
+def _current_clock() -> datetime:
+    return datetime(2026, 9, 16, 12, tzinfo=UTC)
+
+
+def _late_clock() -> datetime:
+    return datetime(2026, 10, 1, 12, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -703,20 +740,54 @@ def test_birmingham_qualification_persists_typed_blocked_receipt(
         module.replay_persisted_state(data_dir)
 
 
+def test_birmingham_replay_rejects_unknown_receipt_claim(
+    tmp_path: Path,
+) -> None:
+    """Do not discard unevidenced fields while validating a saved receipt."""
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=lambda: _ArcgisSession(_arcgis_bodies()),
+            now=lambda: datetime(2026, 9, 16, 12, tzinfo=UTC),
+        )
+        == 1
+    )
+    receipt_path = data_dir / _RECEIPT_NAME
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt["recent_discovery"]["unevidenced_claim"] = True
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    with pytest.raises(
+        module.QualificationInvariantError, match="invalid-persisted-receipt"
+    ):
+        module.replay_persisted_state(data_dir)
+
+
 @pytest.mark.parametrize(
     "failure",
     [
         "recent-total",
         "layer-schema",
         "unexpected-field",
+        "field-type",
+        "field-alias",
+        "sublayer",
+        "schema-capability",
         "out-of-window",
         "stale-latest",
+        "blank-reference",
         "decision-group-date",
         "unresolved-profile-date",
         "historical-sample-date",
         "issued-predicate",
+        "missing-predicate-key",
         "unresolved-predicate",
         "blank-appeal",
+        "pending-appeal",
+        "late-execution",
     ],
 )
 def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C901, PLR0912, PLR0915
@@ -726,6 +797,7 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C
     """Never write a receipt for an incoherent page or changed source schema."""
     module = _qualification_module()
     bodies = list(_arcgis_bodies())
+    clock = _current_clock
     if failure == "recent-total":
         bodies[5] = _json_bytes({"count": 71})
     elif failure == "layer-schema":
@@ -737,6 +809,22 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C
         metadata["fields"].append(
             {"name": "CASE_STATUS", "type": "esriFieldTypeString"}
         )
+        bodies[0] = _json_bytes(metadata)
+    elif failure == "field-type":
+        metadata = json.loads(bodies[0])
+        metadata["fields"][7]["type"] = "esriFieldTypeString"
+        bodies[0] = _json_bytes(metadata)
+    elif failure == "field-alias":
+        metadata = json.loads(bodies[0])
+        metadata["fields"][9]["alias"] = "Dev"
+        bodies[0] = _json_bytes(metadata)
+    elif failure == "sublayer":
+        metadata = json.loads(bodies[0])
+        metadata["subLayers"] = [{"id": 99, "name": "Cases"}]
+        bodies[0] = _json_bytes(metadata)
+    elif failure == "schema-capability":
+        metadata = json.loads(bodies[0])
+        del metadata["advancedQueryCapabilities"]["supportsCountDistinct"]
         bodies[0] = _json_bytes(metadata)
     elif failure == "out-of-window":
         page = json.loads(bodies[6])
@@ -754,6 +842,10 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C
             for feature in page["features"]:
                 feature["attributes"]["Received"] = stale
             bodies[page_index] = _json_bytes(page)
+    elif failure == "blank-reference":
+        page = json.loads(bodies[6])
+        page["features"][0]["attributes"]["REFERENCE"] = ""
+        bodies[6] = _json_bytes(page)
     elif failure == "decision-group-date":
         groups = json.loads(bodies[9])
         groups["features"][0]["attributes"]["earliest_received"] = "corrupt"
@@ -770,18 +862,29 @@ def test_birmingham_qualification_refuses_incoherent_arcgis_evidence(  # noqa: C
         sample = json.loads(bodies[11])
         sample["features"][0]["attributes"]["APPLICATION_DECISION"] = "Approve"
         bodies[11] = _json_bytes(sample)
+    elif failure == "missing-predicate-key":
+        sample = json.loads(bodies[11])
+        del sample["features"][0]["attributes"]["APPLICATION_DECISION"]
+        bodies[11] = _json_bytes(sample)
     elif failure == "unresolved-predicate":
         sample = json.loads(bodies[13])
         sample["features"][0]["attributes"]["Decision_Date"] = 1_300_000_000_000
         bodies[13] = _json_bytes(sample)
-    else:
+    elif failure == "blank-appeal":
         sample = json.loads(bodies[13])
         for feature in sample["features"]:
             feature["attributes"]["APPEAL_DECISION"] = ""
         bodies[13] = _json_bytes(sample)
+    elif failure == "pending-appeal":
+        sample = json.loads(bodies[13])
+        for feature in sample["features"]:
+            feature["attributes"]["APPEAL_DECISION"] = "Pending"
+        bodies[13] = _json_bytes(sample)
+    else:
+        clock = _late_clock
     data_dir = tmp_path / failure
     session = _ArcgisSession(bodies)
 
-    assert module.main(_args(data_dir), session_factory=lambda: session) == 1
+    assert module.main(_args(data_dir), session_factory=lambda: session, now=clock) == 1
     assert session.closed is True
     assert not (data_dir / _RECEIPT_NAME).exists()
