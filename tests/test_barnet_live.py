@@ -240,7 +240,7 @@ def _showing_result_page(
     references: tuple[tuple[str, str], ...],
     markers: tuple[str, ...],
     *,
-    current_page: str = "1",
+    current_page: str | None = "1",
     visible_pages: tuple[str, ...] = (),
     capacity: str | None = "10",
     numbered_page: int | None = None,
