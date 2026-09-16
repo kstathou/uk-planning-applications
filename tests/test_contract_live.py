@@ -262,7 +262,7 @@ def _devon_advanced_form() -> bytes:
     """
 
 
-def _devon_results(
+def _devon_results(  # noqa: PLR0913
     references: tuple[str, ...],
     *,
     route: str = "Planning",
@@ -519,7 +519,7 @@ class _DevonMock:
         self.query_keys.append(key)
         self.pending = kind, 1
 
-    def __call__(self, request: PortalRequest) -> bytes:
+    def __call__(self, request: PortalRequest) -> bytes:  # noqa: C901
         url = str(request.url)
         if request.method == RequestMethod.POST and "/Disclaimer/Accept" in url:
             if self.repeated_disclaimer:
@@ -876,7 +876,7 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
     resumed_responder = _DevonMock()
     resumed_session = _Session(resumed_responder)
     resumed = asyncio.run(_batches(adapter, resumed_session, window, checkpoint))
-    assert [len(batch.references) for batch in resumed] == [10, 10, 10, 10, 5, 0, 0, 0]
+    assert [len(batch.references) for batch in resumed] == [10, 10, 10, 10, 5, 0, 0, 1]
     assert resumed[-1].complete
     assert resumed_responder.query_keys == [
         "outstanding:planning:true",
@@ -923,7 +923,7 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
         ),
         devon.DevonQuerySummaryV1(
             query_key="appeal-received:2026-08-18:2026-09-16",
-            row_count=1,
+            row_count=0,
             page_count=1,
         ),
         devon.DevonQuerySummaryV1(
@@ -937,7 +937,7 @@ def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
             page_count=1,
         ),
     )
-    assert len(audit.references) == 58
+    assert len(audit.references) == 59
 
     next_window = DiscoveryWindow(
         start=date(2026, 8, 25), end=date(2026, 9, 23), include_open=True
@@ -1351,8 +1351,16 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     assert devon._parse_coordinates(b"<html></html>") == (None, None)
     with pytest.raises(devon.DevonParseError, match="coordinates"):
         devon._parse_coordinates(b"<script>var easting = 300476;</script>")
+    assert devon._parse_appeal_coordinates({}) == (None, None)
+    with pytest.raises(devon.DevonParseError, match="appeal coordinates"):
+        devon._parse_appeal_coordinates({"easting": "300476"})
+    with pytest.raises(devon.DevonParseError, match="appeal coordinates"):
+        devon._parse_appeal_coordinates({"easting": "invalid", "northing": "91039"})
+    with pytest.raises(devon.DevonRoutingError):
+        devon._detail_route(HttpUrl(f"{devon.BASE_URL}/Unknown/Display/DCC/1"))
     assert devon._parse_constraints(b"<html></html>") == ((), False)
     assert devon._parse_consultations(b"<html></html>") == ((), False)
+    assert devon._parse_appeal_consultations(b"<html></html>") == ((), False)
     constraint_table = (
         b'<table summary="Planning Constraints"><thead><tr><th>Description</th>'
         b"</tr></thead><tbody><tr><td>Constraint</td></tr></tbody></table>"
@@ -1380,6 +1388,24 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     with pytest.raises(devon.DevonParseError, match="consultation row"):
         devon._parse_consultations(
             consultation_table.replace(b"<td>Consultee</td>", b"<td></td>")
+        )
+    appeal_consultation_table = (
+        b'<table summary="Appeal Consultees"><thead><tr>'
+        b"<td>Consultee Name</td><td>Date Letter Sent</td>"
+        b"<td>Consultation Expiry Date</td><td>Reply Received</td>"
+        b"</tr></thead><tbody><tr><td>Consultee</td></tr></tbody></table>"
+    )
+    with pytest.raises(devon.DevonParseError, match="appeal consultations table"):
+        devon._parse_appeal_consultations(
+            appeal_consultation_table + appeal_consultation_table
+        )
+    with pytest.raises(devon.DevonParseError, match="appeal consultations headers"):
+        devon._parse_appeal_consultations(
+            appeal_consultation_table.replace(b"Consultee Name", b"Other")
+        )
+    with pytest.raises(devon.DevonParseError, match="appeal consultation row"):
+        devon._parse_appeal_consultations(
+            appeal_consultation_table.replace(b"<td>Consultee</td>", b"<td></td>")
         )
     assert devon._split_lines(None) == ()
     assert devon._optional_field({"second": "value"}, "first", "second") == "value"

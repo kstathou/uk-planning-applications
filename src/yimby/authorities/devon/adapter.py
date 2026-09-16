@@ -68,7 +68,11 @@ _REDIRECT_BOUNDARY = RedirectBoundary(
         "/Search/Advanced",
         "/Search/Results",
     ),
-    path_prefixes=("/Planning/Display/", "/Search/Results/"),
+    path_prefixes=(
+        "/Planning/Display/",
+        "/Appeals/Display/",
+        "/Search/Results/",
+    ),
 )
 _BOOLEAN_FIELDS = (
     "Outstanding",
@@ -236,6 +240,7 @@ class DevonApplicationV1(FrozenModel):
     """Devon-native minerals, waste, or county development record."""
 
     council_reference: str
+    record_kind: Literal["planning", "appeal"] = "planning"
     application_type: str
     proposal_description: str
     public_status: str
@@ -264,6 +269,35 @@ class DevonApplicationV1(FrozenModel):
     constraints_exposed: bool = False
     consultations: tuple[DevonConsultationV1, ...] = ()
     consultations_exposed: bool = False
+    related_planning_reference: str | None = None
+    enforcement_reference: str | None = None
+    uprn: str | None = None
+    site_code: str | None = None
+    appeal_method: str | None = None
+    appeal_start_date: date | None = None
+    site_visit_date: date | None = None
+    questionnaire_sent_date: date | None = None
+    questionnaire_due_date: date | None = None
+    statement_sent_date: date | None = None
+    statement_due_date: date | None = None
+    proof_of_evidence_sent_date: date | None = None
+    proof_of_evidence_due_date: date | None = None
+    inquiry_date: date | None = None
+    venue: str | None = None
+    available_from: date | None = None
+    available_to: date | None = None
+    pins_reference: str | None = None
+    pins_officer: str | None = None
+    ward: str | None = None
+    inspector: str | None = None
+    planning_officer: str | None = None
+    in_abeyance: str | None = None
+    abeyance_date: date | None = None
+    appeal_decision: str | None = None
+    council_applied: str | None = None
+    council_awarded: str | None = None
+    appellant_applied: str | None = None
+    appellant_awarded: str | None = None
 
 
 class _DevonQuery(FrozenModel):
@@ -477,49 +511,12 @@ class DevonAdapter:
         )
         detail = captures[-1]
         fields = _parse_labelled_fields(detail.body)
-        published = _required_field(
-            fields, "application number", "reference", "application reference"
-        )
-        if published != reference.reference:
-            raise DevonReferenceMismatchError(reference.reference, published)
         documents, document_state = _parse_documents(detail.body)
-        bng_easting, bng_northing = _parse_coordinates(detail.body)
-        constraints, constraints_exposed = _parse_constraints(detail.body)
-        consultations, consultations_exposed = _parse_consultations(detail.body)
-        payload = DevonApplicationV1(
-            council_reference=published,
-            application_type=_required_field(fields, "application type", "type"),
-            proposal_description=_required_field(fields, "proposal", "description"),
-            public_status=_required_field(fields, "status"),
-            site_location=_required_field(fields, "location", "site location"),
-            documents=documents,
-            case_officer=_optional_field(fields, "case officer"),
-            received_date=_optional_date(fields, "date received", "received date"),
-            validated_date=_optional_date(
-                fields, "date valid", "validation date", "validated date"
-            ),
-            decision=_optional_field(fields, "decision"),
-            decision_date=_optional_date(fields, "decision date"),
-            district=_optional_field(fields, "district(s)", "district"),
-            electoral_division=_optional_field(
-                fields, "electoral division(s)", "electoral division"
-            ),
-            parish=_optional_field(fields, "parish(es)", "parish"),
-            applicant=_optional_field(fields, "applicant"),
-            agent=_optional_field(fields, "agent"),
-            consultation_expiry_date=_optional_date(fields, "consultation expiry"),
-            decision_level=_optional_field(fields, "decision level"),
-            committee_date=_optional_date(fields, "committee date"),
-            issue_date=_optional_date(fields, "issue date"),
-            applicant_address=_optional_field(fields, "applicant's address"),
-            agent_address=_optional_field(fields, "agent's address"),
-            local_members=_split_lines(_optional_field(fields, "local member(s)")),
-            bng_easting=bng_easting,
-            bng_northing=bng_northing,
-            constraints=constraints,
-            constraints_exposed=constraints_exposed,
-            consultations=consultations,
-            consultations_exposed=consultations_exposed,
+        route = _detail_route(HttpUrl(reference.locator))
+        payload = (
+            _planning_payload(reference, fields, detail.body, documents)
+            if route == "planning"
+            else _appeal_payload(reference, fields, detail.body, documents)
         )
         return _snapshot(reference, payload, captures, document_state)
 
@@ -549,7 +546,7 @@ class DevonAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="devon-v4",
+            normaliser_version="devon-v5",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
                 decision=payload.decision,
@@ -575,12 +572,154 @@ class DevonAdapter:
                         ("consultation-expiry", payload.consultation_expiry_date),
                         ("committee", payload.committee_date),
                         ("issue", payload.issue_date),
+                        ("appeal-start", payload.appeal_start_date),
+                        ("site-visit", payload.site_visit_date),
+                        ("questionnaire-sent", payload.questionnaire_sent_date),
+                        ("questionnaire-due", payload.questionnaire_due_date),
+                        ("statement-sent", payload.statement_sent_date),
+                        ("statement-due", payload.statement_due_date),
+                        (
+                            "proof-of-evidence-sent",
+                            payload.proof_of_evidence_sent_date,
+                        ),
+                        (
+                            "proof-of-evidence-due",
+                            payload.proof_of_evidence_due_date,
+                        ),
+                        ("inquiry", payload.inquiry_date),
+                        ("available-from", payload.available_from),
+                        ("available-to", payload.available_to),
+                        ("abeyance", payload.abeyance_date),
                     )
                     if event_date is not None
                 ),
                 source_url=snapshot.evidence[-1].url,
             ),
         )
+
+
+def _detail_route(locator: HttpUrl) -> Literal["planning", "appeal"]:
+    path = urlsplit(str(locator)).path
+    if path.startswith("/Planning/Display/"):
+        return "planning"
+    if path.startswith("/Appeals/Display/"):
+        return "appeal"
+    raise DevonRoutingError(str(locator))
+
+
+def _planning_payload(
+    reference: SourceReference,
+    fields: dict[str, str],
+    body: bytes,
+    documents: tuple[DevonDocumentV1, ...],
+) -> DevonApplicationV1:
+    published = _required_field(
+        fields, "application number", "reference", "application reference"
+    )
+    if published != reference.reference:
+        raise DevonReferenceMismatchError(reference.reference, published)
+    bng_easting, bng_northing = _parse_coordinates(body)
+    constraints, constraints_exposed = _parse_constraints(body)
+    consultations, consultations_exposed = _parse_consultations(body)
+    return DevonApplicationV1(
+        council_reference=published,
+        application_type=_required_field(fields, "application type", "type"),
+        proposal_description=_required_field(fields, "proposal", "description"),
+        public_status=_required_field(fields, "status"),
+        site_location=_required_field(fields, "location", "site location"),
+        documents=documents,
+        case_officer=_optional_field(fields, "case officer"),
+        received_date=_optional_date(fields, "date received", "received date"),
+        validated_date=_optional_date(
+            fields, "date valid", "validation date", "validated date"
+        ),
+        decision=_optional_field(fields, "decision"),
+        decision_date=_optional_date(fields, "decision date"),
+        district=_optional_field(fields, "district(s)", "district"),
+        electoral_division=_optional_field(
+            fields, "electoral division(s)", "electoral division"
+        ),
+        parish=_optional_field(fields, "parish(es)", "parish"),
+        applicant=_optional_field(fields, "applicant"),
+        agent=_optional_field(fields, "agent"),
+        consultation_expiry_date=_optional_date(fields, "consultation expiry"),
+        decision_level=_optional_field(fields, "decision level"),
+        committee_date=_optional_date(fields, "committee date"),
+        issue_date=_optional_date(fields, "issue date"),
+        applicant_address=_optional_field(fields, "applicant's address"),
+        agent_address=_optional_field(fields, "agent's address"),
+        local_members=_split_lines(_optional_field(fields, "local member(s)")),
+        bng_easting=bng_easting,
+        bng_northing=bng_northing,
+        constraints=constraints,
+        constraints_exposed=constraints_exposed,
+        consultations=consultations,
+        consultations_exposed=consultations_exposed,
+    )
+
+
+def _appeal_payload(
+    reference: SourceReference,
+    fields: dict[str, str],
+    body: bytes,
+    documents: tuple[DevonDocumentV1, ...],
+) -> DevonApplicationV1:
+    bng_easting, bng_northing = _parse_appeal_coordinates(fields)
+    consultations, consultations_exposed = _parse_appeal_consultations(body)
+    appeal_decision = _optional_field(fields, "appeal decision")
+    return DevonApplicationV1(
+        council_reference=reference.reference,
+        record_kind="appeal",
+        application_type=_required_field(fields, "type"),
+        proposal_description=_required_field(fields, "proposal", "description"),
+        public_status=(
+            appeal_decision if appeal_decision not in {None, "-"} else "Appeal"
+        ),
+        site_location=_required_field(fields, "location", "site location"),
+        documents=documents,
+        case_officer=_optional_field(fields, "appeal officer"),
+        received_date=_optional_date(fields, "start date"),
+        decision=_optional_field(fields, "decision"),
+        decision_date=_optional_date(fields, "decision date"),
+        parish=_optional_field(fields, "parish"),
+        applicant=_optional_field(fields, "appellant"),
+        agent=_optional_field(fields, "agent"),
+        applicant_address=_optional_field(fields, "appellant address"),
+        agent_address=_optional_field(fields, "agents address", "agent's address"),
+        bng_easting=bng_easting,
+        bng_northing=bng_northing,
+        consultations=consultations,
+        consultations_exposed=consultations_exposed,
+        related_planning_reference=_optional_field(fields, "planning ref"),
+        enforcement_reference=_optional_field(fields, "enforcement ref"),
+        uprn=_optional_field(fields, "uprn"),
+        site_code=_optional_field(fields, "site"),
+        appeal_method=_optional_field(fields, "appeal method"),
+        appeal_start_date=_optional_date(fields, "start date"),
+        site_visit_date=_optional_date(fields, "site visit"),
+        questionnaire_sent_date=_optional_date(fields, "questionnaire sent"),
+        questionnaire_due_date=_optional_date(fields, "questionnaire due"),
+        statement_sent_date=_optional_date(fields, "statement sent"),
+        statement_due_date=_optional_date(fields, "statement due"),
+        proof_of_evidence_sent_date=_optional_date(fields, "proof of evidence sent"),
+        proof_of_evidence_due_date=_optional_date(fields, "proof of evidence due"),
+        inquiry_date=_optional_date(fields, "inquiry date"),
+        venue=_optional_field(fields, "venue"),
+        available_from=_optional_date(fields, "available from"),
+        available_to=_optional_date(fields, "available to"),
+        pins_reference=_optional_field(fields, "pins ref"),
+        pins_officer=_optional_field(fields, "pins officer"),
+        ward=_optional_field(fields, "ward"),
+        inspector=_optional_field(fields, "inspector"),
+        planning_officer=_optional_field(fields, "planning officer"),
+        in_abeyance=_optional_field(fields, "in abeyance"),
+        abeyance_date=_optional_date(fields, "abeyance date"),
+        appeal_decision=appeal_decision,
+        council_applied=_optional_field(fields, "council applied"),
+        council_awarded=_optional_field(fields, "council awarded"),
+        appellant_applied=_optional_field(fields, "appellant applied"),
+        appellant_awarded=_optional_field(fields, "appellant awarded"),
+    )
 
 
 def qualification_audit(
@@ -946,23 +1085,25 @@ def _parse_discovery_page(  # noqa: C901, PLR0912
 
 
 def _parse_result_reference(block: Tag) -> SourceReference:
-    link = block.select_one('a[href*="/Planning/Display/"]')
-    if not isinstance(link, Tag):
+    links = block.select('a[href*="/Planning/Display/"], a[href*="/Appeals/Display/"]')
+    if len(links) != 1:
         _raise_parse("search result detail link")
+    link = links[0]
     href = str(link.get("href", ""))
     value = link.get_text(" ", strip=True)
-    if not value:
-        value = urlsplit(href).path.partition("/Planning/Display/")[2]
     locator = urljoin(f"{BASE_URL}/", href)
     parts = urlsplit(locator)
+    route = re.fullmatch(r"/(?:Planning|Appeals)/Display/(.+)", parts.path)
     if (
         parts.scheme != "https"
         or parts.netloc != urlsplit(BASE_URL).netloc
-        or not parts.path.startswith("/Planning/Display/")
+        or route is None
         or parts.query
         or parts.fragment
     ):
         _raise_parse("search result detail locator")
+    if not value:
+        value = route.group(1)
     return SourceReference(source_id=SOURCE, reference=value, locator=locator)
 
 
@@ -1103,7 +1244,9 @@ def _validate_protected_request(request: PortalRequest) -> None:
             r"/Search/(?:Advanced|Results(?:/(?:[2-9]|[1-9]\d+))?)"
         ),
         (RequestIntent.SEARCH, RequestMethod.POST): re.compile(r"/Search/Results"),
-        (RequestIntent.DETAIL, RequestMethod.GET): re.compile(r"/Planning/Display/.+"),
+        (RequestIntent.DETAIL, RequestMethod.GET): re.compile(
+            r"/(?:Planning|Appeals)/Display/.+"
+        ),
     }
     pattern = allowed_paths.get((request.intent, request.method))
     if (
@@ -1183,6 +1326,21 @@ def _parse_coordinates(body: bytes) -> tuple[float | None, float | None]:
     return float(easting.group(1)), float(northing.group(1))
 
 
+def _parse_appeal_coordinates(
+    fields: dict[str, str],
+) -> tuple[float | None, float | None]:
+    easting = _optional_field(fields, "easting")
+    northing = _optional_field(fields, "northing")
+    if easting in {None, "-"} and northing in {None, "-"}:
+        return None, None
+    if easting in {None, "-"} or northing in {None, "-"}:
+        _raise_parse("appeal coordinates")
+    try:
+        return float(easting), float(northing)
+    except ValueError:
+        return _raise_parse("appeal coordinates")
+
+
 def _parse_constraints(body: bytes) -> tuple[tuple[str, ...], bool]:
     """Enumerate the optional constraint table when the source exposes it."""
     soup = BeautifulSoup(body, "html.parser")
@@ -1240,6 +1398,40 @@ def _parse_consultations(
     return tuple(rows), True
 
 
+def _parse_appeal_consultations(
+    body: bytes,
+) -> tuple[tuple[DevonConsultationV1, ...], bool]:
+    """Retain the appeal-specific table whose source headings are data cells."""
+    soup = BeautifulSoup(body, "html.parser")
+    tables = soup.select('table[summary="Appeal Consultees"]')
+    if not tables:
+        return (), False
+    if len(tables) != 1:
+        _raise_parse("appeal consultations table")
+    headers = tuple(
+        _normalise_label(item.get_text(" ", strip=True))
+        for item in tables[0].select("thead td")
+    )
+    if headers != (
+        "consultee name",
+        "date letter sent",
+        "consultation expiry date",
+        "reply received",
+    ):
+        _raise_parse("appeal consultations headers")
+    rows = []
+    for row in tables[0].select("tbody tr"):
+        values = tuple(
+            value
+            for cell in row.find_all("td", recursive=False)
+            if (value := cell.get_text(" ", strip=True))
+        )
+        if not values:
+            _raise_parse("appeal consultation row")
+        rows.append(DevonConsultationV1(values=values))
+    return tuple(rows), True
+
+
 def _parse_documents(
     body: bytes,
 ) -> tuple[tuple[DevonDocumentV1, ...], CompleteSection | UnavailableSection]:
@@ -1251,8 +1443,7 @@ def _parse_documents(
     if len(markers) != 1 or len(tables) != 1:
         _raise_parse("document section")
     headers = tuple(
-        _normalise_label(_leading_text(item))
-        for item in tables[0].select("thead th")
+        _normalise_label(_leading_text(item)) for item in tables[0].select("thead th")
     )
     if len(headers) < _DOCUMENT_COLUMN_COUNT or headers[-2:] != (
         "description",
