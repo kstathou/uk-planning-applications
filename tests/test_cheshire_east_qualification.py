@@ -144,9 +144,10 @@ def _qualification_module() -> ModuleType:
 
 
 class _QualificationSession:
-    def __init__(self) -> None:
+    def __init__(self, weekly_results: bytes | None = None) -> None:
         self.requests: list[PortalRequest] = []
         self._bytes = 0
+        self._weekly_results = weekly_results or _weekly_results()
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
@@ -160,7 +161,7 @@ class _QualificationSession:
         ):
             body = _weekly_form()
         elif url == cheshire._WEEKLY_RECEIVED_URL:
-            body = _weekly_results()
+            body = self._weekly_results
         elif url == cheshire._DETAIL_URL.format(locator="406569"):
             body = _detail()
         else:
@@ -645,3 +646,76 @@ def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
         now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
     )
     assert resumed == 1
+
+
+@pytest.mark.parametrize(
+    "weekly_results",
+    [
+        _weekly_results().replace(b"<table>", b'<table data-result-count="100">'),
+        _weekly_results().replace(
+            b"</table>",
+            b'</table><nav class="pagination"><a href="?page=2">Next</a></nav>',
+        ),
+    ],
+)
+def test_cheshire_total_or_next_link_cannot_claim_weekly_terminality(
+    tmp_path: Path,
+    weekly_results: bytes,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=lambda: _QualificationSession(weekly_results),
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "weekly-list-terminality-unproven" in {
+        blocker.code for blocker in receipt.blockers
+    }
+    assert next(
+        check.status
+        for check in receipt.checks
+        if check.name == "weekly-list-terminality"
+    ) == "failed"
+
+
+def test_cheshire_qualification_does_not_hide_programming_defects(
+    tmp_path: Path,
+) -> None:
+    module = _qualification_module()
+
+    class _BrokenSession(_QualificationSession):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            raise AssertionError(request)
+
+    with pytest.raises(AssertionError):
+        module.main(
+            [
+                "--confirm-live",
+                "--data-dir",
+                str(tmp_path / "qualification"),
+                "--start",
+                "2026-08-18",
+                "--end",
+                "2026-09-16",
+                "--include-open",
+            ],
+            session_factory=_BrokenSession,
+            now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+        )
