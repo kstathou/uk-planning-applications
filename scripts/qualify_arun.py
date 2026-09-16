@@ -18,7 +18,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, ValidationError
+from pydantic import Field, HttpUrl, ValidationError
 
 from yimby.authorities.arun import ARUN_PACKAGE
 from yimby.authorities.arun.adapter import (
@@ -66,10 +66,15 @@ from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.orchestration import CollectionAlreadyRunningError, ProcessLock
 from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
-from yimby.store import MissingEvidenceRecordError, SqliteStore
+from yimby.store import (
+    EvidenceRegistrationAudit,
+    MissingEvidenceRecordError,
+    SqliteStore,
+)
 from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalSession,
+    RequestMethod,
     SourceUnavailableError,
 )
 
@@ -385,8 +390,19 @@ def _terminal_inventory(  # noqa: PLR0911
     ):
         return None
     try:
-        form_capture = store.evidence_capture(cursor.search_form_evidence)
-        if form_capture is None or not _capture_is_valid(form_capture):
+        audit = store.evidence_registration_audit(_AUTHORITY_ID)
+        form_capture = _registered_discovery_capture(
+            store,
+            audit,
+            digest=cursor.search_form_evidence,
+            query_keys=tuple(query.key for query in cursor.plan),
+            request=ArunRequestContract(
+                url=HttpUrl(_SEARCH_URL),
+                method=RequestMethod.GET,
+                form=(),
+            ),
+        )
+        if form_capture is None:
             return None
         form = _parse_search_form(form_capture.body)
         inventory = []
@@ -396,7 +412,13 @@ def _terminal_inventory(  # noqa: PLR0911
             cursor.progress.completed,
             strict=True,
         ):
-            validated = _validate_query_evidence(store, form, query, completed)
+            validated = _validate_query_evidence(
+                store,
+                audit,
+                form,
+                query,
+                completed,
+            )
             if validated is None:
                 return None
             inventory.append(validated.inventory)
@@ -414,17 +436,54 @@ def _capture_is_valid(capture: EvidenceCapture) -> bool:
     return sha256(capture.body).hexdigest() == str(capture.digest)
 
 
+def _registered_discovery_capture(
+    store: SqliteStore,
+    audit: EvidenceRegistrationAudit,
+    *,
+    digest: EvidenceDigest,
+    query_keys: tuple[str, ...],
+    request: ArunRequestContract,
+) -> EvidenceCapture | None:
+    registrations = tuple(
+        item
+        for item in audit.discovery_registrations
+        if item.digest == digest and item.query_key in query_keys and item.page == 1
+    )
+    if not registrations:
+        return None
+    expected_form = tuple((field.name, field.value) for field in request.form)
+    expected_subject = (str(request.url), request.method.value, expected_form)
+    if any(
+        (item.request_url, item.request_method, item.request_form) != expected_subject
+        for item in registrations
+    ):
+        return None
+    capture = store.evidence_capture(digest)
+    if capture is None or not _capture_is_valid(capture):
+        return None
+    if any(item.response_url != str(capture.url) for item in registrations):
+        return None
+    return capture
+
+
 def _validate_query_evidence(  # noqa: PLR0911
     store: SqliteStore,
+    audit: EvidenceRegistrationAudit,
     form: ArunSearchForm,
     query: ArunQuery,
     completed: ArunCompletedQuery,
 ) -> _ValidatedQueryEvidence | None:
-    initial = store.evidence_capture(completed.initial_evidence)
-    if initial is None or not _capture_is_valid(initial):
+    expected_initial_request = _request_evidence(_initial_search_request(form, query))
+    initial = _registered_discovery_capture(
+        store,
+        audit,
+        digest=completed.initial_evidence,
+        query_keys=(query.key,),
+        request=expected_initial_request,
+    )
+    if initial is None:
         return None
     parsed_initial = _parse_search_results(initial.body)
-    expected_initial_request = _request_evidence(_initial_search_request(form, query))
     if (
         parsed_initial.reported != completed.reported_count
         or completed.initial_request not in (None, expected_initial_request)
@@ -432,14 +491,24 @@ def _validate_query_evidence(  # noqa: PLR0911
         return None
     digests = [completed.initial_evidence]
     parsed_final = parsed_initial
+    expected_expanded_request: ArunRequestContract | None = None
     if completed.expanded_evidence is None:
         if parsed_initial.has_show_all or completed.expanded_request is not None:
             return None
     else:
         if not parsed_initial.has_show_all:
             return None
-        expanded = store.evidence_capture(completed.expanded_evidence)
-        if expanded is None or not _capture_is_valid(expanded):
+        expected_expanded_request = _request_evidence(
+            _show_all_request(parsed_initial.show_all_form, query)
+        )
+        expanded = _registered_discovery_capture(
+            store,
+            audit,
+            digest=completed.expanded_evidence,
+            query_keys=(query.key,),
+            request=expected_expanded_request,
+        )
+        if expanded is None:
             return None
         parsed_final = _parse_search_results(expanded.body)
         digests.append(completed.expanded_evidence)
@@ -447,13 +516,7 @@ def _validate_query_evidence(  # noqa: PLR0911
             parsed_initial.reported is None
             or parsed_final.has_show_all
             or parsed_final.reported not in (None, parsed_initial.reported)
-            or completed.expanded_request
-            not in (
-                None,
-                _request_evidence(
-                    _show_all_request(parsed_initial.show_all_form, query)
-                ),
-            )
+            or completed.expanded_request not in (None, expected_expanded_request)
         ):
             return None
     final_references = tuple(
@@ -473,13 +536,7 @@ def _validate_query_evidence(  # noqa: PLR0911
             initial_evidence_digest=completed.initial_evidence,
             expanded_evidence_digest=completed.expanded_evidence,
             initial_request=expected_initial_request,
-            expanded_request=(
-                None
-                if completed.expanded_evidence is None
-                else _request_evidence(
-                    _show_all_request(parsed_initial.show_all_form, query)
-                )
-            ),
+            expanded_request=expected_expanded_request,
             source_references=parsed_final.references,
         ),
         digests=tuple(digests),

@@ -28,6 +28,7 @@ from yimby.domain import (
     CompleteSection,
     DiscoveryBatch,
     DiscoveryWindow,
+    DocumentRecord,
     EvidenceCapture,
     EvidenceDigest,
     RetainedNativeRecord,
@@ -1207,6 +1208,20 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
         }
     )
     normalised = arun.ArunAdapter().normalise(decided)
+    assert normalised.documents == (
+        DocumentRecord(
+            title="Decision notice",
+            url=decision.url,
+            category="Decision",
+            published_date=date(2026, 9, 15),
+        ),
+        DocumentRecord(
+            title="Plan",
+            url=plan.url,
+            category="Plan",
+            published_date=date(2026, 9, 14),
+        ),
+    )
     assert normalised.metadata.decision == "Application Permitted"
     assert [event.event_type for event in normalised.metadata.events] == [
         "decision-due",
@@ -1223,7 +1238,7 @@ def test_arun_fetch_retains_rich_document_metadata_without_attachment_bodies() -
         )
     )
     assert on_hold.status == "undecided-(on-hold)"
-    assert on_hold.normaliser_version == "arun-v5"
+    assert on_hold.normaliser_version == "arun-v6"
 
     without_locator = asyncio.run(
         arun.ArunAdapter().fetch(
@@ -1341,7 +1356,7 @@ def test_arun_v1_native_documents_remain_offline_rebuildable() -> None:
     rebuilt = ARUN_PACKAGE.rebuild(retained)
 
     assert rebuilt.documents[0].title == "Legacy plan"
-    assert rebuilt.normaliser_version == "arun-v5"
+    assert rebuilt.normaliser_version == "arun-v6"
     assert not _qualification_module()._native_evidence_agrees(
         retained,
         arun.ArunApplicationV1.model_validate_json(body),
@@ -1950,11 +1965,18 @@ def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
             "SELECT path FROM evidence WHERE digest = ?",
             (old_search_digest,),
         ).fetchone()[0]
-        for table in ("applications", "discovery_queue", "native_rebuild_inputs"):
-            connection.execute(
-                f"UPDATE {table} SET locator = ? WHERE reference = ?",  # noqa: S608
-                (alternate_locator, "BR/2/26/PL"),
-            )
+        connection.execute(
+            "UPDATE applications SET locator = ? WHERE reference = ?",
+            (alternate_locator, "BR/2/26/PL"),
+        )
+        connection.execute(
+            "UPDATE discovery_queue SET locator = ? WHERE reference = ?",
+            (alternate_locator, "BR/2/26/PL"),
+        )
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET locator = ? WHERE reference = ?",
+            (alternate_locator, "BR/2/26/PL"),
+        )
         connection.commit()
     (data_dir / "evidence" / evidence_path).write_bytes(
         gzip.compress(
@@ -2173,6 +2195,143 @@ def test_arun_qualification_rejects_checkpoint_request_tampering(
     error = json.loads(capsys.readouterr().err)
     assert error["error"] == "qualification-failed"
     assert "terminal-checkpoint" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "delete",
+        "query-key",
+        "page",
+        "response-url",
+        "request-url",
+        "request-method",
+        "request-form",
+    ],
+)
+def test_arun_qualification_rejects_persisted_discovery_subject_tampering(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+    mutation: str,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / mutation
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    assert (
+        module.main(
+            args,
+            session_factory=lambda: _Session(_QualificationResponder()),
+        )
+        == 0
+    )
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT payload_json FROM checkpoints WHERE authority_id = 'arun'"
+            ).fetchone()[0]
+        )
+        completed = payload["cursor"]["progress"]["completed"][0]
+        digest = completed["initial_evidence"]
+        query_key = completed["key"]
+        subject = (digest, query_key, 1)
+        assert (
+            connection.execute(
+                """
+            SELECT COUNT(*) FROM discovery_evidence
+            WHERE digest = ? AND query_key = ? AND page = ?
+            """,
+                subject,
+            ).fetchone()[0]
+            == 1
+        )
+        if mutation == "delete":
+            connection.execute(
+                """
+                DELETE FROM discovery_evidence
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        elif mutation == "query-key":
+            connection.execute(
+                """
+                UPDATE discovery_evidence SET query_key = 'tampered'
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        elif mutation == "page":
+            connection.execute(
+                """
+                UPDATE discovery_evidence SET page = 2
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        elif mutation == "response-url":
+            connection.execute(
+                """
+                UPDATE discovery_evidence
+                SET response_url = 'https://wrong.example/search'
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        elif mutation == "request-url":
+            connection.execute(
+                """
+                UPDATE discovery_evidence
+                SET request_url = 'https://wrong.example/search'
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        elif mutation == "request-method":
+            connection.execute(
+                """
+                UPDATE discovery_evidence SET request_method = 'GET'
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        else:
+            connection.execute(
+                """
+                UPDATE discovery_evidence SET request_form_json = '[]'
+                WHERE digest = ? AND query_key = ? AND page = ?
+                """,
+                subject,
+            )
+        connection.commit()
+
+    sessions: list[_Session] = []
+
+    def factory() -> _Session:
+        session = _Session(_QualificationResponder())
+        sessions.append(session)
+        return session
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "terminal-checkpoint" in error["failed_checks"]
+    assert "search-evidence-digests" in error["failed_checks"]
+    assert sessions
+    assert all(not session.requested_urls for session in sessions)
     assert receipt_path.read_text(encoding="utf-8") == original
 
 

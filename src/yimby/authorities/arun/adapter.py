@@ -790,7 +790,12 @@ class ArunAdapter:
             proposal=payload.proposal_text,
             status="-".join(payload.decision_status.casefold().split()),
             documents=tuple(
-                DocumentRecord(title=item.title, url=item.url)
+                DocumentRecord(
+                    title=item.title,
+                    url=item.url,
+                    category=item.document_type,
+                    published_date=item.published_date,
+                )
                 for item in payload.documents
             ),
             comments=(),
@@ -799,7 +804,7 @@ class ArunAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="arun-v5",
+            normaliser_version="arun-v6",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
                 decision=(
@@ -1115,7 +1120,7 @@ def _validated_detail_locator(locator: str, expected_reference: str) -> str:
     return resolved
 
 
-def _parse_reported_count(  # noqa: RET503
+def _parse_reported_count(
     soup: BeautifulSoup,
     text: str,
     reference_count: int,
@@ -1158,7 +1163,7 @@ def _parse_reported_count(  # noqa: RET503
         if reference_count >= _RESULT_CAP:
             raise ArunResultCapError
         return None
-    _raise_parse("reported result count")
+    return _raise_parse("reported result count")
 
 
 def _is_explicit_empty_result_page(
