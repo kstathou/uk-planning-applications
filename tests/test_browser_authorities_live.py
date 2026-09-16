@@ -1031,9 +1031,7 @@ def test_registry_statuses_remain_truthful() -> None:
         registry.manifest(AuthorityId("cheshire-east")).live_status.readiness.value
         == "blocked"
     )
-    assert (
-        registry.manifest(AuthorityId("cheshire-east")).live_status.transport is None
-    )
+    assert registry.manifest(AuthorityId("cheshire-east")).live_status.transport is None
     assert (
         registry.manifest(AuthorityId("haringey")).live_status.readiness.value
         == "browser-only"
