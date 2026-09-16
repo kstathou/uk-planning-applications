@@ -1236,13 +1236,10 @@ def _parse_comments(
             label in str(table.get("summary", "")).casefold() for label in count_labels
         )
     ]
-    if not tables:
-        if expected == 0:
-            return (), EmptySection()
-        _raise_parse(f"{category} comments table")
     comments = []
-    for table in tables:
-        for index, (values, row) in enumerate(_table_rows(table), start=1):
+    if tables:
+        rows = ((values, row) for table in tables for values, row in _table_rows(table))
+        for index, (values, row) in enumerate(rows, start=1):
             text = _mapping_value(
                 values,
                 "comment",
@@ -1266,8 +1263,46 @@ def _parse_comments(
                     category=category,
                 )
             )
+    else:
+        cards = soup.select("#comments > .comment")
+        if not cards:
+            if expected == 0:
+                return (), EmptySection()
+            _raise_parse(f"{category} comments table")
+        if category == "consultee" and not any(
+            card.select_one(".comment-text") for card in cards
+        ):
+            if expected == 0:
+                return (), EmptySection()
+            return (), UnavailableSection(
+                reason="consultee response text is not exposed by the portal"
+            )
+        for index, card in enumerate(cards, start=1):
+            text = _comment_card_text(card, category)
+            source_id = card.get("data-comment-id")
+            comment_id = (
+                str(source_id)
+                if isinstance(source_id, str) and source_id
+                else str(index)
+            )
+            comments.append(
+                BarnetCommentV1(
+                    comment_id=f"{category}-{comment_id}",
+                    text=text,
+                    category=category,
+                )
+            )
     _assert_count(f"{category} comments", expected, len(comments))
     return tuple(comments), collection_state(len(comments))
+
+
+def _comment_card_text(card: Tag, category: str) -> str:
+    content = card.select_one(".comment-text")
+    if isinstance(content, Tag):
+        text = content.get_text(" ", strip=True)
+        if text:
+            return text
+    return _raise_parse(f"{category} comment text")
 
 
 def _combined_comment_state(

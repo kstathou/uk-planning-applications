@@ -1102,25 +1102,43 @@ def test_barnet_parses_live_div_comment_layouts() -> None:
     assert public[0].comment_id == "public-1"
     assert public_state.kind == "complete"
 
-    consultee, consultee_state = barnet_adapter._parse_comments(
-        b'<h2>Consultee Comments (2)</h2><div id="comments">'
+    consultation_cards = (
+        b'<div id="comments">'
         b'<div class="comment"><h1>Trees &amp; Landscape</h1>'
         b'<div class="commentText"><h2>Consultation Date: 24/08/2026</h2></div>'
         b'</div><div class="comment"><h1>Ecology</h1>'
         b'<div class="commentText"><h2>Consultation Date: 25/08/2026</h2></div>'
-        b"</div></div>",
+        b"</div></div>"
+    )
+    consultee, consultee_state = barnet_adapter._parse_comments(
+        b"<h2>Consultee Comments (0)</h2>" + consultation_cards,
         "consultee",
         ("consultee comments", "consultee responses"),
     )
-    assert [comment.text for comment in consultee] == [
-        "Trees & Landscape Consultation Date: 24/08/2026",
-        "Ecology Consultation Date: 25/08/2026",
-    ]
-    assert [comment.comment_id for comment in consultee] == [
-        "consultee-1",
-        "consultee-2",
-    ]
-    assert consultee_state.kind == "complete"
+    assert consultee == ()
+    assert consultee_state.kind == "empty"
+
+    consultee, consultee_state = barnet_adapter._parse_comments(
+        b"<h2>Consultee Comments (1)</h2>" + consultation_cards,
+        "consultee",
+        ("consultee comments", "consultee responses"),
+    )
+    assert consultee == ()
+    assert consultee_state.kind == "unavailable"
+
+    for malformed_card in (
+        b'<div id="comments"><div class="comment"></div></div>',
+        (
+            b'<div id="comments"><div class="comment">'
+            b'<div class="comment-text"></div></div></div>'
+        ),
+    ):
+        with pytest.raises(BarnetParseError, match="public comment text"):
+            barnet_adapter._parse_comments(
+                b"<h2>Public Comments (1)</h2>" + malformed_card,
+                "public",
+                ("public comments", "neighbour comments"),
+            )
 
 
 def test_barnet_advanced_detail_redirect_boundaries() -> None:

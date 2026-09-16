@@ -119,3 +119,12 @@ active-appeal partitions were not reached, so this attempt cannot prove a live
 bootstrap. The safe resume target is
 `.yimby/qualification-barnet-2026-09-16` and must be reused with `--resume`
 only after the official portal recovers.
+
+The partial state also exposed Barnet's live card layout for comments. Public
+cards contain a distinct comment-body element plus separately displayed name
+and address fields. The adapter now retains only the comment body. Consultee
+cards without a response body are consultation metadata. A zero response badge
+is empty, while a positive badge without exposed response text is unavailable.
+The three stored pages that revealed this boundary parse offline as complete,
+empty, and unavailable. Their already committed failed observations remain
+failed until an official-source refresh collects them again.
