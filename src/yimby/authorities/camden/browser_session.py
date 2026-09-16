@@ -109,7 +109,7 @@ class CamdenVisibleChromeBoundary:
         self._playwright = playwright
         self._browser = browser
         self._context = context
-        self._page = page
+        self._pages = {_CHALLENGE_HOST: page}
 
     @classmethod
     async def create(cls) -> CamdenVisibleChromeBoundary:
@@ -137,10 +137,11 @@ class CamdenVisibleChromeBoundary:
     async def request(self, request: PortalRequest) -> CamdenBrowserPayload:
         """Navigate or submit an ordered hidden-field form and capture HTML."""
         raw_url = str(request.url)
+        page = await self._page_for(raw_url)
         if request.method == RequestMethod.POST:
-            response = await self._submit_form(request)
+            response = await self._submit_form(page, request)
         else:
-            response = await self._page.goto(raw_url, wait_until="domcontentloaded")
+            response = await page.goto(raw_url, wait_until="domcontentloaded")
         if response is None:
             raise _source_error(raw_url, "missing browser response")
         headers = await response.all_headers()
@@ -150,16 +151,16 @@ class CamdenVisibleChromeBoundary:
             and headers.get("cf-mitigated", "").casefold() == "challenge"
             and urlsplit(raw_url).hostname == _CHALLENGE_HOST
         ):
-            await self._page.wait_for_function(
+            await page.wait_for_function(
                 f"document.title !== {_CHALLENGE_TITLE!r}",
                 timeout=_CHALLENGE_TIMEOUT_MS,
             )
-            await self._page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_load_state("domcontentloaded")
             status = 200
-        body = (await self._page.content()).encode()
+        body = (await page.content()).encode()
         return CamdenBrowserPayload(
             status=status,
-            final_url=HttpUrl(self._page.url),
+            final_url=HttpUrl(page.url),
             body=body,
             media_type=headers.get("content-type", "text/html")
             .partition(";")[0]
@@ -168,14 +169,24 @@ class CamdenVisibleChromeBoundary:
             content_disposition=headers.get("content-disposition", ""),
         )
 
-    async def _submit_form(self, request: PortalRequest) -> Response | None:
+    async def _page_for(self, url: str) -> Page:
+        host = urlsplit(url).hostname or ""
+        page = self._pages.get(host)
+        if page is None:
+            page = await self._context.new_page()
+            self._pages[host] = page
+        return page
+
+    async def _submit_form(
+        self,
+        page: Page,
+        request: PortalRequest,
+    ) -> Response | None:
         fields = tuple(
             {"name": field.name, "value": field.value} for field in request.form
         )
-        async with self._page.expect_navigation(
-            wait_until="domcontentloaded"
-        ) as navigation:
-            await self._page.evaluate(
+        async with page.expect_navigation(wait_until="domcontentloaded") as navigation:
+            await page.evaluate(
                 """
                 ({url, fields}) => {
                   const form = document.createElement("form");
@@ -198,7 +209,8 @@ class CamdenVisibleChromeBoundary:
 
     async def aclose(self) -> None:
         """Close page, context, browser, and Playwright in ownership order."""
-        await self._page.close()
+        for page in self._pages.values():
+            await page.close()
         await self._context.close()
         await self._browser.close()
         await self._playwright.stop()

@@ -258,8 +258,13 @@ def test_camden_visible_chrome_launches_routes_submits_and_closes(  # noqa: PLR0
     page.evaluate = AsyncMock()
     page.expect_navigation.return_value = _Navigation(cast("Response", success))
     page.close = AsyncMock()
+    documents_page = MagicMock()
+    documents_page.url = "https://camdocs.camden.gov.uk/CMWebDrawer/PlanRec"
+    documents_page.goto = AsyncMock(return_value=success)
+    documents_page.content = AsyncMock(return_value="<html>documents</html>")
+    documents_page.close = AsyncMock()
     context = MagicMock()
-    context.new_page = AsyncMock(return_value=page)
+    context.new_page = AsyncMock(side_effect=(page, documents_page))
     context.route = AsyncMock()
     context.close = AsyncMock()
     browser = MagicMock()
@@ -297,6 +302,11 @@ def test_camden_visible_chrome_launches_routes_submits_and_closes(  # noqa: PLR0
         assert get_payload.media_type == "text/html"
         page.wait_for_function.assert_awaited_once()
 
+        documents_payload = await boundary.request(
+            _request("https://camdocs.camden.gov.uk/CMWebDrawer/PlanRec")
+        )
+        assert documents_payload.body == b"<html>documents</html>"
+
         challenge_script = _route("https://planningrecords.camden.gov.uk/script.js")
         await route_handler(challenge_script)
         challenge_script.continue_.assert_awaited_once()
@@ -316,8 +326,10 @@ def test_camden_visible_chrome_launches_routes_submits_and_closes(  # noqa: PLR0
 
     chromium.launch.assert_awaited_once_with(channel="chrome", headless=False)
     browser.new_context.assert_awaited_once_with(accept_downloads=False)
+    assert context.new_page.await_count == 2
     context.route.assert_awaited_once()
     page.close.assert_awaited_once()
+    documents_page.close.assert_awaited_once()
     context.close.assert_awaited_once()
     browser.close.assert_awaited_once()
     playwright.stop.assert_awaited_once()
