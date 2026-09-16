@@ -1,6 +1,6 @@
 # Pilot portal inventory
 
-This reference records the browser census taken on 15 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
+This reference records the browser census taken on 15–16 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
 
 | Authority | Observed sources | Portal shape | Browser result |
 |---|---|---|---|

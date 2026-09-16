@@ -3,8 +3,10 @@
 ## Decision
 
 Use the compact authority-owned design from the flow candidate, strengthened by
-the proof candidate's typed receipt constraints. The existing collector and
-SQLite schema remain unchanged.
+the proof candidate's typed receipt constraints. The existing collector
+boundary remains unchanged. A post-implementation provenance review required
+one narrow SQLite migration so each rebuild input preserves its capture URL and
+media type independently of content-addressed body deduplication.
 
 The live adapter will own:
 
@@ -33,7 +35,7 @@ Its versioned receipt must prove:
 - one normalised application for every discovered reference;
 - detail, document-metadata, and response evidence for every application;
 - no retry backlog, failed current section, unmapped record, missing evidence,
-  attachment-body attempt, or failed run;
+  digest-invalid evidence, attachment-body attempt, or failed run;
 - SQLite integrity; and
 - an unchanged immediate rerun with zero requests and zero transferred bytes.
 
@@ -60,3 +62,19 @@ document-index, and response captures remain the durable source evidence.
 - Runtime note: the requested custom architect profile was unavailable, so the
   generic-agent fallback was used; agent model identities are unverified and
   all conclusions require parent tests and live verification.
+
+## Post-review correction
+
+The first live receipt was rejected after independent review. Content-addressed
+bodies were stored safely, but rebuild inputs retained only digests, so identical
+document or response bodies could rehydrate the URL of the first application
+that stored that digest. A digest-equality exception in the qualification check
+masked that loss of provenance. The rejected dataset remains recoverable as
+`.yimby/qualification-opdc-2026-09-16.invalid-pre-evidence-fix/`.
+
+Migration 006 now preserves the ordered `(digest, source URL, media type)`
+association for each rebuild input while continuing to store each body once.
+Evidence reads recompute SHA-256 after decompression, qualification requires the
+three exact application URLs, and each completed search checkpoint carries its
+exact identity inventory. The canonical qualification directory was recreated
+from an empty target after these changes.

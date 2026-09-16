@@ -73,7 +73,8 @@ The receipt records:
 - 55 applications and 55 discovered references;
 - 55 native, application, document, and comment versions;
 - zero pending retries, failed sections, and unmapped records;
-- SQLite integrity `ok` and no missing evidence paths;
+- SQLite integrity `ok`, no missing evidence paths, and no digest-invalid
+  evidence among 103 content-addressed captures;
 - 168 allowed initial requests transferring 630,334 bytes;
 - zero attachment-body attempts; and
 - an unchanged immediate rerun with zero requests and zero transferred bytes.
@@ -81,7 +82,10 @@ The receipt records:
 Both collection runs completed with `succeeded` status. The terminal checkpoint
 contains the exact three-query inventory, each declared total, and the same 55
 source/reference/locator identities held by the durable queue and retained
-applications.
+applications. Each query's declared total is also tied to its retained identity
+inventory. Every application rebuild input preserves its own ordered detail,
+document-index, and response URL association even when response bodies have the
+same digest.
 
 ## Verification status
 
