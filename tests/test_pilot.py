@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -60,12 +62,14 @@ from yimby.transport import FixtureResponse, FixtureSession
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 WINDOW = DiscoveryWindow(
     start=date(2026, 8, 16),
     end=date(2026, 9, 15),
 )
+_OPDC_APPLICATION_COUNT = 55
+_OPDC_INITIAL_REQUESTS = 168
+_OPDC_EVIDENCE_PATH = "docs/evidence/opdc-qualification-2026-09-16.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +321,26 @@ def test_pilot_registry_ownership() -> None:
         AuthorityId("cornwall"),
         AuthorityId("durham"),
         AuthorityId("west-suffolk"),
+    )
+
+
+def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
+    """Live-ready proof remains reviewable without ignored local state."""
+    receipt_path = Path(__file__).parents[1] / _OPDC_EVIDENCE_PATH
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    manifest = pilot_registry().manifest(AuthorityId("opdc"))
+
+    assert "identities" not in receipt
+    assert receipt["counts"]["applications"] == _OPDC_APPLICATION_COUNT
+    assert receipt["costs"]["initial"]["request_count"] == _OPDC_INITIAL_REQUESTS
+    assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
+    assert receipt["costs"]["rerun"]["request_count"] == 0
+    assert all(check["ok"] for check in receipt["checks"])
+    assert "authority-readiness" in {
+        check["name"] for check in receipt["checks"]
+    }
+    assert manifest.live_status.evidence == (
+        f"{_OPDC_EVIDENCE_PATH} records 55 complete applications",
     )
 
 
