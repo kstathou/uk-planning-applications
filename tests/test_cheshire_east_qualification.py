@@ -1,7 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: D103, E501, PLR2004, SLF001
-
-"""Cheshire East's official blocker and reliable source contracts."""
+# ruff: noqa: D100, D103, E501, PLR2004
 
 from __future__ import annotations
 
@@ -338,6 +336,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'name="valid_date_from" value=""',
             b'name="valid_date_from" value="" disabled',
         ),
+        _search_form().replace(b'type="hidden" name="fa"', b'type="submit" name="fa"'),
         _search_form().replace(
             b'<textarea name="proposal">House</textarea>',
             b'<textarea name="proposal">House</textarea>'
@@ -760,6 +759,7 @@ def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
 
 def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
     tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     module = _qualification_module()
     data_dir = tmp_path / "qualification"
@@ -791,6 +791,7 @@ def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
         "official-search-form-unavailable",
     )
     assert receipt.evidence[0].media_type == "application/xhtml+xml"
+    capsys.readouterr()
 
     def forbidden_factory() -> _QualificationSession:
         message = "offline resume constructed a portal session"
@@ -804,6 +805,29 @@ def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
         )
         == 1
     )
+    capsys.readouterr()
+
+    payload = json.loads(
+        (data_dir / "cheshire-east-qualification-blocker-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    payload["evidence"][0]["media_type"] = "application/pdf"
+    (data_dir / "cheshire-east-qualification-blocker-v2.json").write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=forbidden_factory,
+            now=lambda: datetime(2026, 9, 16, 9, 2, tzinfo=UTC),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert '"error": "runtime-failure"' in captured.err
 
 
 @pytest.mark.parametrize(
@@ -902,13 +926,20 @@ def test_cheshire_qualification_does_not_hide_programming_defects(
             b'name="valid_date_from" value=""',
             b'name="valid_date_from" value="" disabled',
         ),
+        _search_form().replace(b'type="hidden" name="fa"', b'type="submit" name="fa"'),
         _search_form().replace(
             b'<textarea name="proposal">House</textarea>',
             b'<textarea name="proposal">House</textarea>'
             b'<input name="proposal" value="Other">',
         ),
     ],
-    ids=("method", "discriminator", "disabled-date", "duplicate-successful-name"),
+    ids=(
+        "method",
+        "discriminator",
+        "disabled-date",
+        "non-successful-required",
+        "duplicate-successful-name",
+    ),
 )
 def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
     tmp_path: Path,

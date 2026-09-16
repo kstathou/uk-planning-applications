@@ -154,7 +154,6 @@ class _CheshireResponder:
 
 
 def test_cheshire_live_discovery_stops_before_source_io() -> None:
-    """An unproved source inventory cannot create partial durable work."""
     responder = _CheshireResponder()
     session = _HttpSession(responder)
     adapter = cheshire.CheshireEastAdapter()
