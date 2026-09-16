@@ -1234,6 +1234,59 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             resumable_first_page,
         )
 
+    locator_checkpoint = legacy_active.model_copy(
+        update={
+            "active_query_references": ("A",),
+            "seen_locators": ("KEY-OLD",),
+            "tracks_locators": True,
+        }
+    )
+    changed_locator_page = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            (("A", "KEY-NEW"),),
+            ("Showing 1-1 of 2",),
+        )
+    )
+    with pytest.raises(BarnetParseError, match="resumed search result identity"):
+        barnet_adapter._restore_query_progress(
+            locator_checkpoint,
+            active_page.query_key,
+            (changed_locator_page,),
+        )
+
+    page_three_checkpoint = BarnetCheckpointV1(
+        cursor="live",
+        active_query=active_page.query_key,
+        next_page=3,
+        query_row_count=2,
+        query_reported_count=3,
+        active_query_references=("A", "B"),
+        seen_references=("A", "B"),
+        seen_locators=("KEY-A", "KEY-B"),
+        tracks_locators=True,
+    )
+    prior_pages = (
+        barnet_adapter._parse_search_page(
+            _showing_result_page(
+                (("A", "KEY-A"),),
+                ("Showing 1-1 of 3",),
+            )
+        ),
+        barnet_adapter._parse_search_page(
+            _showing_result_page(
+                (("C", "KEY-C"),),
+                ("Showing 2-2 of 3",),
+                current_page="2",
+            )
+        ),
+    )
+    with pytest.raises(BarnetParseError, match="resumed search result identity"):
+        barnet_adapter._restore_query_progress(
+            page_three_checkpoint,
+            active_page.query_key,
+            prior_pages,
+        )
+
     conflicting_identity = barnet_adapter._parse_search_page(
         _result_page((("A", "OTHER-KEY"),), count=1)
     )
@@ -1323,6 +1376,14 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
                 (("A", "KEY"),),
                 ("Showing 1-1 of 2",),
                 numbered_page=2,
+            )
+        )
+    with pytest.raises(BarnetParseError, match="reported result count"):
+        barnet_adapter._parse_search_page(
+            b'<div data-result-count="1"></div>'
+            + _showing_result_page(
+                (("A", "KEY"),),
+                ("Showing 1-1 of 1", "Showing 1-1 of 2"),
             )
         )
 
