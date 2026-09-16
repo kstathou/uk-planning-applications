@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 from datetime import UTC, date, datetime, timedelta
 from email.utils import format_datetime
@@ -56,7 +57,6 @@ from yimby.orchestration import (
     CollectionOrchestrator,
     LiveSessionFactory,
     ProcessLock,
-    _process_alive,
 )
 from yimby.pilot_fixtures import FIXTURE_BUILDERS
 from yimby.registry import AuthorityRegistry, pilot_registry
@@ -70,6 +70,8 @@ from yimby.transport import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from playwright.async_api import Browser, BrowserContext, Playwright
 
     from yimby.dashboard_app import DashboardSurface
@@ -215,6 +217,108 @@ def test_http_session_cookies_accounting_and_secret_redaction() -> None:
     assert session.attachment_body_requests == 0
     assert session.browser_time_ms == 0
     assert session.mode == TransportMode.LIVE
+
+
+def test_shared_host_limiter_covers_stream_consumption() -> None:
+    """A second session cannot enter a host while the first body is streaming."""
+
+    async def exercise() -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        maximum = 0
+        requests = 0
+
+        class GatedStream(httpx.AsyncByteStream):
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                nonlocal active, maximum
+                active += 1
+                maximum = max(maximum, active)
+                started.set()
+                try:
+                    await release.wait()
+                    yield b"complete"
+                finally:
+                    active -= 1
+
+        async def handler(_request: httpx.Request) -> httpx.Response:
+            nonlocal requests
+            requests += 1
+            return httpx.Response(200, stream=GatedStream())
+
+        limiter = HostRateLimiter(0)
+        transport = httpx.MockTransport(handler)
+        first = HttpxPortalSession(
+            client=httpx.AsyncClient(transport=transport), limiter=limiter
+        )
+        second = HttpxPortalSession(
+            client=httpx.AsyncClient(transport=transport), limiter=limiter
+        )
+        first_task = asyncio.create_task(first.fetch(_request("https://same.test/a")))
+        await started.wait()
+        second_task = asyncio.create_task(second.fetch(_request("https://same.test/b")))
+        await asyncio.sleep(0)
+        assert requests == 1
+        assert maximum == 1
+        release.set()
+        results = await asyncio.gather(first_task, second_task)
+        assert [result.body for result in results] == [b"complete", b"complete"]
+        assert requests == 2
+        assert maximum == 1
+        await first.aclose()
+        await second.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_retry_after_cooldown_is_shared_by_host() -> None:
+    """A Retry-After delay blocks peer sessions using the same host limiter."""
+
+    async def exercise() -> None:
+        cooldown_started = asyncio.Event()
+        release_cooldown = asyncio.Event()
+        paths: list[str] = []
+        limited_attempts = 0
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal limited_attempts
+            paths.append(request.url.path)
+            if request.url.path == "/limited":
+                limited_attempts += 1
+                if limited_attempts == 1:
+                    return httpx.Response(429, headers={"retry-after": "3"})
+            return httpx.Response(200, content=b"ok")
+
+        async def cooldown(delay: float) -> None:
+            assert delay == 3
+            cooldown_started.set()
+            await release_cooldown.wait()
+
+        limiter = HostRateLimiter(0)
+        transport = httpx.MockTransport(handler)
+        limited = HttpxPortalSession(
+            client=httpx.AsyncClient(transport=transport),
+            limiter=limiter,
+            sleep=cooldown,
+        )
+        peer = HttpxPortalSession(
+            client=httpx.AsyncClient(transport=transport), limiter=limiter
+        )
+        limited_task = asyncio.create_task(
+            limited.fetch(_request("https://same.test/limited"))
+        )
+        await cooldown_started.wait()
+        peer_task = asyncio.create_task(peer.fetch(_request("https://same.test/peer")))
+        await asyncio.sleep(0)
+        assert paths == ["/limited"]
+        release_cooldown.set()
+        await asyncio.gather(limited_task, peer_task)
+        assert paths[0] == "/limited"
+        assert set(paths[1:]) == {"/limited", "/peer"}
+        await limited.aclose()
+        await peer.aclose()
+
+    asyncio.run(exercise())
 
 
 def test_http_session_default_client_identifies_the_collector() -> None:
@@ -623,49 +727,49 @@ def test_playwright_production_boundary_lifecycle(
     assert created_boundary.closed
 
 
-def test_process_lock_recovers_stale_owner_and_rejects_overlap(tmp_path: Path) -> None:
-    """Only live PID ownership blocks collection; stale files are resumed."""
+def test_process_lock_uses_kernel_ownership_and_fails_closed(tmp_path: Path) -> None:
+    """Kernel ownership serialises callers even during malformed PID writes."""
     lock_path = tmp_path / "collection.lock"
     with ProcessLock(lock_path):
         assert lock_path.read_text().strip() == str(os.getpid())
         with pytest.raises(CollectionAlreadyRunningError, match="pid"):
             with ProcessLock(lock_path):
                 pass
-    assert not lock_path.exists()
+    assert lock_path.read_text() == ""
 
-    lock_path.write_text("999999")
-    with ProcessLock(lock_path, process_alive=lambda _pid: False):
-        assert lock_path.exists()
     lock_path.write_text("invalid")
-    with ProcessLock(lock_path, process_alive=lambda _pid: True):
-        assert lock_path.exists()
+    with ProcessLock(lock_path):
+        assert lock_path.read_text().strip() == str(os.getpid())
 
     unheld = ProcessLock(lock_path)
     unheld.__exit__(None, None, None)
 
-    lock_path.write_text("999999")
-    racing = ProcessLock(lock_path, process_alive=lambda _pid: False)
-    racing._create = MagicMock(side_effect=FileExistsError)  # type: ignore[method-assign]
-    with pytest.raises(CollectionAlreadyRunningError, match="concurrently"):
-        racing.__enter__()
+    descriptor = os.open(lock_path, os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    os.ftruncate(descriptor, 0)
+    os.write(descriptor, b"invalid")
+    try:
+        with pytest.raises(CollectionAlreadyRunningError, match="concurrently"):
+            with ProcessLock(lock_path):
+                pass
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
-def test_process_liveness_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """PID probes distinguish absent, inaccessible, and live processes."""
-    monkeypatch.setattr("os.kill", lambda _pid, _signal: None)
-    assert _process_alive(1)
-
-    def missing(_pid: int, _signal: int) -> None:
-        raise ProcessLookupError
-
-    monkeypatch.setattr("os.kill", missing)
-    assert not _process_alive(1)
-
-    def inaccessible(_pid: int, _signal: int) -> None:
-        raise PermissionError
-
-    monkeypatch.setattr("os.kill", inaccessible)
-    assert _process_alive(1)
+def test_process_lock_releases_after_pid_write_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed diagnostic write cannot strand the advisory lock."""
+    lock_path = tmp_path / "collection.lock"
+    original_write = os.write
+    monkeypatch.setattr("os.write", MagicMock(side_effect=OSError("write failed")))
+    with pytest.raises(OSError, match="write failed"):
+        with ProcessLock(lock_path):
+            pass
+    monkeypatch.setattr("os.write", original_write)
+    with ProcessLock(lock_path):
+        assert lock_path.read_text().strip() == str(os.getpid())
 
 
 class _CloseFailureSession:
@@ -1022,18 +1126,18 @@ def test_cli_streamlit_launch_and_overlap_error(
     assert cli_main(("--data-dir", str(tmp_path), "dashboard")) == 9
 
     lock = tmp_path / "collection.lock"
-    lock.write_text(str(os.getpid()))
-    assert (
-        cli_main(
-            (
-                "--data-dir",
-                str(tmp_path),
-                "sync",
-                "--authority",
-                "barnet",
-                "--fixture",
+    with ProcessLock(lock):
+        assert (
+            cli_main(
+                (
+                    "--data-dir",
+                    str(tmp_path),
+                    "sync",
+                    "--authority",
+                    "barnet",
+                    "--fixture",
+                )
             )
+            == 2
         )
-        == 2
-    )
     assert "collection already running" in capsys.readouterr().err

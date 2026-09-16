@@ -712,14 +712,30 @@ def _search_page_mock(*, malformed_route: bool = False) -> MagicMock:
     page.wait_for_url = AsyncMock()
     page.wait_for_function = AsyncMock()
     page.content = AsyncMock(return_value="<html>rendered search</html>")
-    button = MagicMock()
-    button.click = AsyncMock()
+    selection_order: list[str] = []
+    register_button = MagicMock()
+    register_button.click = AsyncMock(
+        side_effect=lambda: selection_order.append("register")
+    )
+    quick_link_button = MagicMock()
+    quick_link_button.click = AsyncMock(
+        side_effect=lambda: selection_order.append("quick-link")
+    )
     next_set = MagicMock()
     next_set.count = AsyncMock(return_value=1)
     next_set.click = AsyncMock()
-    page.get_by_role.side_effect = lambda role, **_kwargs: (
-        button if role == "button" else next_set
-    )
+
+    def role(role_name: str, **kwargs: Any) -> MagicMock:
+        if role_name != "button":
+            return next_set
+        if kwargs.get("name") == "Haringey Public Register":
+            return register_button
+        return quick_link_button
+
+    page.get_by_role.side_effect = role
+    page.selection_order = selection_order
+    page.register_button = register_button
+    page.quick_link_button = quick_link_button
     result_count = MagicMock()
     result_count.inner_text = AsyncMock(
         side_effect=("Showing 1 to 10 of 11 results", "Showing 11 to 11 of 11 results")
@@ -756,6 +772,9 @@ def test_haringey_page_object_uses_recorded_search_selectors() -> None:
     assert result.page_number == 2
     assert result.reported_result_count == 11
     assert result.hits[0].record_id == "a0iP00000011"
+    assert page.selection_order == ["register", "quick-link"]
+    page.register_button.click.assert_awaited_once_with()
+    page.quick_link_button.click.assert_awaited_once_with()
     page.get_by_role.assert_any_call(
         "button", name="Haringey Public Register", exact=True
     )
@@ -826,6 +845,7 @@ def test_haringey_page_object_opens_only_recorded_child_tabs() -> None:
     page.get_by_role.assert_any_call("tab", name="Comments", exact=True)
     page.get_by_role.assert_any_call("tab", name="Files", exact=True)
     page.get_by_text.assert_called_once_with("There are no comments.", exact=True)
+    page.get_by_text.return_value.wait_for.assert_awaited_once_with()
     assert all(
         "download" not in call.kwargs.get("name", "").casefold()
         for call in page.get_by_role.mock_calls

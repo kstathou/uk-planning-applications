@@ -5,17 +5,32 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
 
-from yimby.cli import main
+from yimby.cli import _collection_window, main
 from yimby.evidence import EvidenceStore
 from yimby.store import SqliteStore
 
 PILOT_AUTHORITY_COUNT = 15
 ERROR_EXIT = 2
 UNAVAILABLE_EXIT = 1
+WINDOW_DAYS = 30
+
+
+def test_collection_window_uses_inclusive_day_count() -> None:
+    """Thirty requested days contain thirty dates, including the end date."""
+    window = _collection_window(
+        WINDOW_DAYS,
+        include_open=True,
+        end=date(2026, 9, 16),
+    )
+    assert window.start == date(2026, 8, 18)
+    assert window.end == date(2026, 9, 16)
+    assert (window.end - window.start).days + 1 == WINDOW_DAYS
+    assert window.include_open
 
 
 def _args(data_dir: Path, *command: str) -> list[str]:

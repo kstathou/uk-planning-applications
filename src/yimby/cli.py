@@ -8,7 +8,7 @@ import argparse
 import asyncio
 import json
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -159,11 +159,7 @@ def _dispatch(
         days = args.days if args.command == "bootstrap" else 30
         include_open = args.include_open if args.command == "bootstrap" else True
         end = datetime.now(UTC).date()
-        window = DiscoveryWindow(
-            start=end - timedelta(days=days),
-            end=end,
-            include_open=include_open,
-        )
+        window = _collection_window(days, include_open=include_open, end=end)
         reports = asyncio.run(
             _collect_authorities(
                 registry,
@@ -220,6 +216,15 @@ def _dispatch(
         _write_json(doctor_report.model_dump(mode="json"))
         exit_code = 0 if doctor_report.ok else 1
     return exit_code
+
+
+def _collection_window(days: int, *, include_open: bool, end: date) -> DiscoveryWindow:
+    """Build an inclusive window containing exactly the requested date count."""
+    return DiscoveryWindow(
+        start=end - timedelta(days=days - 1),
+        end=end,
+        include_open=include_open,
+    )
 
 
 async def _collect_authorities(

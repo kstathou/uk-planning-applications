@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import os
 from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Self
@@ -38,54 +39,36 @@ class CollectionAlreadyRunningError(RuntimeError):
 
 
 class ProcessLock:
-    """Exclusive PID lock that recovers from a conclusively stale owner."""
+    """Kernel-owned advisory lock with a diagnostic PID file."""
 
-    def __init__(
-        self,
-        path: Path,
-        *,
-        process_alive: Callable[[int], bool] | None = None,
-    ) -> None:
-        """Configure a PID file and injectable liveness probe."""
+    def __init__(self, path: Path) -> None:
+        """Configure the persistent file used for advisory locking."""
         self._path = path
-        self._process_alive = process_alive or _process_alive
-        self._held = False
+        self._descriptor: int | None = None
 
     def __enter__(self) -> Self:
-        """Acquire the lock, replacing only a stale PID file."""
+        """Acquire the kernel lock and publish this process identifier."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            self._create()
-        except FileExistsError:
-            owner = self._read_owner()
-            if owner is not None and self._process_alive(owner):
-                raise _owned_lock_error(owner) from None
-            self._path.unlink(missing_ok=True)
-            try:
-                self._create()
-            except FileExistsError as error:
-                raise _concurrent_lock_error() from error
-        self._held = True
-        return self
-
-    def _create(self) -> None:
-        descriptor = os.open(
-            self._path,
-            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            0o600,
-        )
-        try:
-            os.write(descriptor, f"{os.getpid()}\n".encode())
-        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            owner = _read_owner(descriptor)
             os.close(descriptor)
-
-    def _read_owner(self) -> int | None:
+            if owner is not None:
+                raise _owned_lock_error(owner) from None
+            raise _concurrent_lock_error() from error
         try:
-            value = self._path.read_text().strip()
-            owner = int(value)
-        except (OSError, ValueError):
-            return None
-        return owner if owner > 0 else None
+            os.ftruncate(descriptor, 0)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.write(descriptor, f"{os.getpid()}\n".encode())
+            os.fsync(descriptor)
+        except BaseException:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+            raise
+        self._descriptor = descriptor
+        return self
 
     def __exit__(
         self,
@@ -94,9 +77,16 @@ class ProcessLock:
         traceback: TracebackType | None,
     ) -> None:
         """Release a lock owned by this context."""
-        if self._held:
-            self._path.unlink(missing_ok=True)
-            self._held = False
+        descriptor = self._descriptor
+        if descriptor is None:
+            return
+        try:
+            os.ftruncate(descriptor, 0)
+            os.fsync(descriptor)
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+            self._descriptor = None
 
 
 class LiveSessionFactory:
@@ -213,14 +203,14 @@ class CollectionOrchestrator:
             return result
 
 
-def _process_alive(pid: int) -> bool:
+def _read_owner(descriptor: int) -> int | None:
+    """Read only a valid positive PID from a contended lock file."""
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        owner = int(os.read(descriptor, 64).decode().strip())
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    return owner if owner > 0 else None
 
 
 def _owned_lock_error(owner: int) -> CollectionAlreadyRunningError:

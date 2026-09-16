@@ -62,11 +62,13 @@ result with their recorded reason. The implementation must not promote an
 authority to `live-ready` until its real adapter completes collection and agrees
 with the dated browser walkthrough.
 
-One process lock prevents overlapping collection commands. A stale lock is
-recovered only when its recorded process is no longer alive. One orchestration
+One kernel-owned advisory lock prevents overlapping collection commands. Its
+persistent file contains a PID only while the lock is held, and the operating
+system releases ownership after a process exits or crashes. One orchestration
 allows at most four authority tasks, one browser worker, one in-flight request
-per host, and at least two seconds between requests to the same host. Live HTTP
-sessions retain cookies, use bounded retries, and honour `Retry-After`.
+per host, and at least two seconds between completed requests to the same host.
+Live HTTP sessions retain cookies, use bounded retries, and apply
+`Retry-After` across every session sharing that host limiter.
 
 The Barnet adapter also has an opt-in, bounded smoke that persists a non-secret
 checkpoint after every result page:

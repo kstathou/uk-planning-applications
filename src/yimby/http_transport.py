@@ -140,19 +140,11 @@ class HttpxPortalSession:
         if _is_attachment_path(split.path):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
-        response = await self._send_with_retries(
+        body, media_type = await self._read_with_retries(
             request,
             raw_url,
             split.hostname or "",
         )
-        if _is_attachment_response(response):
-            self._attachment_body_requests += 1
-            await response.aclose()
-            raise _attachment_error(split.hostname)
-        body = await response.aread()
-        media_type = response.headers.get("content-type", "application/octet-stream")
-        media_type = media_type.partition(";")[0].strip().lower()
-        await response.aclose()
         self._requested_urls.append(_safe_url(raw_url))
         self._transferred_bytes += len(body)
         return EvidenceCapture(
@@ -162,12 +154,13 @@ class HttpxPortalSession:
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
 
-    async def _send_with_retries(
+    async def _read_with_retries(
         self,
         portal_request: PortalRequest,
         url: str,
         host: str,
-    ) -> httpx.Response:
+    ) -> tuple[bytes, str]:
+        """Hold the shared host slot through body reads and retry cooldowns."""
         last_status: int | None = None
         safe_url = _safe_url(url)
         form = [(field.name, field.value) for field in portal_request.form]
@@ -178,35 +171,51 @@ class HttpxPortalSession:
         for attempt in range(1, self._max_attempts + 1):
             try:
                 async with self._limiter.turn(host):
-                    response = await self._client.send(
-                        self._client.build_request(
-                            portal_request.method,
-                            url,
-                            content=encoded_form,
-                            headers=headers,
-                        ),
-                        stream=True,
-                    )
+                    response: httpx.Response | None = None
+                    try:
+                        response = await self._client.send(
+                            self._client.build_request(
+                                portal_request.method,
+                                url,
+                                content=encoded_form,
+                                headers=headers,
+                            ),
+                            stream=True,
+                        )
+                        last_status = response.status_code
+                        if (
+                            response.status_code in _RETRYABLE_STATUS
+                            and attempt < self._max_attempts
+                        ):
+                            retry_after = _retry_after_seconds(
+                                response.headers.get("retry-after"), self._now()
+                            )
+                            await response.aclose()
+                            response = None
+                            await self._sleep(
+                                retry_after
+                                if retry_after is not None
+                                else _backoff(attempt)
+                            )
+                            continue
+                        if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
+                            raise _status_error(safe_url, response.status_code)
+                        if _is_attachment_response(response):
+                            self._attachment_body_requests += 1
+                            raise _attachment_error(host)
+                        body = await response.aread()
+                        media_type = response.headers.get(
+                            "content-type", "application/octet-stream"
+                        )
+                        return body, media_type.partition(";")[0].strip().lower()
+                    finally:
+                        if response is not None:
+                            await response.aclose()
             except httpx.TransportError as error:
                 if attempt == self._max_attempts:
                     raise _attempts_error(safe_url, attempt) from error
                 await self._sleep(_backoff(attempt))
                 continue
-            last_status = response.status_code
-            if response.status_code in _RETRYABLE_STATUS:
-                retry_after = _retry_after_seconds(
-                    response.headers.get("retry-after"), self._now()
-                )
-                await response.aclose()
-                if attempt < self._max_attempts:
-                    await self._sleep(
-                        retry_after if retry_after is not None else _backoff(attempt)
-                    )
-                    continue
-            if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
-                await response.aclose()
-                raise _status_error(safe_url, response.status_code)
-            return response
         raise _status_error(safe_url, last_status)  # pragma: no cover
 
     @property
