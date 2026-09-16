@@ -758,7 +758,7 @@ def _parse_live_detail(
         recno=locator,
         status=_nonempty_value(details, "Status"),
         application_type=_nonempty_value(details, "Type"),
-        proposal=_nonempty_value(details, "Proposal"),
+        proposal=details["Proposal"],
         validated_date=_parse_dorset_date(_nonempty_value(details, "Valid Date")),
         decision=details["Decision"] or None,
         authority=authority,
