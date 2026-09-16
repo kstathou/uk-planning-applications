@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib.util
 import json
 import sqlite3
@@ -16,8 +17,18 @@ from urllib.parse import parse_qsl
 
 import httpx
 import pytest
+from pydantic import ValidationError
 
 import yimby.authorities.barnet.adapter as barnet_adapter
+import yimby.authorities.barnet.blocker as barnet_blocker
+from yimby.authorities.barnet.blocker import (
+    BarnetBlockerCounts,
+    BarnetBlockerScope,
+    BarnetQualificationBlockerV1,
+    PendingBarnetCycle,
+    derive_barnet_blocker,
+    load_barnet_blocker,
+)
 from yimby.domain import AuthorityId
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
@@ -197,6 +208,22 @@ class _RateLimitedSummaryMock(_BarnetQualificationMock):
         return super().__call__(request)
 
 
+class _RateLimitedAfterOneSummaryMock(_BarnetQualificationMock):
+    def __init__(self) -> None:
+        super().__init__()
+        self.summaries = 0
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if (
+            request.url.path.endswith("/applicationDetails.do")
+            and request.url.params["activeTab"] == "summary"
+        ):
+            self.summaries += 1
+            if self.summaries == 2:
+                return httpx.Response(429)
+        return super().__call__(request)
+
+
 class _QualificationSession(HttpxPortalSession):
     def __init__(self, mock: _BarnetQualificationMock) -> None:
         super().__init__(
@@ -302,6 +329,198 @@ def test_barnet_qualification_uses_cautious_live_transport() -> None:
         assert session._max_attempts == 1
     finally:
         asyncio.run(session.aclose())
+
+
+def test_barnet_blocker_artifact_is_state_bound_sanitized_and_strict(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "blocked"
+    mock = _RateLimitedAfterOneSummaryMock()
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(mock)
+        sessions.append(session)
+        return session
+
+    assert module.main(_args(data_dir), session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err)["error"] == "source-unavailable"
+    artifact = derive_barnet_blocker(
+        data_dir,
+        official_http_429_confirmed=True,
+    )
+    assert artifact.status == "blocked"
+    assert artifact.counts.requests == len(sessions[0].requested_urls)
+    assert artifact.counts.discovered_references == len(mock.references)
+    assert artifact.counts.persisted_applications == 1
+    assert artifact.counts.pending_retries == 1
+    assert artifact.receipt_present is False
+    assert artifact.sqlite_integrity == "ok"
+    assert [cycle.ordinal for cycle in artifact.later_cycles] == [1, 2]
+
+    serialized = artifact.model_dump_json()
+    assert all(identity not in serialized for identity in mock.references)
+    assert all(locator not in serialized for locator in mock.references.values())
+    artifact_path = tmp_path / "artifact.json"
+    artifact_path.write_text(serialized, encoding="utf-8")
+    assert load_barnet_blocker(artifact_path) == artifact
+
+    committed_path = (
+        Path(__file__).parents[1]
+        / "docs"
+        / "evidence"
+        / "barnet-qualification-blocker-2026-09-16.json"
+    )
+    committed_text = committed_path.read_text(encoding="utf-8")
+    committed = load_barnet_blocker(committed_path)
+    assert committed.counts == BarnetBlockerCounts(
+        requests=26,
+        discovered_references=10,
+        persisted_applications=6,
+        evidence_records=24,
+        pending_retries=1,
+    )
+    assert committed.scope == BarnetBlockerScope(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=True,
+    )
+    assert "keyVal" not in committed_text
+    assert all(
+        marker not in committed_text.casefold()
+        for marker in ("csrf", "cookie", "<html", "applicationdetails.do?")
+    )
+
+    payload = artifact.model_dump()
+    with pytest.raises(ValidationError):
+        BarnetQualificationBlockerV1.model_validate({**payload, "schema_version": "1"})
+    with pytest.raises(ValidationError):
+        BarnetQualificationBlockerV1.model_validate({**payload, "unexpected": True})
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        BarnetQualificationBlockerV1.model_validate(
+            {**payload, "observed_at": artifact.observed_at.replace(tzinfo=None)}
+        )
+    with pytest.raises(ValidationError, match="scope end"):
+        BarnetQualificationBlockerV1.model_validate(
+            {**payload, "observed_at": artifact.observed_at + timedelta(days=1)}
+        )
+    with pytest.raises(ValidationError, match="exceed discovered"):
+        BarnetQualificationBlockerV1.model_validate(
+            {
+                **payload,
+                "counts": {
+                    **artifact.counts.model_dump(),
+                    "persisted_applications": (
+                        artifact.counts.discovered_references + 1
+                    ),
+                },
+            }
+        )
+    with pytest.raises(ValidationError, match="both later cycles"):
+        BarnetQualificationBlockerV1.model_validate(
+            {
+                **payload,
+                "later_cycles": (
+                    PendingBarnetCycle(ordinal=1),
+                    PendingBarnetCycle(ordinal=1),
+                ),
+            }
+        )
+    with pytest.raises(ValidationError, match="exactly 30 days"):
+        BarnetBlockerScope(
+            start=date(2026, 8, 19),
+            end=date(2026, 9, 16),
+            include_open=True,
+        )
+
+
+def test_barnet_blocker_derivation_rejects_unverified_or_corrupt_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "blocked"
+    mock = _RateLimitedAfterOneSummaryMock()
+
+    assert (
+        module.main(
+            _args(data_dir),
+            session_factory=lambda: _QualificationSession(mock),
+        )
+        == 1
+    )
+    capsys.readouterr()
+
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="confirmation-required",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=False)
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="qualification-database-required",
+    ):
+        derive_barnet_blocker(
+            tmp_path / "missing",
+            official_http_429_confirmed=True,
+        )
+    (data_dir / "barnet-qualification-v1.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="receipt-must-be-absent",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    (data_dir / "barnet-qualification-v1.json").unlink()
+
+    database = data_dir / "yimby.sqlite3"
+    with closing(sqlite3.connect(database)) as connection:
+        original_checkpoint = connection.execute(
+            "SELECT payload_json FROM checkpoints WHERE authority_id = 'barnet'"
+        ).fetchone()[0]
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = '{invalid' "
+            "WHERE authority_id = 'barnet'"
+        )
+        connection.commit()
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="checkpoint-invalid",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'barnet'",
+            (original_checkpoint,),
+        )
+        evidence_path = connection.execute(
+            "SELECT path FROM evidence ORDER BY digest LIMIT 1"
+        ).fetchone()[0]
+        connection.commit()
+
+    retained_path = data_dir / "evidence" / evidence_path
+    retained_body = retained_path.read_bytes()
+    retained_path.write_bytes(b"not-gzip")
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="retained-evidence-invalid",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    retained_path.write_bytes(gzip.compress(b"different", mtime=0))
+    with pytest.raises(
+        barnet_blocker.BarnetBlockerEvidenceError,
+        match="digest-mismatch",
+    ):
+        derive_barnet_blocker(data_dir, official_http_429_confirmed=True)
+    retained_path.write_bytes(retained_body)
+    assert (
+        derive_barnet_blocker(
+            data_dir,
+            official_http_429_confirmed=True,
+        ).blocker.code
+        == "official-http-429"
+    )
 
 
 def test_barnet_qualification_persists_complete_typed_receipt(

@@ -52,8 +52,10 @@ def _status(
 PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     AuthorityId("barnet"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "weekly live collection is bounded but older-open enumeration is unresolved",
-        "captured weekly IDOX request and detail-tab contracts",
+        "older-open discovery is implemented; the live bootstrap remains incomplete "
+        "because the official portal returned HTTP 429",
+        "captured exact-scope weekly, received-date, older-open, active-appeal, "
+        "detail-tab, and sanitized blocker evidence",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("camden"): _status(

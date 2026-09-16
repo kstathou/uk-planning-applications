@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "authority_id": "barnet",
+  "status": "blocked",
+  "observed_at": "2026-09-16T09:15:40.866259Z",
+  "scope": {
+    "start": "2026-08-18",
+    "end": "2026-09-16",
+    "include_open": true
+  },
+  "counts": {
+    "requests": 26,
+    "discovered_references": 10,
+    "persisted_applications": 6,
+    "evidence_records": 24,
+    "pending_retries": 1
+  },
+  "receipt_present": false,
+  "sqlite_integrity": "ok",
+  "blocker": {
+    "code": "official-http-429",
+    "confirmation": "read-only-official-page",
+    "retained_failure_code": "SourceUnavailableError"
+  },
+  "state_binding": {
+    "checkpoint_schema_version": 1,
+    "checkpoint_payload_sha256": "9c9ccd17695dd4adafa73c2636705a29d0278cadf90517475e6534518d2366c9",
+    "evidence_digest_set_sha256": "e47d622a41b0f494e5537ac4f911952c40005b8454d564d6f5bac68152a6b2d0"
+  },
+  "later_cycles": [
+    {
+      "ordinal": 1,
+      "status": "pending-bootstrap"
+    },
+    {
+      "ordinal": 2,
+      "status": "pending-bootstrap"
+    }
+  ],
+  "sanitization": {
+    "omitted": [
+      "application-identities",
+      "session-material",
+      "source-bodies"
+    ]
+  }
+}

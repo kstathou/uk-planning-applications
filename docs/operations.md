@@ -111,6 +111,23 @@ run, including on a document or comment page, it stops before requesting later
 sections or applications. Let the official site recover and then resume the
 same target. Other failed child sections remain queued for the next resume. Do
 not run parallel Barnet collectors or rotate clients to evade the source limit.
+
+After a read-only visit has independently confirmed an official HTTP 429, a
+sanitized blocker aggregate can be reproduced from the retained target without
+making a source request:
+
+```sh
+uv run python scripts/export_barnet_blocker.py \
+  --data-dir .yimby/qualification-barnet-2026-09-16 \
+  --confirm-official-http-429
+```
+
+The strict schema checks the dedicated Barnet target, failed run, checkpoint,
+aggregate counts, missing receipt, SQLite integrity, and every retained
+evidence digest. Its output deliberately omits application identities, session
+material, and source bodies. The reviewed 16 September snapshot is committed
+at `docs/evidence/barnet-qualification-blocker-2026-09-16.json`.
+
 Requalifying an already terminal target with zero live requests preserves the
 original receipt timestamp and the two follow-up due dates. The same anchor is
 preserved when a terminal target performs due detail refreshes, so a refresh

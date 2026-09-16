@@ -110,8 +110,8 @@ with the exact inclusive range 18 August through 16 September and active
 discovery enabled. It persisted the first 10 unique references from the weekly
 validated partition, committed 6 applications with 24 retained evidence
 captures, and stopped after 26 successful HTTP responses. The failed run
-recorded one pending retry for `26/3080/192` and retained a checkpoint for page
-2 of `weekly|2026-08-17|DC_Validated`.
+recorded one pending retry and retained a checkpoint for page 2 of the first
+validated weekly partition.
 
 A separate read-only visit to that exact official detail URL showed HTTP 429
 with the portal's `Too Many Requests` page. The target contains no receipt and
@@ -120,6 +120,14 @@ active-appeal partitions were not reached, so this attempt cannot prove a live
 bootstrap. The safe resume target is
 `.yimby/qualification-barnet-2026-09-16` and must be reused with `--resume`
 only after the official portal recovers.
+
+The committed
+[`barnet-qualification-blocker-2026-09-16.json`](../evidence/barnet-qualification-blocker-2026-09-16.json)
+is a strict, sanitized aggregate derived from that retained target. It records
+the safe scope, request and persistence counts, absent receipt, SQLite
+integrity, blocker code, and pending later cycles. Checkpoint and evidence-set
+hashes bind those claims to the private retained state without publishing an
+application identity, session material, or response body.
 
 The qualification transport now enforces a Barnet-specific ten-second minimum
 gap and stops on the first 429 instead of retrying. This reduces load while

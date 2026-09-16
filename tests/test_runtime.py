@@ -125,6 +125,16 @@ def _live_status(
 def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
     """Fixture coverage remains distinct from all four live status values."""
     registry = pilot_registry()
+    barnet = next(
+        manifest
+        for manifest in registry.manifests()
+        if manifest.id == AuthorityId("barnet")
+    )
+    assert barnet.live_status.readiness == LiveReadiness.DISCOVERY_ONLY
+    assert barnet.live_status.reason == (
+        "older-open discovery is implemented; the live bootstrap remains incomplete "
+        "because the official portal returned HTTP 429"
+    )
     states = {manifest.live_status.readiness for manifest in registry.manifests()}
     assert states == {
         LiveReadiness.BLOCKED,
