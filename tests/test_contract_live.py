@@ -564,7 +564,7 @@ def test_arun_public_collector_resumes_and_is_idempotent(tmp_path: Path) -> None
 def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
     tmp_path: Path,
 ) -> None:
-    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    adapter = devon.DevonAdapter()
     package = AuthorityPackage(
         adapter, devon.DevonApplicationV1, devon.DevonCheckpointV1
     )
@@ -600,7 +600,7 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
 
 
 def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
-    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    adapter = devon.DevonAdapter()
     window = DiscoveryWindow(
         start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=True
     )
@@ -794,7 +794,7 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
 
 
 def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
-    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    adapter = devon.DevonAdapter()
     window = DiscoveryWindow(
         start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
@@ -965,7 +965,7 @@ def test_arun_terminal_and_parser_boundaries() -> None:
 
 
 def test_devon_terminal_and_parser_boundaries() -> None:
-    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    adapter = devon.DevonAdapter()
     window = DiscoveryWindow(
         start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
@@ -1210,7 +1210,7 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
     assert ("SelectedChoice", "selected") in pairs
     assert all(name != "Ignored" for name, _ in pairs)
 
-    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    adapter = devon.DevonAdapter()
     window = DiscoveryWindow(start=scope.start, end=scope.end, include_open=True)
 
     async def two_open_pages() -> Any:

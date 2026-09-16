@@ -453,12 +453,13 @@ def _receipt_to_persist(
         and prior.expected_queries == candidate.expected_queries
         and prior.completed_queries == candidate.completed_queries
         and prior.counts == candidate.counts
+        and prior.run_statuses == candidate.run_statuses
+        and prior.checks == candidate.checks
+        and prior.weekly_cycles == candidate.weekly_cycles
         and prior.costs.initial.request_count > 0
         and prior.costs.rerun.request_count == 0
         and prior.costs.rerun.transferred_bytes == 0
         and prior.costs.rerun.attachment_body_requests == 0
-        and all(check.ok for check in prior.checks)
-        and all(check.ok for check in candidate.checks)
     ):
         return prior
     return candidate

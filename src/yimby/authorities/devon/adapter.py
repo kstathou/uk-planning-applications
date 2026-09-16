@@ -39,7 +39,7 @@ from yimby.domain import (
 from yimby.transport import FormField, PortalRequest, RequestIntent, RequestMethod
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import AsyncIterator
 
     from yimby.domain import EvidenceCapture
     from yimby.transport import PortalSession
@@ -249,10 +249,6 @@ class DevonAdapter:
         kind=AuthorityKind.COUNTY,
         sources=(SourceDefinition(id=SOURCE, base_url=HttpUrl(f"{BASE_URL}/")),),
     )
-
-    def __init__(self, today: Callable[[], date] = date.today) -> None:
-        """Retain the injected clock used by authority smoke callers."""
-        self._today = today
 
     async def discover(
         self,
