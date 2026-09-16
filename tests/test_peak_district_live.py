@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib.util
 import json
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -163,6 +166,7 @@ def _detail(
     reference: str = "NP/DDD/0926/0909",
     *,
     comments_tab: bool = False,
+    decided: str = "",
     documents_route: str = "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
 ) -> bytes:
     comments = (
@@ -187,7 +191,7 @@ def _detail(
         <tr><td><label>Agent/Company</label></td><td><label>Agent One</label></td></tr>
         <tr><td><label>Planning officer</label></td><td><label>Officer One</label></td></tr>
         <tr><td><label>Registered</label></td><td><label>15 September 2026</label></td></tr>
-        <tr><td><label>Decided</label></td><td><label></label></td></tr>
+        <tr><td><label>Decided</label></td><td><label>{decided}</label></td></tr>
         <tr><td><label>Parish</label></td><td><label>Bakewell</label></td></tr>
       </table>
     </div>
@@ -267,11 +271,13 @@ class _PeakDetailMock:
         mismatch_detail: bool = False,
         empty_documents: bool = False,
         documents_fail: bool = False,
+        decided: str = "",
         documents_route: str = "/AssureLive/ES/Presentation/Planning/OnlinePlanning/GetOnlineDocuments",
     ) -> None:
         self.mismatch_detail = mismatch_detail
         self.empty_documents = empty_documents
         self.documents_fail = documents_fail
+        self.decided = decided
         self.documents_route = documents_route
 
     def __call__(self, request: PortalRequest) -> bytes:
@@ -279,6 +285,7 @@ class _PeakDetailMock:
         if "OnlinePlanningOverview" in url:
             return _detail(
                 "WRONG/1" if self.mismatch_detail else "NP/DDD/0926/0909",
+                decided=self.decided,
                 documents_route=self.documents_route,
             )
         if "GetOnlineDocuments" in url:
@@ -517,7 +524,7 @@ def test_peak_district_discovers_bounded_and_older_open_with_exact_pagination() 
     )
 
 
-def test_peak_district_resumes_active_page_and_terminal_rerun_is_zero_io() -> None:
+def test_peak_district_restarts_active_query_and_terminal_rerun_is_zero_io() -> None:
     adapter = peak.PeakDistrictAdapter()
     first_session = _Session(_PeakAssureMock())
 
@@ -533,13 +540,24 @@ def test_peak_district_resumes_active_page_and_terminal_rerun_is_zero_io() -> No
     first = asyncio.run(first_batch())
     assert first.next_checkpoint.active_query is not None
     assert first.next_checkpoint.next_page_index == 1
-    resumed_session = _Session(_PeakAssureMock())
+
+    class _DriftedPeakAssureMock(_PeakAssureMock):
+        date_references: ClassVar[_ReferencePages] = {
+            **_PeakAssureMock.date_references,
+            "Received": (
+                ("NP/NEW/0926/0999", "NP/DDD/0926/0909"),
+                ("NP/DIS/0926/0917", "NP/SM/0826/0810"),
+            ),
+        }
+
+    resumed_session = _Session(_DriftedPeakAssureMock())
     resumed = asyncio.run(
         _batches(adapter, resumed_session, _window(), first.next_checkpoint)
     )
     assert [
         reference.reference for batch in resumed for reference in batch.references
     ] == [
+        "NP/NEW/0926/0999",
         "NP/SM/0826/0810",
         "NP/DDD/0126/0001",
         "NP/DDD/1125/1200",
@@ -654,7 +672,7 @@ def _reference() -> SourceReference:
 
 def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
     adapter = peak.PeakDistrictAdapter()
-    session = _Session(_PeakDetailMock())
+    session = _Session(_PeakDetailMock(decided="16 September 2026"))
 
     snapshot = asyncio.run(adapter.fetch(session, _reference()))
     normalised = adapter.normalise(snapshot)
@@ -666,6 +684,7 @@ def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
     assert snapshot.payload.parish == "Bakewell"
     assert snapshot.payload.development_address == "1 Moor Road Bakewell"
     assert snapshot.payload.validated_date == date(2026, 9, 15)
+    assert snapshot.payload.decision_date == date(2026, 9, 16)
     assert [document.title for document in snapshot.payload.documents] == [
         "Application Form.pdf",
         "Design Statement.pdf",
@@ -697,6 +716,7 @@ def test_peak_district_fetches_all_document_metadata_without_bodies() -> None:
         "Agent One",
     )
     assert normalised.metadata.validated_date == date(2026, 9, 15)
+    assert normalised.metadata.decision_date == date(2026, 9, 16)
 
 
 def test_peak_district_classifies_empty_and_failed_document_sections() -> None:
@@ -1313,6 +1333,7 @@ def test_peak_district_qualification_persists_complete_receipt_and_zero_io_rerun
         "document_versions": 5,
         "comment_versions": 0,
         "pending_retries": 0,
+        "retry_entries": 0,
         "failed_sections": 0,
         "unmapped_records": 0,
     }
@@ -1338,6 +1359,7 @@ def test_peak_district_qualification_persists_complete_receipt_and_zero_io_rerun
         "failed-sections": True,
         "idempotent-rerun": True,
         "pending-retries": True,
+        "retry-inventory": True,
         "reference-application-agreement": True,
         "run-statuses": True,
         "terminal-checkpoint": True,
@@ -1362,6 +1384,73 @@ def test_peak_district_qualification_persists_complete_receipt_and_zero_io_rerun
     assert all(session.requested_urls == () for session in sessions)
     assert resumed["costs"]["initial"]["request_count"] == 0
     assert resumed["costs"]["rerun"]["request_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("corruption", "failed_check"),
+    [
+        ("historical-evidence", "evidence-integrity"),
+        ("succeeded-retry", "retry-inventory"),
+    ],
+)
+def test_peak_district_qualification_checks_all_evidence_and_retry_history(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    corruption: str,
+    failed_check: str,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / corruption
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    def session_factory() -> _Session:
+        return _Session(_QualificationResponder())
+
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    if corruption == "historical-evidence":
+        expected_body = b"historical official evidence"
+        digest = sha256(expected_body).hexdigest()
+        relative_path = f"{digest[:2]}/{digest}.gz"
+        evidence_path = data_dir / "evidence" / relative_path
+        evidence_path.parent.mkdir(parents=True)
+        evidence_path.write_bytes(gzip.compress(b"tampered", mtime=0))
+        with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+            connection.execute(
+                "INSERT INTO evidence(digest, path, source_url, media_type) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    digest,
+                    relative_path,
+                    "https://planning.peakdistrict.gov.uk/AssureLive/history",
+                    "text/html",
+                ),
+            )
+            connection.commit()
+    else:
+        store = module.SqliteStore(
+            data_dir / "yimby.sqlite3",
+            module.EvidenceStore(data_dir / "evidence"),
+        )
+        try:
+            store.enqueue_retry(module._AUTHORITY_ID, _reference(), "prior failure")
+            store.mark_retry_succeeded(module._AUTHORITY_ID, _reference())
+        finally:
+            store.close()
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert failed_check in error["failed_checks"]
 
 
 def test_peak_district_qualification_rejects_failed_current_sections(
