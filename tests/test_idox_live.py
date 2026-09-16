@@ -247,6 +247,14 @@ def _result_page_with_showing_markers(
     return f"{markers}{page}".encode()
 
 
+def _result_page_with_legacy_count(
+    rows: tuple[tuple[str, str], ...],
+    count_text: str,
+) -> bytes:
+    page = _uncounted_result_page(rows, capacity="10", numbered_page=2).decode()
+    return f"<p>{count_text}</p>{page}".encode()
+
+
 def _ten_result_rows(case: _Case) -> tuple[tuple[str, str], ...]:
     return tuple(
         (f"{case.references[0]}-{index}", f"{case.locators[0]}-{index}")
@@ -311,6 +319,7 @@ class _IdoxMock:
         uncounted_label: str = "Ref. No",
         showing_counts: bool = False,
         validated_showing_markers: tuple[str, ...] | None = None,
+        validated_legacy_count: str | None = None,
     ) -> None:
         self.case = case
         self.mismatch = mismatch
@@ -327,6 +336,7 @@ class _IdoxMock:
         self.uncounted_label = uncounted_label
         self.showing_counts = showing_counts
         self.validated_showing_markers = validated_showing_markers
+        self.validated_legacy_count = validated_legacy_count
         self.current_date_type = ""
         self.requests: list[tuple[str, str, tuple[tuple[str, str], ...]]] = []
         self.attachment_paths: list[str] = []
@@ -394,6 +404,14 @@ class _IdoxMock:
                     content=_result_page_with_showing_markers(
                         validated_rows,
                         self.validated_showing_markers,
+                    ),
+                )
+            if self.validated_legacy_count is not None:
+                return httpx.Response(
+                    200,
+                    content=_result_page_with_legacy_count(
+                        validated_rows,
+                        self.validated_legacy_count,
                     ),
                 )
             return httpx.Response(
@@ -669,8 +687,15 @@ def test_authority_showing_totals_drive_public_pagination(case: _Case) -> None:
     [
         ("Showing 1-2 of 2 bedrooms",),
         ("Showing 1-2 of 2", "Showing 1-2 of 3"),
+        ("Showing 1-10 of 2",),
+        ("Showing 1-2 of 2", "Showing 1-1 of 2"),
     ],
-    ids=["trailing-junk", "conflicting-totals"],
+    ids=[
+        "trailing-junk",
+        "conflicting-totals",
+        "impossible-range",
+        "conflicting-ranges",
+    ],
 )
 def test_authority_public_discovery_rejects_ambiguous_showing_markers(
     case: _Case,
@@ -678,6 +703,34 @@ def test_authority_public_discovery_rejects_ambiguous_showing_markers(
 ) -> None:
     """Malformed or conflicting displayed totals cannot truncate pagination."""
     mock = _IdoxMock(case, validated_showing_markers=showing_markers)
+    session = _session(mock)
+    package = pilot_registry().get(case.authority_id)
+    parse_error = _member(case, "ParseError")
+
+    async def discover_all() -> None:
+        with pytest.raises(parse_error, match="reported result count"):
+            async for _batch in package.discover(session, WEEK, None):
+                pass
+        await session.aclose()
+
+    asyncio.run(discover_all())
+    assert not any(
+        path.endswith("/pagedSearchResults.do") for _, path, _ in mock.requests
+    )
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+@pytest.mark.parametrize(
+    "legacy_count",
+    ["Total 2 bedrooms", "Displaying 1 of 2 bedrooms"],
+    ids=["total-trailing-text", "displaying-trailing-text"],
+)
+def test_authority_public_discovery_rejects_ambiguous_legacy_totals(
+    case: _Case,
+    legacy_count: str,
+) -> None:
+    """Unrelated trailing text cannot turn legacy prose into a result count."""
+    mock = _IdoxMock(case, validated_legacy_count=legacy_count)
     session = _session(mock)
     package = pilot_registry().get(case.authority_id)
     parse_error = _member(case, "ParseError")
