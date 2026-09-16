@@ -571,7 +571,7 @@ def _durable_bootstrap_cost(store: SqliteStore) -> QualificationCost | None:
     return QualificationCost(
         request_count=request_count,
         transferred_bytes=transferred_bytes,
-        attachment_body_requests=0,
+        attachment_body_requests=sum(run.attachment_body_requests for run in runs[:-1]),
     )
 
 
@@ -850,6 +850,8 @@ async def _qualify_or_recover(
     session_factory: SessionFactory,
     now: Clock,
 ) -> PeakDistrictQualificationReceiptV1:
+    if any(run.attachment_body_requests > 0 for run in store.run_costs(_AUTHORITY_ID)):
+        raise QualificationFailedError(("attachment-policy",))
     proof_path = config.data_dir / _PROOF_NAME
     public_path = config.data_dir / _RECEIPT_NAME
     candidates = (

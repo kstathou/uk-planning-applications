@@ -39,8 +39,14 @@ if TYPE_CHECKING:
 
 
 class _Session:
-    def __init__(self, responder: Callable[[PortalRequest], bytes]) -> None:
+    def __init__(
+        self,
+        responder: Callable[[PortalRequest], bytes],
+        *,
+        attachment_body_requests: int = 0,
+    ) -> None:
         self.responder = responder
+        self._attachment_body_requests = attachment_body_requests
         self.requests: list[PortalRequest] = []
         self._bytes = 0
         self.closed = False
@@ -62,7 +68,7 @@ class _Session:
 
     @property
     def attachment_body_requests(self) -> int:
-        return 0
+        return self._attachment_body_requests
 
     @property
     def transferred_bytes(self) -> int:
@@ -1544,6 +1550,48 @@ def test_peak_district_qualification_resumes_interrupted_bootstrap_with_cumulati
     assert len(sessions) == 3
     assert receipt["costs"]["initial"]["request_count"] == 19
     assert receipt["costs"]["initial"]["transferred_bytes"] > 0
+
+
+def test_peak_district_qualification_rejects_prior_attachment_attempt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "interrupted-attachment"
+    sessions: list[_Session] = []
+
+    def interrupted(_request: PortalRequest) -> bytes:
+        interruption = "interrupted"
+        raise SourceUnavailableError(interruption)
+
+    def session_factory() -> _Session:
+        session = _Session(
+            interrupted if not sessions else _QualificationResponder(),
+            attachment_body_requests=1 if not sessions else 0,
+        )
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert len(sessions) == 1
+
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["attachment-policy"],
+    }
+    assert len(sessions) == 1
 
 
 def test_peak_district_qualification_rejects_fabricated_proof_cost(

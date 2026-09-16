@@ -290,6 +290,6 @@ succeeded. The repository does not enable unattended execution.
 
 The pilot is not accepted until every authority has completed live bootstrap
 and two later weekly refreshes, approximately seven and fourteen days after the
-bootstrap. OPDC completed its bootstrap on 16 September 2026; its later cycles
-remain pending. Same-day reruns and simulated dates do not satisfy that
-requirement.
+bootstrap. West Suffolk, OPDC, and Peak District completed their bootstraps on
+16 September 2026; their later cycles remain pending. Same-day reruns and
+simulated dates do not satisfy that requirement.

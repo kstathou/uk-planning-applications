@@ -43,9 +43,9 @@ The deterministic column proves package ownership, typed native payloads, parsin
 As of 16 September 2026, West Suffolk, OPDC, and Peak District have completed
 verified live bootstraps. West Suffolk's versioned receipt proves 730
 discovered references, 730 persisted applications, terminal checkpoint
-coherence, no pending retries,
-no failed current sections, database integrity, retained evidence-path
-presence, no unmapped records, no attachment-body requests, and an immediate
+coherence, no pending retries, no failed current sections, database integrity,
+retained evidence-path presence, no unmapped records, no attachment-body
+requests, and an immediate
 zero-request rerun. OPDC's sanitized
 [committed receipt](evidence/opdc-qualification-2026-09-16.json) proves 55
 persisted applications, exact terminal discovery, complete implemented

@@ -7,9 +7,9 @@ All 15 authority packages have typed native schemas and deterministic fixtures.
 Live portal readiness is tracked separately and remains partial while real
 adapters and the required two weekly validation cycles are completed. See the
 [pilot acceptance ledger](docs/pilot-acceptance.md) for the current boundary.
-Peak District has completed a receipt-backed live bootstrap and is `LIVE_READY`
-for its verified HTTP contract. It remains operationally unqualified until its
-two later weekly cycles complete.
+West Suffolk, OPDC, and Peak District have completed receipt-backed live
+bootstraps and are `LIVE_READY` for their verified HTTP contracts. They remain
+operationally unqualified until their two later weekly cycles complete.
 
 ## Requirements
 
