@@ -239,7 +239,7 @@ class DorsetAdapter:
             complete=next_offset == "complete",
         )
 
-    async def _discover_live(  # noqa: C901
+    async def _discover_live(
         self,
         session: PortalSession,
         window: DiscoveryWindow,
@@ -275,8 +275,6 @@ class DorsetAdapter:
             page = _parse_result_page(result.body)
             if progress.active_query == query.key:
                 page = await _replay_active_query(session, progress, page)
-            elif progress.active_query is not None:
-                _raise_checkpoint("active query order")
 
             while True:
                 next_checkpoint, fresh, complete_query = _advance_checkpoint(
@@ -632,8 +630,6 @@ def _parse_result_page(body: bytes) -> _ResultPage:  # noqa: C901
     result_references = set()
     result_locators = set()
     for link in form.select('a[id$="_hypDisplayRecord"][href]'):
-        if not isinstance(link, Tag):
-            _raise_parse("result link")
         values = parse_qs(urlsplit(str(link.get("href", ""))).query).get("recno", ())
         if len(values) != 1 or re.fullmatch(r"\d+", values[0]) is None:
             _raise_parse("result recno")

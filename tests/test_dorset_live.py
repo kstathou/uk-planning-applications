@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: ANN401, E501, PLR2004
+# ruff: noqa: ANN401, C901, E501, PLR0912, PLR0915, PLR2004, SLF001
 
 """Dorset Council public-register contracts."""
 
@@ -17,10 +17,20 @@ from urllib.parse import parse_qsl
 
 import httpx
 import pytest
+from bs4 import BeautifulSoup
+from bs4.element import Tag
+from pydantic import HttpUrl
 
 from yimby import AuthorityId, DiscoveryWindow, pilot_registry
-from yimby.domain import DurableDiscoveryBatch, SourceId, SourceReference
+from yimby.authorities.dorset import adapter as dorset_adapter
+from yimby.domain import (
+    DurableDiscoveryBatch,
+    SourceId,
+    SourceReference,
+    StoredCheckpoint,
+)
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
+from yimby.transport import FormField
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -698,3 +708,682 @@ def test_dorset_qualification_requires_explicit_live_scope(
 
     assert exit_code == 2
     assert json.loads(capsys.readouterr().err) == {"error": error}
+
+
+def _live_reference(row: _Result = RECEIVED[0]) -> SourceReference:
+    return SourceReference(
+        source_id=SourceId("dorset-planning-register"),
+        reference=row.reference,
+        locator=str(row.recno),
+    )
+
+
+def _form(body: bytes) -> Tag:
+    form = BeautifulSoup(body, "html.parser").select_one("form")
+    assert isinstance(form, Tag)
+    return form
+
+
+def _mutated(body: bytes, mutation: Any) -> bytes:
+    soup = BeautifulSoup(body, "html.parser")
+    mutation(soup)
+    return str(soup).encode()
+
+
+def _three_page_result(page: int, rows: tuple[_Result, ...]) -> bytes:
+    rendered_rows = "".join(
+        f'<a id="row-{index}_hypDisplayRecord" '
+        f'href="plandisp.aspx?recno={row.recno}">{row.reference}</a>'
+        for index, row in enumerate(rows)
+    )
+    next_controls = (
+        f'<input type="submit" name="{NEXT_BUTTON}" value=" ">'
+        '<input type="submit" '
+        'name="ctl00$ContentPlaceHolder1$lvResults$pager$ctl02$NextButton" '
+        'value=" ">'
+        if page < 3
+        else ""
+    )
+    return f"""
+    <form method="post" action="./searchresults.aspx">
+      <input type="hidden" name="__EVENTTARGET" value="">
+      <input type="hidden" name="__EVENTARGUMENT" value="">
+      <input type="hidden" name="__VIEWSTATE" value="page-{page}">
+      <div id="ctl00_ContentPlaceHolder1_lvResults_RadDataPager1">
+        <span>Page {page} of 3</span><a class="rdpCurrentPage">{page}</a>
+        {next_controls}
+      </div>
+      {rendered_rows}
+      <div id="ctl00_ContentPlaceHolder1_lvResults_pager">
+        <span>Page {page} of 3</span><a class="rdpCurrentPage">{page}</a>
+      </div>
+    </form>
+    """.encode()
+
+
+def test_dorset_live_received_only_and_incomplete_terminal_checkpoints() -> None:
+    """The live state machine narrows queries and seals a fully replayed checkpoint."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    received_only = DiscoveryWindow(
+        start=WINDOW.start,
+        end=WINDOW.end,
+        include_open=False,
+    )
+    first_mock = _DorsetMock()
+    first_session = _session(first_mock)
+
+    async def received_batches() -> list[DurableDiscoveryBatch]:
+        batches = [
+            batch
+            async for batch in package.discover(first_session, received_only, None)
+        ]
+        await first_session.aclose()
+        return batches
+
+    batches = asyncio.run(received_batches())
+    assert [len(batch.references) for batch in batches] == [10, 1]
+    assert len(_pairs(first_mock, ADVANCED_PATH)) == 1
+
+    checkpoint = dorset_adapter.DorsetCheckpointV1(
+        object_offset="live",
+        live_scope=dorset_adapter.DorsetDiscoveryScope(
+            start=WINDOW.start,
+            end=WINDOW.end,
+            include_open=True,
+        ),
+        completed_queries=("received-valid", "outstanding"),
+    )
+    terminal_mock = _DorsetMock()
+    terminal_session = _session(terminal_mock)
+
+    async def seal_terminal() -> list[DurableDiscoveryBatch]:
+        result = [
+            batch
+            async for batch in package.discover(
+                terminal_session,
+                WINDOW,
+                StoredCheckpoint(
+                    schema_version=1,
+                    payload_json=checkpoint.model_dump_json(),
+                ),
+            )
+        ]
+        await terminal_session.aclose()
+        return result
+
+    terminal = asyncio.run(seal_terminal())
+    assert len(terminal) == 1
+    assert terminal[0].complete
+    assert terminal_mock.requests == []
+
+
+def test_dorset_live_rejects_query_outside_scope_and_invalid_locator() -> None:
+    """Scope and locator mismatches fail before a portal request can be issued."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    received_only = DiscoveryWindow(
+        start=WINDOW.start,
+        end=WINDOW.end,
+        include_open=False,
+    )
+    checkpoint = dorset_adapter.DorsetCheckpointV1(
+        object_offset="live",
+        live_scope=dorset_adapter.DorsetDiscoveryScope(
+            start=WINDOW.start,
+            end=WINDOW.end,
+            include_open=False,
+        ),
+        active_query="outstanding",
+    )
+    session = _session(_DorsetMock())
+
+    async def reject() -> None:
+        with pytest.raises(ValueError, match="active query"):
+            async for _batch in package.discover(
+                session,
+                received_only,
+                StoredCheckpoint(
+                    schema_version=1,
+                    payload_json=checkpoint.model_dump_json(),
+                ),
+            ):
+                pass
+        with pytest.raises(ValueError, match="detail recno"):
+            await package.collect(
+                session,
+                SourceReference(
+                    source_id=SourceId("dorset-planning-register"),
+                    reference="P/BAD/1",
+                    locator="not-a-number",
+                ),
+            )
+        await session.aclose()
+
+    asyncio.run(reject())
+
+
+@pytest.mark.parametrize(
+    "progress",
+    [
+        dorset_adapter.DorsetCheckpointV1(completed_queries=("outstanding",)),
+        dorset_adapter.DorsetCheckpointV1(
+            seen_references=(
+                _live_reference(),
+                _live_reference().model_copy(update={"locator": "999"}),
+            )
+        ),
+        dorset_adapter.DorsetCheckpointV1(next_page=2),
+        dorset_adapter.DorsetCheckpointV1(active_query="outstanding"),
+    ],
+)
+def test_dorset_checkpoint_validation_rejects_inconsistent_progress(
+    progress: dorset_adapter.DorsetCheckpointV1,
+) -> None:
+    """Every contradictory saved-state shape is rejected before replay."""
+    with pytest.raises(dorset_adapter.DorsetCheckpointError):
+        dorset_adapter._validate_progress(
+            progress,
+            ("received-valid", "outstanding"),
+        )
+
+
+def test_dorset_checkpoint_validation_accepts_repeated_identical_seen_reference() -> (
+    None
+):
+    """An identical repeated sighting does not fabricate a locator conflict."""
+    reference = _live_reference()
+    progress = dorset_adapter.DorsetCheckpointV1(
+        seen_references=(reference, reference),
+    )
+    dorset_adapter._validate_progress(progress, ("received-valid", "outstanding"))
+
+
+@pytest.mark.parametrize(
+    ("progress", "page", "message"),
+    [
+        (
+            dorset_adapter.DorsetCheckpointV1(
+                active_query="received-valid",
+                next_page=2,
+                total_pages=3,
+            ),
+            dorset_adapter._ResultPage(
+                references=(), page=2, total_pages=2, form=(), next_allowed=False
+            ),
+            "active page",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(active_query="outstanding"),
+            dorset_adapter._ResultPage(
+                references=(), page=1, total_pages=1, form=(), next_allowed=False
+            ),
+            "active query",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(seen_references=(_live_reference(),)),
+            dorset_adapter._ResultPage(
+                references=(_live_reference().model_copy(update={"locator": "999"}),),
+                page=1,
+                total_pages=1,
+                form=(),
+                next_allowed=False,
+            ),
+            "duplicate locator",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(completed_queries=("received-valid",)),
+            dorset_adapter._ResultPage(
+                references=(), page=1, total_pages=1, form=(), next_allowed=False
+            ),
+            "completed query",
+        ),
+    ],
+)
+def test_dorset_checkpoint_advance_rejects_contradictions(
+    progress: dorset_adapter.DorsetCheckpointV1,
+    page: Any,
+    message: str,
+) -> None:
+    """A page cannot mutate a checkpoint that contradicts its durable history."""
+    with pytest.raises(ValueError, match=message):
+        dorset_adapter._advance_checkpoint(
+            progress,
+            query_key="received-valid",
+            page=page,
+            query_keys=("received-valid", "outstanding"),
+        )
+
+
+def test_dorset_checkpoint_replay_walks_every_committed_page() -> None:
+    """Rehydration verifies each committed page before requesting the next one."""
+    rows = tuple(
+        _Result(f"P/REPLAY/2026/{index:05d}", 500_000 + index) for index in range(1, 22)
+    )
+    pages = {
+        2: _three_page_result(2, rows[10:20]),
+        3: _three_page_result(3, rows[20:]),
+    }
+    request_count = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(200, content=pages[request_count + 1])
+
+    session = _session(handler)
+    first = dorset_adapter._parse_result_page(_three_page_result(1, rows[:10]))
+    active = tuple(_live_reference(row) for row in rows[:20])
+    progress = dorset_adapter.DorsetCheckpointV1(
+        active_query="received-valid",
+        next_page=3,
+        total_pages=3,
+        active_references=active,
+    )
+
+    async def replay() -> Any:
+        result = await dorset_adapter._replay_active_query(session, progress, first)
+        await session.aclose()
+        return result
+
+    result = asyncio.run(replay())
+    assert result.page == 3
+    assert result.references == (_live_reference(rows[20]),)
+    assert request_count == 2
+
+
+@pytest.mark.parametrize(
+    ("progress", "page", "message"),
+    [
+        (
+            dorset_adapter.DorsetCheckpointV1(
+                active_query="received-valid", next_page=1
+            ),
+            dorset_adapter._parse_result_page(_result_page("received-valid", 1)),
+            "active page",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(
+                active_query="received-valid", next_page=2, total_pages=2
+            ),
+            dorset_adapter._parse_result_page(_result_page("received-valid", 1)),
+            "active references",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(
+                active_query="received-valid",
+                next_page=2,
+                total_pages=2,
+                active_references=tuple(_live_reference(row) for row in RECEIVED[:10]),
+            ),
+            dorset_adapter._parse_result_page(_result_page("received-valid", 2)),
+            "replayed page",
+        ),
+        (
+            dorset_adapter.DorsetCheckpointV1(
+                active_query="received-valid",
+                next_page=2,
+                total_pages=2,
+                active_references=tuple(_live_reference(row) for row in RECEIVED[:10]),
+            ),
+            dorset_adapter._ResultPage(
+                references=tuple(
+                    _live_reference(row) for row in (*RECEIVED[:9], RECEIVED[10])
+                ),
+                page=1,
+                total_pages=2,
+                form=(),
+                next_allowed=True,
+            ),
+            "replayed references",
+        ),
+    ],
+)
+def test_dorset_checkpoint_replay_rejects_changed_history(
+    progress: dorset_adapter.DorsetCheckpointV1,
+    page: Any,
+    message: str,
+) -> None:
+    """Missing state or changed committed pages stop resume before advancement."""
+    session = _session(_DorsetMock())
+
+    async def reject() -> None:
+        with pytest.raises(ValueError, match=message):
+            await dorset_adapter._replay_active_query(session, progress, page)
+        await session.aclose()
+
+    asyncio.run(reject())
+
+
+@pytest.mark.parametrize(
+    ("body", "parser", "message"),
+    [
+        (
+            _disclaimer_form().replace(b'method="post"', b'method="get"'),
+            dorset_adapter._parse_disclaimer_form,
+            "disclaimer form",
+        ),
+        (
+            _advanced_form().replace(b'action="./advsearch.aspx"', b'action="/wrong"'),
+            dorset_adapter._parse_advanced_form,
+            "advanced form",
+        ),
+        (
+            _advanced_form().replace(b'value="advanced-state"', b'value=""'),
+            dorset_adapter._parse_advanced_form,
+            "advanced form viewstate",
+        ),
+        (
+            _result_page("received-valid", 1).replace(
+                b'action="./searchresults.aspx"', b'action="/wrong"'
+            ),
+            dorset_adapter._parse_result_page,
+            "result form",
+        ),
+    ],
+)
+def test_dorset_forms_fail_closed_on_identity_and_state_changes(
+    body: bytes,
+    parser: Any,
+    message: str,
+) -> None:
+    """Changed methods, actions, and ASP.NET state cannot be silently submitted."""
+    with pytest.raises(ValueError, match=message):
+        parser(body)
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("recno", "result recno"),
+        ("reference", "result reference"),
+        ("empty-terminal", "terminal result rows"),
+        ("top-next", "next page"),
+        ("bottom-next", "next page"),
+    ],
+)
+def test_dorset_result_rows_fail_closed_on_malformed_identity_or_paging(
+    fault: str,
+    message: str,
+) -> None:
+    """Malformed result identity and pager controls never become references."""
+    body = _result_page("received-valid", 2 if fault == "empty-terminal" else 1)
+
+    def mutate(soup: BeautifulSoup) -> None:
+        links = soup.select('a[id$="_hypDisplayRecord"]')
+        if fault == "recno":
+            links[0]["href"] = "plandisp.aspx?recno=bad"
+        elif fault == "reference":
+            links[0].clear()
+        elif fault == "empty-terminal":
+            for link in links:
+                link.decompose()
+        elif fault == "top-next":
+            control = soup.select_one(f'input[name="{NEXT_BUTTON}"]')
+            assert isinstance(control, Tag)
+            control["value"] = "Next"
+        else:
+            control = soup.select_one(
+                'input[name="ctl00$ContentPlaceHolder1$lvResults$pager$ctl02$NextButton"]'
+            )
+            assert isinstance(control, Tag)
+            control["value"] = "Next"
+
+    with pytest.raises(ValueError, match=message):
+        dorset_adapter._parse_result_page(_mutated(body, mutate))
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("reference", "detail reference"),
+        ("authority", "detail authority"),
+        ("section", "pvLocation"),
+        ("missing-data", "detail label"),
+        ("duplicate-label", "detail label"),
+        ("missing-label", "detail label"),
+        ("empty-value", "detail Status"),
+        ("date", "detail date"),
+        ("coordinate", "detail Easting"),
+        ("table", "document grid"),
+        ("row", "document grid"),
+        ("href", "document grid"),
+        ("onclick", "document grid"),
+        ("rendered", "document grid"),
+        ("indices", "document grid"),
+    ],
+)
+def test_dorset_detail_fails_closed_on_malformed_metadata(
+    fault: str,
+    message: str,
+) -> None:
+    """Every required detail and document-grid invariant is fail closed."""
+    reference = _live_reference()
+
+    def mutate(soup: BeautifulSoup) -> None:
+        labels = soup.select("#ctl00_ContentPlaceHolder1_pvDetails span.applabel")
+        rows = soup.select("#ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00 tbody tr")
+        if fault == "reference":
+            data = labels[0].find_next_sibling("p")
+            assert isinstance(data, Tag)
+            data.string = "P/OTHER/1"
+        elif fault == "authority":
+            data = labels[-1].find_next_sibling("p")
+            assert isinstance(data, Tag)
+            data.string = "Another Council"
+        elif fault == "section":
+            section = soup.select_one("#ctl00_ContentPlaceHolder1_pvLocation")
+            assert isinstance(section, Tag)
+            section.decompose()
+        elif fault == "missing-data":
+            data = labels[-1].find_next_sibling("p")
+            assert isinstance(data, Tag)
+            data.decompose()
+        elif fault == "duplicate-label":
+            labels[1].string = labels[0].get_text()
+        elif fault == "missing-label":
+            labels[-1].decompose()
+        elif fault == "empty-value":
+            data = labels[1].find_next_sibling("p")
+            assert isinstance(data, Tag)
+            data.clear()
+        elif fault == "date":
+            data = labels[4].find_next_sibling("p")
+            assert isinstance(data, Tag)
+            data.string = "2026-09-15"
+        elif fault == "coordinate":
+            data = soup.find("span", string="Easting")
+            assert isinstance(data, Tag)
+            value = data.find_next_sibling("p")
+            assert isinstance(value, Tag)
+            value.string = "east"
+        elif fault == "table":
+            table = soup.select_one("#ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00")
+            assert isinstance(table, Tag)
+            table.decompose()
+        elif fault == "row":
+            rows[0]["id"] = "wrong"
+        elif fault == "href":
+            link = rows[0].select_one("a")
+            assert isinstance(link, Tag)
+            link["href"] = "/attachment.pdf"
+        elif fault == "onclick":
+            link = rows[0].select_one("a")
+            assert isinstance(link, Tag)
+            link["onclick"] = "return RowClicked(9);"
+        elif fault == "rendered":
+            link = rows[0].select_one("a")
+            assert isinstance(link, Tag)
+            link.string = "Application Form"
+        else:
+            rows[1]["id"] = "ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__3"
+            link = rows[1].select_one("a")
+            assert isinstance(link, Tag)
+            link["onclick"] = "return RowClicked(3);"
+
+    with pytest.raises(ValueError, match=message):
+        dorset_adapter._parse_live_detail(
+            _mutated(_detail_page(reference.reference), mutate),
+            reference,
+            HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={reference.locator}"),
+        )
+
+
+def _grid_script(payload: Any, *, direct: bool = False) -> str:
+    encoded = json.dumps(payload, separators=(",", ":"))
+    value = encoded if direct else json.dumps(encoded)
+    return f'var grid={{"_gridTableViewsData":{value}}};'
+
+
+def _detail_with_grid_script(script: str) -> BeautifulSoup:
+    body = _detail_page(RECEIVED[0].reference).decode()
+    start = body.index("<script>")
+    end = body.index("</script>", start) + len("</script>")
+    return BeautifulSoup(
+        f"{body[:start]}<script>{script}</script>{body[end:]}", "html.parser"
+    )
+
+
+def test_dorset_document_grid_accepts_exact_direct_telerik_proof() -> None:
+    """The non-escaped Telerik proof variant must carry the same exact counts."""
+    soup = _detail_with_grid_script(
+        _grid_script(
+            [{"PageCount": 1, "AllowPaging": False, "VirtualItemCount": 2}],
+            direct=True,
+        )
+    )
+    documents = dorset_adapter._parse_documents_grid(
+        soup,
+        HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"),
+    )
+    assert len(documents) == 2
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "malformed",
+        [],
+        [1],
+        [{"PageCount": 1, "AllowPaging": "false", "VirtualItemCount": 2}],
+    ],
+)
+def test_dorset_document_grid_rejects_invalid_telerik_proof(payload: Any) -> None:
+    """Malformed, ambiguous, and mistyped grid metadata cannot prove completeness."""
+    soup = _detail_with_grid_script(
+        'var grid={"_gridTableViewsData":"not-json"};'
+        if payload == "malformed"
+        else _grid_script(payload)
+    )
+    with pytest.raises(ValueError, match="document grid"):
+        dorset_adapter._parse_documents_grid(
+            soup,
+            HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"),
+        )
+
+
+def test_dorset_document_grid_ignores_unrelated_script_before_exact_proof() -> None:
+    """Unrelated page scripts do not substitute for the required Telerik proof."""
+    soup = BeautifulSoup(_detail_page(RECEIVED[0].reference), "html.parser")
+    unrelated = soup.new_tag("script")
+    unrelated.string = "window.unrelated = true;"
+    soup.insert(0, unrelated)
+    documents = dorset_adapter._parse_documents_grid(
+        soup,
+        HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"),
+    )
+    assert len(documents) == 2
+
+
+def test_dorset_successful_controls_follow_browser_submission_rules() -> None:
+    """Only successful controls are retained, including ordered select values."""
+    form = _form(
+        b"""
+        <form>
+          <input name="disabled" value="no" disabled>
+          <input type="checkbox" name="checked" checked>
+          <input type="radio" name="included" value="yes">
+          <select name="fallback"><option value="first">First</option></select>
+          <select name="empty"></select>
+          <select name="single">
+            <option value="one" selected>One</option>
+            <option value="two" selected>Two</option>
+          </select>
+          <select name="many" multiple>
+            <option value="one" selected>One</option>
+            <option value="two" selected>Two</option>
+          </select>
+          <textarea name="notes"> hello </textarea>
+        </form>
+        """
+    )
+    assert dorset_adapter._successful_controls(
+        form,
+        frozenset({"included"}),
+    ) == (
+        FormField(name="checked", value="on"),
+        FormField(name="included", value="yes"),
+        FormField(name="fallback", value="first"),
+        FormField(name="single", value="one"),
+        FormField(name="many", value="one"),
+        FormField(name="many", value="two"),
+        FormField(name="notes", value=" hello "),
+    )
+
+
+def test_dorset_form_helpers_reject_missing_state_submit_and_action() -> None:
+    """The local form helpers fail closed when exact state or action is absent."""
+    form = _form(b'<form action="/wrong"><input name="present"></form>')
+    with pytest.raises(ValueError, match="form state"):
+        dorset_adapter._require_fields((), "missing")
+    with pytest.raises(ValueError, match="form state"):
+        dorset_adapter._require_hidden_inputs(form, "present")
+    with pytest.raises(ValueError, match="form submit"):
+        dorset_adapter._submit_value(form, "submit", "Search")
+    with pytest.raises(ValueError, match="disclaimer form"):
+        dorset_adapter._accept_disclaimer_request(form)
+    with pytest.raises(ValueError, match="one form"):
+        dorset_adapter._single_form(b"<p>none</p>", "one form")
+
+
+@pytest.mark.parametrize(
+    ("fault", "message"),
+    [
+        ("marker-count", "page markers"),
+        ("marker-text", "page markers"),
+        ("current-text", "current page"),
+        ("current-mismatch", "page markers"),
+        ("pager-mismatch", "page markers"),
+    ],
+)
+def test_dorset_page_markers_reject_ambiguous_paging(fault: str, message: str) -> None:
+    """Both pagers must independently state the same valid current page."""
+    form = _form(_result_page("received-valid", 1))
+    pagers = form.select(
+        "#ctl00_ContentPlaceHolder1_lvResults_RadDataPager1, "
+        "#ctl00_ContentPlaceHolder1_lvResults_pager"
+    )
+    if fault == "marker-count":
+        pagers[-1].decompose()
+    elif fault == "marker-text":
+        span = pagers[0].select_one("span")
+        assert isinstance(span, Tag)
+        span.string = "Page unknown"
+    elif fault == "current-text":
+        pagers[0].select_one(".rdpCurrentPage").string = "zero"  # type: ignore[union-attr]
+    elif fault == "current-mismatch":
+        pagers[0].select_one(".rdpCurrentPage").string = "2"  # type: ignore[union-attr]
+    else:
+        pagers[-1].select_one(".rdpCurrentPage").string = "2"  # type: ignore[union-attr]
+        span = pagers[-1].select_one("span")
+        assert isinstance(span, Tag)
+        span.string = "Page 2 of 2"
+    with pytest.raises(ValueError, match=message):
+        dorset_adapter._page_markers(form)
+
+
+def test_dorset_page_and_required_helpers_reject_impossible_requests() -> None:
+    """No next request or regex value is invented when its proof is absent."""
+    terminal = dorset_adapter._parse_result_page(_result_page("received-valid", 2))
+    with pytest.raises(ValueError, match="next page"):
+        dorset_adapter._next_page_request(terminal)
+    with pytest.raises(ValueError, match="field value"):
+        dorset_adapter._required("body", r"value=(\d+)", "value")
