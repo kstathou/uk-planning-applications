@@ -1015,11 +1015,20 @@ def test_barnet_form_and_search_boundary_variants() -> None:
     fallback_count = (
         b'<li class="searchresult"><a href="applicationDetails.do?keyVal=KEY">'
         b"Details</a><p>Reference: A</p></li> Displaying 1 of 1 results"
-        b'<a href="pagedSearchResults.do?searchCriteria.page=bad">next</a>'
     )
     parsed = barnet_adapter._parse_search_page(fallback_count)
     assert parsed.reported == 1
     assert parsed.references[0].reference == "A"
+    for range_less_pager in (
+        fallback_count
+        + b'<a href="pagedSearchResults.do?searchCriteria.page=bad">next</a>',
+        _result_page((("A", "KEY"),), count=1, pages=2).replace(
+            b'<p class="pager"><span class="showing">Showing 1-1 of 1</span></p>',
+            b"",
+        ),
+    ):
+        with pytest.raises(BarnetParseError, match="reported result count"):
+            barnet_adapter._parse_search_page(range_less_pager)
 
     live_count = (
         b'<li class="searchresult"><a href="applicationDetails.do?keyVal=KEY">'

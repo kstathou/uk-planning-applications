@@ -454,7 +454,7 @@ def test_barnet_qualification_reports_source_failures_without_masking_defects(
 
 @pytest.mark.parametrize(
     "corruption",
-    ["evidence", "locator"],
+    ["evidence", "locator", "checkpoint-locator"],
 )
 def test_barnet_qualification_invalidates_stale_receipt_on_corruption(
     corruption: str,
@@ -475,13 +475,27 @@ def test_barnet_qualification_invalidates_stale_receipt_on_corruption(
         evidence_path = next((data_dir / "evidence").rglob("*.gz"))
         evidence_path.write_bytes(b"not-gzip")
         expected_check = "evidence-integrity"
-    else:
+    elif corruption == "locator":
         with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
             connection.execute(
                 "UPDATE discovery_queue SET locator = 'CORRUPTED' WHERE rowid = 1"
             )
             connection.commit()
         expected_check = "reference-application-agreement"
+    else:
+        with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+            row = connection.execute(
+                "SELECT payload_json FROM checkpoints WHERE authority_id = 'barnet'"
+            ).fetchone()
+            assert row is not None
+            checkpoint = json.loads(row[0])
+            checkpoint["seen_locators"][0] = "CORRUPTED"
+            connection.execute(
+                "UPDATE checkpoints SET payload_json = ? WHERE authority_id = 'barnet'",
+                (json.dumps(checkpoint, separators=(",", ":")),),
+            )
+            connection.commit()
+        expected_check = "terminal-checkpoint"
 
     assert (
         module.main(
