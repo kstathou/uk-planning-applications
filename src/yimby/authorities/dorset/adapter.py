@@ -544,8 +544,11 @@ def _parse_disclaimer_form(body: bytes) -> Tag:
     ):
         _raise_parse("disclaimer form")
     fields = _successful_controls(form)
-    _require_fields(fields, "__EVENTTARGET", "__VIEWSTATE")
-    _require_hidden_inputs(form, "__EVENTTARGET", "__VIEWSTATE")
+    state_names = ("__VIEWSTATE", "__VIEWSTATEGENERATOR", "__EVENTVALIDATION")
+    _require_fields(fields, *state_names)
+    _require_hidden_inputs(form, *state_names)
+    if any(field.name in state_names and not field.value for field in fields):
+        _raise_parse("disclaimer form state")
     _submit_value(form, _ACCEPT_BUTTON, "Accept")
     return form
 

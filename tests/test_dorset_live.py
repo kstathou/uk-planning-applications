@@ -1093,6 +1093,13 @@ def test_dorset_forms_fail_closed_on_identity_and_state_changes(
         parser(body)
 
 
+def test_dorset_disclaimer_rejects_empty_published_state() -> None:
+    """Consent is not submitted with an empty anti-forgery field."""
+    body = _disclaimer_form().replace(b'value="758A299B"', b'value=""')
+    with pytest.raises(ValueError, match="disclaimer form state"):
+        dorset_adapter._parse_disclaimer_form(body)
+
+
 @pytest.mark.parametrize(
     ("fault", "message"),
     [
