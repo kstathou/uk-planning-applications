@@ -16,7 +16,11 @@ def bng_to_wgs84(
     """Project a complete BNG pair, leaving missing locations unknown."""
     if easting is None or northing is None:
         return None
-    longitude, latitude = _BNG_TO_WGS84.transform(easting, northing)
+    longitude, latitude = _BNG_TO_WGS84.transform(
+        easting,
+        northing,
+        direction="FORWARD",
+    )
     return ApplicationLocation(
         bng_easting=easting,
         bng_northing=northing,
