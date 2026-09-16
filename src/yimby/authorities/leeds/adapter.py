@@ -963,7 +963,14 @@ def _parse_documents(
     soup = BeautifulSoup(body, "html.parser")
     tables = soup.select('table[summary="Documents" i]')
     if not tables:
-        if "no documents found" in soup.get_text(" ", strip=True).casefold():
+        page_text = soup.get_text(" ", strip=True).casefold()
+        if "permission denied" in page_text and (
+            "do not have permission to view the page" in page_text
+        ):
+            return (), UnavailableSection(
+                reason="documents are restricted by Leeds Public Access"
+            )
+        if "no documents found" in page_text:
             return (), EmptySection()
         _raise_parse("documents table")
     if len(tables) != 1:

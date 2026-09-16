@@ -488,7 +488,7 @@ class _LeedsDetailMock:
         self.tabs: list[str] = []
         self.attachment_paths: list[str] = []
 
-    def __call__(self, request: httpx.Request) -> httpx.Response:
+    def __call__(self, request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
         if request.url.path.endswith("/applicationDetails.do"):
             tab = request.url.params["activeTab"]
             self.tabs.append(tab)
