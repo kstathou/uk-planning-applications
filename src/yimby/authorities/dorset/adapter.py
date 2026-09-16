@@ -682,8 +682,6 @@ def _parse_result_page(body: bytes) -> _ResultPage:  # noqa: C901
         or str(bottom_next_controls[0].get("value", "")) != " "
     ):
         _raise_parse("next page")
-    if not next_allowed and next_controls:
-        _raise_parse("next page")
     return _ResultPage(
         references=tuple(references),
         page=page,

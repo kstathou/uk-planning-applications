@@ -698,7 +698,7 @@ def test_dorset_live_accepts_vestigial_terminal_next_controls() -> None:
 
     assert page.page == page.total_pages == 2
     assert page.next_allowed is False
-    with pytest.raises(ValueError, match="terminal page"):
+    with pytest.raises(ValueError, match="next page"):
         dorset_adapter._next_page_request(page)
 
 
