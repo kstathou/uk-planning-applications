@@ -41,6 +41,8 @@ WINDOW = DiscoveryWindow(
     include_open=True,
 )
 _LIVE_PAGE = "live"
+_FIRST_PAGE = "first"
+_COMPLETE_PAGE = "complete"
 
 
 def _query_urls(window: DiscoveryWindow = WINDOW) -> tuple[str, ...]:
@@ -70,8 +72,14 @@ def _search(*identities: tuple[int, str], total: int | None = None) -> bytes:
 
 
 class _OpdcSession:
-    def __init__(self, responses: dict[str, bytes | Exception]) -> None:
+    def __init__(
+        self,
+        responses: dict[str, bytes | Exception],
+        *,
+        mode: TransportMode = TransportMode.LIVE,
+    ) -> None:
         self._responses = responses
+        self._mode = mode
         self.requests: list[PortalRequest] = []
         self.closed = False
 
@@ -110,7 +118,7 @@ class _OpdcSession:
 
     @property
     def mode(self) -> TransportMode:
-        return TransportMode.LIVE
+        return self._mode
 
     async def aclose(self) -> None:
         self.closed = True
@@ -279,6 +287,12 @@ def test_opdc_live_checkpoint_and_cross_query_identity_must_be_coherent() -> Non
         end=WINDOW.end,
         include_open=True,
     )
+    fixture_checkpoint = OpdcCheckpointV1(page_token=_COMPLETE_PAGE)
+    assert fixture_checkpoint.live_complete is False
+    with pytest.raises(ValueError, match="fixture/live state"):
+        OpdcCheckpointV1(page_token=_LIVE_PAGE)
+    with pytest.raises(ValueError, match="live page token"):
+        OpdcCheckpointV1(page_token=_FIRST_PAGE, live_scope=scope)
     with pytest.raises(ValueError, match="query inventory"):
         OpdcCheckpointV1(
             page_token=_LIVE_PAGE,
@@ -309,3 +323,21 @@ def test_opdc_live_checkpoint_and_cross_query_identity_must_be_coherent() -> Non
     )
     with pytest.raises(OpdcParseError, match="identity"):
         asyncio.run(_batches(session))
+
+    fixture_url = (
+        "https://planning.agileapplications.co.uk/opdc/search?"
+        "from=2026-08-18&to=2026-09-16&page=first"
+    )
+    fixture = _OpdcSession(
+        {
+            fixture_url: (
+                b'<article data-opdc-reference="A"></article>'
+                b'<span data-opdc-page="complete"></span>'
+            )
+        },
+        mode=TransportMode.FIXTURE,
+    )
+    live_progress = OpdcCheckpointV1(page_token=_LIVE_PAGE, live_scope=scope)
+    fixture_batches = asyncio.run(_batches(fixture, checkpoint=live_progress))
+    assert fixture.requested_urls == (fixture_url,)
+    assert fixture_batches[0].complete is True
