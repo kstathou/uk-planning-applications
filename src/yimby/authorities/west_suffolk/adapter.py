@@ -742,7 +742,7 @@ def _advanced_request(
 
 def _parse_search_page(body: bytes) -> _SearchPage:
     soup = BeautifulSoup(body, "html.parser")
-    return _parse_result_list(soup, terminal_first_page_marker="1")
+    return _parse_result_list(soup, terminal_first_page_markers=("1",))
 
 
 def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
@@ -754,14 +754,14 @@ def _parse_advanced_search_page(body: bytes, *, page: int) -> _SearchPage:
         return _parse_redirected_detail(body, soup, detail_tables)
     return _parse_result_list(
         soup,
-        terminal_first_page_marker="" if page == 1 else None,
+        terminal_first_page_markers=("", "1") if page == 1 else (),
     )
 
 
 def _parse_result_list(
     soup: BeautifulSoup,
     *,
-    terminal_first_page_marker: str | None,
+    terminal_first_page_markers: tuple[str, ...],
 ) -> _SearchPage:
     references = []
     for row in soup.select("li.searchresult"):
@@ -782,13 +782,13 @@ def _parse_result_list(
         reported = _reported_count(
             soup,
             row_count=len(references),
-            allow_empty_first_page_marker=terminal_first_page_marker == "",
+            allow_empty_first_page_marker="" in terminal_first_page_markers,
         )
     except WestSuffolkParseError:
         if not _is_uncounted_terminal_first_page(
             soup,
             row_count=len(references),
-            expected_page_marker=terminal_first_page_marker,
+            expected_page_markers=terminal_first_page_markers,
         ):
             raise
         reported = len(references)
@@ -954,14 +954,14 @@ def _is_uncounted_terminal_first_page(
     soup: BeautifulSoup,
     *,
     row_count: int,
-    expected_page_marker: str | None = "1",
+    expected_page_markers: tuple[str, ...] = ("1",),
 ) -> bool:
     page_inputs = soup.select('input[name="searchCriteria.page"][value]')
     if (
-        expected_page_marker is None
+        not expected_page_markers
         or row_count == 0
         or len(page_inputs) != 1
-        or str(page_inputs[0].get("value", "")).strip() != expected_page_marker
+        or str(page_inputs[0].get("value", "")).strip() not in expected_page_markers
         or soup.select_one(".showing") is not None
     ):
         return False
