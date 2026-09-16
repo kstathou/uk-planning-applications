@@ -408,6 +408,7 @@ class _DevonMock:
         values: dict[str, list[str]] = {}
         for field in request.form:
             values.setdefault(field.name, []).append(field.value)
+
         def iso_date(value: str) -> str:
             day, month, year = value.split("/")
             return f"{year}-{month}-{day}"
@@ -687,7 +688,8 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
         metadata = tuple(
             connection.execute(
                 "SELECT category, published_date FROM document_metadata "
-                "ORDER BY category"
+                "WHERE application_id = ? ORDER BY category",
+                (report.applications[0],),
             )
         )
     assert metadata == (
@@ -1225,7 +1227,7 @@ def test_devon_terminal_and_parser_boundaries() -> None:
         devon._parse_labelled_fields(b'<dl class="details-grid"><dt>Orphan</dt></dl>')
     malformed_fields = devon._parse_labelled_fields(
         b'<dl class="details-grid"><dt>Proposal</dt><dd>Exact proposal'
-        b'<dt>Location</dt><dd>Exact location</dd></dl>'
+        b"<dt>Location</dt><dd>Exact location</dd></dl>"
     )
     assert malformed_fields == {
         "proposal": "Exact proposal",
@@ -1234,6 +1236,37 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     assert devon._parse_coordinates(b"<html></html>") == (None, None)
     with pytest.raises(devon.DevonParseError, match="coordinates"):
         devon._parse_coordinates(b"<script>var easting = 300476;</script>")
+    assert devon._parse_constraints(b"<html></html>") == ((), False)
+    assert devon._parse_consultations(b"<html></html>") == ((), False)
+    constraint_table = (
+        b'<table summary="Planning Constraints"><thead><tr><th>Description</th>'
+        b"</tr></thead><tbody><tr><td>Constraint</td></tr></tbody></table>"
+    )
+    with pytest.raises(devon.DevonParseError, match="constraints table"):
+        devon._parse_constraints(constraint_table + constraint_table)
+    with pytest.raises(devon.DevonParseError, match="constraints headers"):
+        devon._parse_constraints(constraint_table.replace(b"Description", b"Other"))
+    with pytest.raises(devon.DevonParseError, match="constraint row"):
+        devon._parse_constraints(
+            constraint_table.replace(b"<td>Constraint</td>", b"<td></td>")
+        )
+    consultation_table = (
+        b'<table summary="Planning Consultees"><thead><tr>'
+        b"<th>Consultee Name</th><th>Date Letter Sent</th>"
+        b"<th>Consultation Expiry Date</th><th>Reply Received</th>"
+        b"</tr></thead><tbody><tr><td>Consultee</td></tr></tbody></table>"
+    )
+    with pytest.raises(devon.DevonParseError, match="consultations table"):
+        devon._parse_consultations(consultation_table + consultation_table)
+    with pytest.raises(devon.DevonParseError, match="consultations headers"):
+        devon._parse_consultations(
+            consultation_table.replace(b"Consultee Name", b"Other")
+        )
+    with pytest.raises(devon.DevonParseError, match="consultation row"):
+        devon._parse_consultations(
+            consultation_table.replace(b"<td>Consultee</td>", b"<td></td>")
+        )
+    assert devon._split_lines(None) == ()
     assert devon._optional_field({"second": "value"}, "first", "second") == "value"
     assert devon._optional_field({}, "missing") is None
     with pytest.raises(devon.DevonParseError, match="detail missing"):
@@ -1659,8 +1692,32 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
         devon._parse_documents(
             _devon_detail().replace(b'href="/Document/Download', b'data-href="x', 1)
         )
+    with pytest.raises(devon.DevonParseError, match="document headers"):
+        devon._parse_documents(_devon_detail().replace(b"Created date", b"Uploaded", 1))
+    with pytest.raises(devon.DevonParseError, match="document rows"):
+        devon._parse_documents(
+            b'<div id="PlanningdocTable"></div><table class="document-list">'
+            b"<thead><tr><th>All</th><th>Description</th><th>Created date</th>"
+            b"</tr></thead></table>"
+        )
+    with pytest.raises(devon.DevonParseError, match="document group"):
+        devon._parse_documents(
+            _devon_detail().replace(b'class="header active"', b'class="active"', 1)
+        )
+    with pytest.raises(devon.DevonParseError, match="document category"):
+        devon._parse_documents(_devon_detail().replace(b"PLANS &amp; DRAWINGS", b"", 1))
+    with pytest.raises(devon.DevonParseError, match="document row"):
+        devon._parse_documents(
+            _devon_detail().replace(
+                b"<td>20/08/2026</td>",
+                b"<td>20/08/2026</td><td>unexpected</td>",
+                1,
+            )
+        )
     with pytest.raises(devon.DevonParseError, match="document date"):
-        devon._parse_documents(_devon_detail().replace(b"20/08/2026", b"bad", 1))
+        devon._parse_documents(
+            _devon_detail().replace(b"<td>20/08/2026</td>", b"<td>bad</td>", 1)
+        )
     with pytest.raises(devon.DevonParseError, match="document locator"):
         devon._parse_documents(
             _devon_detail().replace(
@@ -1842,8 +1899,10 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         )
     assert retained_status == (
         "discovery-only",
-        "exact planning and appeal discovery is live-qualified; "
-        "two later weekly cycles remain pending",
+        (
+            "exact planning and appeal discovery is live-qualified; "
+            "two later weekly cycles remain pending"
+        ),
     )
 
     resumed_sessions: list[_Session] = []

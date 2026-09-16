@@ -38,12 +38,12 @@ from yimby.domain import (
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
-from yimby.registry import AuthorityRegistry
+from yimby.registry import PILOT_LIVE_STATUS, AuthorityRegistry
 from yimby.store import EvidenceRegistrationAudit, SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("devon")
-_RECEIPT_NAME = "devon-qualification-v2.json"
+_RECEIPT_NAME = "devon-qualification-v3.json"
 _CONFIRMATION_REQUIRED = "confirmation-required"
 _INCLUDE_OPEN_REQUIRED = "include-open-required"
 _INVALID_DATE = "invalid-date"
@@ -51,7 +51,7 @@ _EXACT_WINDOW_REQUIRED = "exact-window-required"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
 _QUALIFICATION_DAYS = 30
-_EXPECTED_QUERY_COUNT = 3
+_EXPECTED_QUERY_COUNT = 6
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -109,10 +109,10 @@ class PendingWeeklyCycle(FrozenModel):
     status: Literal["pending"] = "pending"
 
 
-class DevonQualificationReceiptV2(FrozenModel):
+class DevonQualificationReceiptV3(FrozenModel):
     """Versioned result of a complete local live qualification."""
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     authority_id: Literal["devon"] = "devon"
     created_at: datetime
     scope: QualificationScope
@@ -383,8 +383,8 @@ async def _qualify(
     config: _Config,
     session_factory: SessionFactory,
     now: Clock,
-) -> DevonQualificationReceiptV2:
-    registry = AuthorityRegistry((DEVON_PACKAGE,))
+) -> DevonQualificationReceiptV3:
+    registry = AuthorityRegistry((DEVON_PACKAGE,), PILOT_LIVE_STATUS)
     collector = Collector(registry, store)
     window = DiscoveryWindow(
         start=config.scope.start,
@@ -438,7 +438,7 @@ async def _qualify(
     )
     _require(final_checks)
     audit = cast("DevonQualificationAuditV1", _checkpoint_audit(store, config.scope))
-    return DevonQualificationReceiptV2(
+    return DevonQualificationReceiptV3(
         created_at=now(),
         scope=config.scope,
         expected_queries=audit.expected_queries,
@@ -457,7 +457,7 @@ async def _qualify(
     )
 
 
-def _write_receipt(path: Path, receipt: DevonQualificationReceiptV2) -> None:
+def _write_receipt(path: Path, receipt: DevonQualificationReceiptV3) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     payload = f"{receipt.model_dump_json(indent=2)}\n"
     with temporary.open("w", encoding="utf-8") as output:
@@ -472,17 +472,44 @@ def _write_receipt(path: Path, receipt: DevonQualificationReceiptV2) -> None:
         os.close(directory)
 
 
-def _receipt_to_persist(
+def _preserved_receipt(
+    store: SqliteStore,
+    config: _Config,
     path: Path,
-    candidate: DevonQualificationReceiptV2,
-) -> DevonQualificationReceiptV2:
-    if not path.exists() or candidate.costs.initial.request_count != 0:
-        return candidate
+) -> DevonQualificationReceiptV3 | None:
+    """Require original live transport proof whenever durable history exists."""
+    has_history = bool(
+        store.run_statuses()
+        or store.discovery_state(_AUTHORITY_ID).checkpoint is not None
+        or _application_references(store)
+    )
+    if not has_history:
+        return None
     try:
-        prior = DevonQualificationReceiptV2.model_validate_json(path.read_text())
-    except (OSError, ValueError):
-        return candidate
+        prior = DevonQualificationReceiptV3.model_validate_json(path.read_text())
+    except (OSError, ValueError) as error:
+        raise QualificationFailedError(("preserved-live-receipt",)) from error
     if (
+        prior.scope != config.scope
+        or prior.costs.initial.request_count == 0
+        or prior.costs.rerun.request_count != 0
+        or prior.costs.rerun.transferred_bytes != 0
+        or prior.costs.rerun.attachment_body_requests != 0
+        or not all(check.ok for check in prior.checks)
+    ):
+        raise QualificationFailedError(("preserved-live-receipt",))
+    return prior
+
+
+def _receipt_to_persist(
+    prior: DevonQualificationReceiptV3 | None,
+    candidate: DevonQualificationReceiptV3,
+) -> DevonQualificationReceiptV3:
+    if candidate.costs.initial.request_count != 0:
+        if prior is not None:
+            raise QualificationFailedError(("preserved-live-receipt",))
+        return candidate
+    if prior is not None and (
         prior.scope == candidate.scope
         and prior.expected_queries == candidate.expected_queries
         and prior.completed_queries == candidate.completed_queries
@@ -497,7 +524,7 @@ def _receipt_to_persist(
         and prior.costs.rerun.attachment_body_requests == 0
     ):
         return prior
-    return candidate
+    raise QualificationFailedError(("preserved-live-receipt",))
 
 
 def _default_session() -> HttpxPortalSession:
@@ -531,10 +558,12 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                candidate = asyncio.run(_qualify(store, config, session_factory, now))
                 receipt_path = config.data_dir / _RECEIPT_NAME
-                receipt = _receipt_to_persist(receipt_path, candidate)
-                _write_receipt(receipt_path, receipt)
+                prior = _preserved_receipt(store, config, receipt_path)
+                candidate = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt = _receipt_to_persist(prior, candidate)
+                if prior is None:
+                    _write_receipt(receipt_path, receipt)
             finally:
                 store.close()
     except QualificationFailedError as error:

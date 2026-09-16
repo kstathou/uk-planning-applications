@@ -261,6 +261,8 @@ class DocumentRecord(FrozenModel):
 
     title: str
     url: HttpUrl
+    category: str | None = None
+    published_date: date | None = None
 
 
 class CommentRecord(FrozenModel):

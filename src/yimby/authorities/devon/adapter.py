@@ -16,6 +16,7 @@ from bs4.element import Tag
 from pydantic import Field, HttpUrl, model_validator
 
 from yimby.domain import (
+    ApplicationEvent,
     ApplicationMetadata,
     AuthorityId,
     AuthorityKind,
@@ -35,6 +36,7 @@ from yimby.domain import (
     TransportMode,
     UnavailableSection,
 )
+from yimby.geo import bng_to_wgs84
 from yimby.transport import (
     FormField,
     PortalRequest,
@@ -57,6 +59,7 @@ _DATE_FORMATS = ("%d/%m/%Y", "%d %B %Y", "%d %b %Y", "%Y-%m-%d")
 _MAX_WINDOW_DAYS = 30
 _PAGE_SIZE = 10
 _FIRST_PAGED_RESULT = 2
+_DOCUMENT_COLUMN_COUNT = 3
 _REDIRECT_BOUNDARY = RedirectBoundary(
     origin=HttpUrl(f"{BASE_URL}/"),
     exact_paths=(
@@ -219,6 +222,14 @@ class DevonDocumentV1(FrozenModel):
     image_identifier: str | None = None
     is_plan: bool | None = None
     filename: str | None = None
+    category: str | None = None
+    published_date: date | None = None
+
+
+class DevonConsultationV1(FrozenModel):
+    """One source row retained without guessing around malformed cells."""
+
+    values: tuple[str, ...] = Field(min_length=1)
 
 
 class DevonApplicationV1(FrozenModel):
@@ -240,10 +251,30 @@ class DevonApplicationV1(FrozenModel):
     parish: str | None = None
     applicant: str | None = None
     agent: str | None = None
+    consultation_expiry_date: date | None = None
+    decision_level: str | None = None
+    committee_date: date | None = None
+    issue_date: date | None = None
+    applicant_address: str | None = None
+    agent_address: str | None = None
+    local_members: tuple[str, ...] = ()
+    bng_easting: float | None = None
+    bng_northing: float | None = None
+    constraints: tuple[str, ...] = ()
+    constraints_exposed: bool = False
+    consultations: tuple[DevonConsultationV1, ...] = ()
+    consultations_exposed: bool = False
 
 
 class _DevonQuery(FrozenModel):
-    kind: Literal["received", "determined", "outstanding"]
+    kind: Literal[
+        "received",
+        "determined",
+        "outstanding-planning",
+        "appeal-received",
+        "appeal-determined",
+        "outstanding-appeals",
+    ]
     key: str
     start: date | None = None
     end: date | None = None
@@ -332,12 +363,11 @@ class DevonAdapter:
             end=window.end,
             include_open=window.include_open,
         )
-        progress = checkpoint or DevonCheckpointV1(
-            result_page="live",
-            live_scope=scope,
-        )
+        progress = checkpoint or DevonCheckpointV1(result_page="live", live_scope=scope)
         if progress.live_scope != scope:
-            _raise_checkpoint("scope-mismatch")
+            if not progress.live_complete:
+                _raise_checkpoint("scope-mismatch")
+            progress = DevonCheckpointV1(result_page="live", live_scope=scope)
         if progress.live_complete:
             yield DiscoveryBatch(references=(), next_checkpoint=progress, complete=True)
             return
@@ -453,6 +483,9 @@ class DevonAdapter:
         if published != reference.reference:
             raise DevonReferenceMismatchError(reference.reference, published)
         documents, document_state = _parse_documents(detail.body)
+        bng_easting, bng_northing = _parse_coordinates(detail.body)
+        constraints, constraints_exposed = _parse_constraints(detail.body)
+        consultations, consultations_exposed = _parse_consultations(detail.body)
         payload = DevonApplicationV1(
             council_reference=published,
             application_type=_required_field(fields, "application type", "type"),
@@ -474,6 +507,19 @@ class DevonAdapter:
             parish=_optional_field(fields, "parish(es)", "parish"),
             applicant=_optional_field(fields, "applicant"),
             agent=_optional_field(fields, "agent"),
+            consultation_expiry_date=_optional_date(fields, "consultation expiry"),
+            decision_level=_optional_field(fields, "decision level"),
+            committee_date=_optional_date(fields, "committee date"),
+            issue_date=_optional_date(fields, "issue date"),
+            applicant_address=_optional_field(fields, "applicant's address"),
+            agent_address=_optional_field(fields, "agent's address"),
+            local_members=_split_lines(_optional_field(fields, "local member(s)")),
+            bng_easting=bng_easting,
+            bng_northing=bng_northing,
+            constraints=constraints,
+            constraints_exposed=constraints_exposed,
+            consultations=consultations,
+            consultations_exposed=consultations_exposed,
         )
         return _snapshot(reference, payload, captures, document_state)
 
@@ -489,7 +535,12 @@ class DevonAdapter:
             proposal=payload.proposal_description,
             status=payload.public_status.casefold().replace(" ", "-"),
             documents=tuple(
-                DocumentRecord(title=item.title, url=item.url)
+                DocumentRecord(
+                    title=item.title,
+                    url=item.url,
+                    category=item.category,
+                    published_date=item.published_date,
+                )
                 for item in payload.documents
             ),
             comments=(),
@@ -498,7 +549,7 @@ class DevonAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="devon-v3",
+            normaliser_version="devon-v4",
             metadata=ApplicationMetadata(
                 application_type=payload.application_type,
                 decision=payload.decision,
@@ -506,10 +557,27 @@ class DevonAdapter:
                 received_date=payload.received_date,
                 validated_date=payload.validated_date,
                 decision_date=payload.decision_date,
+                location=bng_to_wgs84(payload.bng_easting, payload.bng_northing),
                 published_parties=tuple(
                     value for value in (payload.applicant, payload.agent) if value
                 ),
                 officer_name=payload.case_officer,
+                constraints=payload.constraints,
+                consultations=tuple(
+                    " | ".join(item.values) for item in payload.consultations
+                ),
+                events=tuple(
+                    ApplicationEvent(
+                        event_type=event_type,
+                        event_at=datetime.combine(event_date, datetime.min.time(), UTC),
+                    )
+                    for event_type, event_date in (
+                        ("consultation-expiry", payload.consultation_expiry_date),
+                        ("committee", payload.committee_date),
+                        ("issue", payload.issue_date),
+                    )
+                    if event_date is not None
+                ),
                 source_url=snapshot.evidence[-1].url,
             ),
         )
@@ -546,7 +614,7 @@ def qualification_audit(
 
 
 def _query_inventory(scope: DevonDiscoveryScope) -> tuple[_DevonQuery, ...]:
-    queries = (
+    planning_queries = (
         _DevonQuery(
             kind="received",
             key=f"received:{scope.start}:{scope.end}",
@@ -560,9 +628,28 @@ def _query_inventory(scope: DevonDiscoveryScope) -> tuple[_DevonQuery, ...]:
             end=scope.end,
         ),
     )
+    appeal_queries = (
+        _DevonQuery(
+            kind="appeal-received",
+            key=f"appeal-received:{scope.start}:{scope.end}",
+            start=scope.start,
+            end=scope.end,
+        ),
+        _DevonQuery(
+            kind="appeal-determined",
+            key=f"appeal-determined:{scope.start}:{scope.end}",
+            start=scope.start,
+            end=scope.end,
+        ),
+    )
     if not scope.include_open:
-        return queries
-    return (*queries, _DevonQuery(kind="outstanding", key="outstanding:planning:true"))
+        return (*planning_queries, *appeal_queries)
+    return (
+        *planning_queries,
+        _DevonQuery(kind="outstanding-planning", key="outstanding:planning:true"),
+        *appeal_queries,
+        _DevonQuery(kind="outstanding-appeals", key="outstanding:appeals:true"),
+    )
 
 
 def _query_keys(scope: DevonDiscoveryScope) -> tuple[str, ...]:
@@ -722,17 +809,32 @@ def _parse_advanced_form(body: bytes) -> Tag:
 def _advanced_fields(  # noqa: C901
     form: Tag, query: _DevonQuery
 ) -> tuple[FormField, ...]:
+    appeal_query = query.kind in {
+        "appeal-received",
+        "appeal-determined",
+        "outstanding-appeals",
+    }
     enabled = {
-        "Outstanding": query.kind == "outstanding",
-        "SearchPlanning": True,
+        "Outstanding": query.kind in {"outstanding-planning", "outstanding-appeals"},
+        "SearchPlanning": not appeal_query,
         "SearchEnforcement": False,
-        "SearchAppeals": False,
+        "SearchAppeals": appeal_query,
     }
     values = dict.fromkeys(_VALUE_FIELDS, "")
-    if query.kind in {"received", "determined"}:
+    if query.kind in {
+        "received",
+        "determined",
+        "appeal-received",
+        "appeal-determined",
+    }:
         if query.start is None or query.end is None:
             _raise_checkpoint("dated-query-bounds")
-        prefix = "DateReceived" if query.kind == "received" else "DateDetermined"
+        prefix = {
+            "received": "DateReceived",
+            "determined": "DateDetermined",
+            "appeal-received": "DateAppeal",
+            "appeal-determined": "DateAppealDecision",
+        }[query.kind]
         values[f"{prefix}From"] = query.start.strftime("%d/%m/%Y")
         values[f"{prefix}To"] = query.end.strftime("%d/%m/%Y")
     fields = []
@@ -1057,11 +1159,85 @@ def _parse_labelled_fields(body: bytes) -> dict[str, str]:
             value = term.find_next_sibling("dd")
             if isinstance(value, Tag):
                 fields[_normalise_label(term.get_text(" ", strip=True))] = (
-                    value.get_text(" ", strip=True)
+                    _leading_text(value)
                 )
     if not fields:
         _raise_parse("details-grid")
     return fields
+
+
+def _leading_text(value: Tag) -> str:
+    """Read a value only until Devon's first unclosed nested label."""
+    return " ".join(next(value.stripped_strings, "").split())
+
+
+def _parse_coordinates(body: bytes) -> tuple[float | None, float | None]:
+    """Retain a complete BNG pair from the source-owned map script."""
+    text = body.decode(errors="replace")
+    easting = re.search(r"\bvar\s+easting\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*;", text)
+    northing = re.search(r"\bvar\s+northing\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*;", text)
+    if easting is None and northing is None:
+        return None, None
+    if easting is None or northing is None:
+        _raise_parse("coordinates")
+    return float(easting.group(1)), float(northing.group(1))
+
+
+def _parse_constraints(body: bytes) -> tuple[tuple[str, ...], bool]:
+    """Enumerate the optional constraint table when the source exposes it."""
+    soup = BeautifulSoup(body, "html.parser")
+    tables = soup.select('table[summary="Planning Constraints"]')
+    if not tables:
+        return (), False
+    if len(tables) != 1:
+        _raise_parse("constraints table")
+    headers = tuple(
+        _normalise_label(item.get_text(" ", strip=True))
+        for item in tables[0].select("thead th")
+    )
+    if headers != ("description",):
+        _raise_parse("constraints headers")
+    constraints = []
+    for row in tables[0].select("tbody tr"):
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != 1 or not (value := cells[0].get_text(" ", strip=True)):
+            _raise_parse("constraint row")
+        constraints.append(value)
+    return tuple(constraints), True
+
+
+def _parse_consultations(
+    body: bytes,
+) -> tuple[tuple[DevonConsultationV1, ...], bool]:
+    """Retain every optional consultee row, including malformed source rows."""
+    soup = BeautifulSoup(body, "html.parser")
+    tables = soup.select('table[summary="Planning Consultees"]')
+    if not tables:
+        return (), False
+    if len(tables) != 1:
+        _raise_parse("consultations table")
+    headers = tuple(
+        _normalise_label(item.get_text(" ", strip=True))
+        for item in tables[0].select("thead th")
+    )
+    if headers != (
+        "consultee name",
+        "date letter sent",
+        "consultation expiry date",
+        "reply received",
+    ):
+        _raise_parse("consultations headers")
+    rows = []
+    for row in tables[0].select("tbody tr"):
+        values = tuple(
+            value
+            for cell in row.find_all("td", recursive=False)
+            if (value := cell.get_text(" ", strip=True))
+        )
+        if not values:
+            _raise_parse("consultation row")
+        rows.append(DevonConsultationV1(values=values))
+    return tuple(rows), True
 
 
 def _parse_documents(
@@ -1074,11 +1250,45 @@ def _parse_documents(
         return (), UnavailableSection(reason="Devon document section is not exposed")
     if len(markers) != 1 or len(tables) != 1:
         _raise_parse("document section")
-    links = tables[0].select('a[href*="/Document/Download"]')
-    if not links:
-        _raise_parse("document links")
+    headers = tuple(
+        _normalise_label(item.get_text(" ", strip=True))
+        for item in tables[0].select("thead th")
+    )
+    if len(headers) < _DOCUMENT_COLUMN_COUNT or headers[-2:] != (
+        "description",
+        "created date",
+    ):
+        _raise_parse("document headers")
+    documents = [
+        document
+        for group in tables[0].select("tbody")
+        for document in _parse_document_group(group)
+    ]
+    if not documents:
+        _raise_parse("document rows")
+    items = tuple(documents)
+    return items, CompleteSection(item_count=len(items))
+
+
+def _parse_document_group(group: Tag) -> tuple[DevonDocumentV1, ...]:
+    category_rows = group.select("tr.header")
+    data_rows = tuple(
+        row for row in group.find_all("tr", recursive=False) if row not in category_rows
+    )
+    if len(category_rows) != 1 or not data_rows:
+        _raise_parse("document group")
+    category = category_rows[0].get_text(" ", strip=True)
+    if not category:
+        _raise_parse("document category")
     documents = []
-    for link in links:
+    for row in data_rows:
+        cells = row.find_all("td", recursive=False)
+        if len(cells) != _DOCUMENT_COLUMN_COUNT:
+            _raise_parse("document row")
+        links = cells[1].select("a[href]")
+        if len(links) != 1:
+            _raise_parse("document row")
+        link = links[0]
         href = urljoin(f"{BASE_URL}/", str(link.get("href", "")))
         parts = urlsplit(href)
         if (
@@ -1094,6 +1304,7 @@ def _parse_documents(
             or _query_value(query, "fileName", "filename")
             or "Document"
         )
+        created = cells[2].get_text(" ", strip=True)
         documents.append(
             DevonDocumentV1(
                 title=title,
@@ -1104,10 +1315,17 @@ def _parse_documents(
                 image_identifier=_query_value(query, "imageId", "image"),
                 is_plan=_query_bool(query, "isPlan"),
                 filename=_query_value(query, "fileName", "filename"),
+                category=category,
+                published_date=_parse_date(created, "document date"),
             )
         )
-    items = tuple(documents)
-    return items, CompleteSection(item_count=len(items))
+    return tuple(documents)
+
+
+def _split_lines(value: str | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    return tuple(item.strip() for item in value.splitlines() if item.strip())
 
 
 def _query_value(values: dict[str, list[str]], *names: str) -> str | None:
@@ -1152,12 +1370,16 @@ def _optional_date(fields: dict[str, str], *names: str) -> date | None:
     value = _optional_field(fields, *names)
     if value is None or value == "-":
         return None
+    return _parse_date(value, "/".join(names))
+
+
+def _parse_date(value: str, field: str) -> date:
     for date_format in _DATE_FORMATS:
         try:
             return datetime.strptime(value, date_format).replace(tzinfo=UTC).date()
         except ValueError:
             continue
-    return _raise_parse(f"date {'/'.join(names)}")
+    return _raise_parse(f"date {field}")
 
 
 def _required_fixture(value: str, pattern: str, field: str) -> str:

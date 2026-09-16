@@ -67,8 +67,8 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("devon"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "exact 30-day received, determined, and outstanding planning discovery "
-        "is live-qualified; two later weekly cycles remain pending",
+        "exact planning and appeal discovery is live-qualified; "
+        "two later weekly cycles remain pending",
         "live-qualified Devon disclaimer, advanced search, canonical pager, detail, "
         "and document-metadata contracts; typed qualification receipt records a "
         "zero-network terminal rerun",

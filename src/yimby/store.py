@@ -2056,10 +2056,18 @@ class SqliteStore:
             self._connection.execute(
                 """
                 INSERT INTO document_metadata(
-                    application_id, document_key, title, url
-                ) VALUES (?, ?, ?, ?)
+                    application_id, document_key, title, url,
+                    category, published_date
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (application_id, key, document.title, str(document.url)),
+                (
+                    application_id,
+                    key,
+                    document.title,
+                    str(document.url),
+                    document.category,
+                    self._date_value(document.published_date),
+                ),
             )
 
     def _replace_comments(
