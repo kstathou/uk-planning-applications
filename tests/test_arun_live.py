@@ -1178,7 +1178,7 @@ def test_arun_qualification_requires_explicit_safe_options(
     assert created == 0
 
 
-def test_arun_qualification_receipt_proves_exact_state_and_zero_io_rerun(
+def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
     tmp_path: "Path",
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -1213,7 +1213,7 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_io_rerun(
     assert len(sessions[0].requested_urls) == 66
     assert sessions[1].requested_urls == ()
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["schema_version"] == 1
+    assert receipt["schema_version"] == 2
     assert receipt["authority_id"] == "arun"
     assert receipt["bootstrap_status"] == "proved"
     assert receipt["operational_status"] == "pending-weekly-refreshes"
@@ -1224,14 +1224,30 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_io_rerun(
         "start": "2026-08-18",
         "end": "2026-09-16",
     }
+    assert len(receipt["query_inventory"][0]["initial_evidence_digest"]) == 64
+    assert len(receipt["query_inventory"][0]["expanded_evidence_digest"]) == 64
     assert receipt["query_inventory"][-1]["query"]["end"] == "2026-09-16"
     assert receipt["references"] == {
         "discovered": ["BR/1/26/PL", "BR/2/26/PL"],
         "retained_native": ["BR/1/26/PL", "BR/2/26/PL"],
         "applications": ["BR/1/26/PL", "BR/2/26/PL"],
     }
-    assert receipt["evidence"]["capture_count"] == 4
+    assert receipt["evidence"]["application_capture_count"] == 4
+    assert len(receipt["evidence"]["application_digests"]) == 4
+    assert receipt["evidence"]["search_capture_count"] == 62
+    assert len(receipt["evidence"]["search_digests"]) == 62
+    assert len(receipt["search_form_evidence_digest"]) == 64
     assert len(receipt["semantic_fingerprint"]) == 64
+    assert receipt["costs"]["bootstrap_total"] == {
+        "request_count": 66,
+        "transferred_bytes": sessions[0].transferred_bytes,
+        "attachment_body_requests": 0,
+    }
+    assert receipt["costs"]["final_resume_attempt"] == {
+        "request_count": 66,
+        "transferred_bytes": sessions[0].transferred_bytes,
+        "attachment_body_requests": 0,
+    }
     assert receipt["costs"]["rerun"] == {
         "request_count": 0,
         "transferred_bytes": 0,
@@ -1243,6 +1259,72 @@ def test_arun_qualification_receipt_proves_exact_state_and_zero_io_rerun(
     ]
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
     assert all(check["ok"] for check in receipt["checks"])
-    receipt_path = data_dir / "arun-qualification-v1.json"
+    receipt_path = data_dir / "arun-qualification-v2.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
-    assert not (data_dir / ".arun-qualification-v1.json.tmp").exists()
+    assert not (data_dir / ".arun-qualification-v2.json.tmp").exists()
+
+
+def test_arun_qualification_replaces_an_existing_receipt_atomically(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "replace"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    assert module.main(
+        args,
+        session_factory=lambda: _Session(_QualificationResponder()),
+    ) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "arun-qualification-v2.json"
+    receipt_path.write_text("old receipt", encoding="utf-8")
+
+    assert module.main(
+        [*args, "--resume"],
+        session_factory=lambda: _Session(_QualificationResponder()),
+    ) == 0
+    replaced = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert replaced["schema_version"] == 2
+    assert all(check["ok"] for check in replaced["checks"])
+    assert not (data_dir / ".arun-qualification-v2.json.tmp").exists()
+
+
+def test_arun_qualification_does_not_publish_over_corrupt_evidence(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "tampered"
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    factory = lambda: _Session(_QualificationResponder())  # noqa: E731
+
+    assert module.main(args, session_factory=factory) == 0
+    receipt_path = data_dir / "arun-qualification-v2.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    receipt = json.loads(original)
+    digest = receipt["evidence"]["application_digests"][0]
+    evidence_path = data_dir / "evidence" / digest[:2] / f"{digest}.gz"
+    evidence_path.write_bytes(b"tampered")
+
+    assert module.main([*args, "--resume"], session_factory=factory) == 1
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert receipt_path.read_text(encoding="utf-8") == original
