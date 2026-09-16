@@ -137,3 +137,38 @@ cannot prove that every older open application was enumerated. Qualification
 therefore remains fail-closed: no adapter expansion, persisted bootstrap, or
 qualification receipt was produced, and both genuinely later weekly cycles
 remain pending.
+
+## Current-map follow-up on 16 September 2026
+
+The official council page headed `Map of current planning applications` says
+that its embedded map shows all current planning applications in Haringey. The
+map configuration names the public layer `planning_current_apps`, the WFS
+endpoint `https://my.haringey.gov.uk/GetOWS.ashx`, and the feature-information
+endpoint `https://my.haringey.gov.uk/MapGetImage.aspx`.
+
+A WFS 1.1.0 `GetFeature` request with `RESULTTYPE=hits` advertised 1,445
+features at 10:15:29 Europe/London. A whole-borough
+`GetMultiInfoFromShape` request over bounds `522831,182787` to
+`539720,195900` independently returned 1,445 feature identifiers and 1,445
+unique Salesforce planning-application links. The advertised, observed, and
+unique-link counts therefore reconcile exactly for this named layer. The
+1,781,204-byte feature response had SHA-256 digest
+`943f5fea06a34112a5b813e3392b3b3df77722ed6089ab562442a8428ade2d7d`.
+
+The response is labelled GeoJSON but is not valid JSON: at least one proposal
+contains unescaped quotation marks. Any future diagnostic parser must therefore
+fail closed around the feature, field, and structured-link boundaries rather
+than accepting a partial JSON parse.
+
+This discovery does **not** remove the older-open blocker. Feature 1 resolves
+to `HGY/2023/2916`, whose council detail page reports `Decision Made`, decision
+date 28 November 2023, and decision `No Objection`. The layer is therefore not
+an exact open-case inventory. It may be an undocumented or stale superset, but
+neither the map metadata nor the register proves that every older open
+application is present. The layer is useful additional discovery evidence only;
+its count must not be represented as older-open completeness.
+
+The source subsequently returned its maintenance page again. No production
+adapter expansion, persisted bootstrap, qualification receipt, or readiness
+promotion follows from this map investigation. The two genuinely later weekly
+cycles remain pending.

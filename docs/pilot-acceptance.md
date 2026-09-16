@@ -71,3 +71,12 @@ all-open route or application-status search field, while a broad advanced
 search truncates at 250 visible results. Because older-open completeness cannot
 be established, the recovery does not change Haringey's `BROWSER_ONLY` status,
 does not satisfy live bootstrap, and does not start either later weekly cycle.
+
+A later official-map investigation reconciled the
+`planning_current_apps` WFS hit count to 1,445 whole-borough map features and
+1,445 unique application links. That proves complete enumeration of the named
+map layer, not older-open completeness: its first feature, `HGY/2023/2916`, is
+reported by the council register as `Decision Made` on 28 November 2023. With
+no published inclusion rule proving that all open cases are present despite
+decided and stale records, Haringey remains fail-closed and no qualification
+receipt exists.
