@@ -11,6 +11,7 @@ import importlib.util
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -38,7 +39,12 @@ from yimby.domain import (
 from yimby.evidence import EvidenceStore
 from yimby.registry import AuthorityRegistry
 from yimby.store import SqliteStore
-from yimby.transport import PortalRequest, RequestMethod, SourceUnavailableError
+from yimby.transport import (
+    PortalRequest,
+    RequestIntent,
+    RequestMethod,
+    SourceUnavailableError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -856,7 +862,9 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
         session = _Session(_DevonMock())
         with pytest.raises(devon.DevonProtectedRouteError):
             asyncio.run(
-                adapter.fetch(session, reference.model_copy(update={"locator": locator}))
+                adapter.fetch(
+                    session, reference.model_copy(update={"locator": locator})
+                )
             )
         assert session.requests == []
 
@@ -864,14 +872,14 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
         b'action="/Disclaimer/Accept',
         b'action="https://evil.test/Disclaimer/Accept',
     )
-    session = _Session(lambda request: malicious_disclaimer)
+    session = _Session(lambda _request: malicious_disclaimer)
     with pytest.raises(devon.DevonProtectedRouteError):
         asyncio.run(
             devon._fetch_protected(
                 session,
                 PortalRequest(
                     url=HttpUrl(devon._ADVANCED_FORM_URL),
-                    intent=devon.RequestIntent.SEARCH,
+                    intent=RequestIntent.SEARCH,
                 ),
             )
         )
@@ -1558,7 +1566,7 @@ def test_devon_qualification_reconciles_registered_evidence(
     }
     orphan.unlink()
 
-    with sqlite3.connect(data_dir / "yimby.sqlite3") as connection:
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         connection.execute(
             """
             UPDATE native_rebuild_inputs
@@ -1570,6 +1578,7 @@ def test_devon_qualification_reconciles_registered_evidence(
             """,
             (json.dumps(["0" * 64]),),
         )
+        connection.commit()
     assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
     assert json.loads(capsys.readouterr().err) == {
         "error": "qualification-failed",

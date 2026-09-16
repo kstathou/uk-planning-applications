@@ -576,6 +576,11 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     """A corrupt native-to-evidence link fails instead of fabricating provenance."""
     store = _store(tmp_path)
     _collect_barnet(store)
+    registered = store.evidence_registration_audit(AuthorityId("barnet"))
+    assert registered.application_count == 1
+    assert registered.applications_with_evidence == 1
+    assert registered.registrations
+    assert registered.missing_digests == ()
     store.close()
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
         connection.execute(
@@ -591,6 +596,20 @@ def test_retained_native_requires_registered_evidence(tmp_path: Path) -> None:
     reopened = _store(tmp_path)
     with pytest.raises(KeyError):
         reopened.retained_native_records()
+    missing = reopened.evidence_registration_audit(AuthorityId("barnet"))
+    assert missing.registrations == ()
+    assert missing.missing_digests == tuple(
+        item.digest for item in registered.registrations
+    )
+    reopened.close()
+    with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_digests_json = '[]'"
+        )
+        connection.commit()
+    reopened = _store(tmp_path)
+    empty = reopened.evidence_registration_audit(AuthorityId("barnet"))
+    assert empty.applications_with_evidence == 0
     reopened.close()
 
 

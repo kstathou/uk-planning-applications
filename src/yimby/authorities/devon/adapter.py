@@ -583,10 +583,17 @@ def _advance_checkpoint(
     expected_page = progress.next_page if progress.active_query == query.key else 1
     if page.page != expected_page:
         _raise_checkpoint("page-cursor-mismatch")
+    active_references = {
+        reference.reference
+        for proof in progress.active_pages
+        for reference in proof.references
+    }
     seen = {item.reference: item for item in progress.seen_references}
     ordered = list(progress.seen_references)
     fresh = []
     for reference in page.references:
+        if reference.reference in active_references:
+            _raise_checkpoint("query-duplicate")
         prior = seen.get(reference.reference)
         if prior is not None and prior.locator != reference.locator:
             _raise_checkpoint("reference-locator-changed")
@@ -894,14 +901,17 @@ async def _fetch_protected(
     session: PortalSession,
     request: PortalRequest,
 ) -> tuple[EvidenceCapture, ...]:
+    _validate_protected_request(request)
     first = await session.fetch(request)
     disclaimer = _parse_disclaimer(first.body)
     if disclaimer is None:
         return (first,)
     action, fields = disclaimer
+    accepted_url = HttpUrl(urljoin(f"{BASE_URL}/", action))
+    _validate_disclaimer_action(accepted_url)
     accepted = await session.fetch(
         PortalRequest(
-            url=HttpUrl(urljoin(f"{BASE_URL}/", action)),
+            url=accepted_url,
             intent=request.intent,
             method=RequestMethod.POST,
             form=fields,
@@ -910,6 +920,63 @@ async def _fetch_protected(
     if _parse_disclaimer(accepted.body) is not None:
         raise DevonDisclaimerAcceptanceError
     return first, accepted
+
+
+def _validate_protected_request(request: PortalRequest) -> None:
+    parts = urlsplit(str(request.url))
+    expected_origin = urlsplit(BASE_URL)
+    if (
+        parts.scheme,
+        parts.hostname,
+        parts.port,
+        parts.username,
+        parts.password,
+    ) != (
+        expected_origin.scheme,
+        expected_origin.hostname,
+        expected_origin.port,
+        None,
+        None,
+    ):
+        _raise_protected("request-origin")
+    allowed_paths = {
+        (RequestIntent.SEARCH, RequestMethod.GET): re.compile(
+            r"/Search/(?:Advanced|Results(?:/(?:[2-9]|[1-9]\d+))?)"
+        ),
+        (RequestIntent.SEARCH, RequestMethod.POST): re.compile(r"/Search/Results"),
+        (RequestIntent.DETAIL, RequestMethod.GET): re.compile(r"/Planning/Display/.+"),
+    }
+    pattern = allowed_paths.get((request.intent, request.method))
+    if (
+        pattern is None
+        or pattern.fullmatch(parts.path) is None
+        or parts.query
+        or parts.fragment
+    ):
+        _raise_protected("request-path")
+
+
+def _validate_disclaimer_action(url: HttpUrl) -> None:
+    parts = urlsplit(str(url))
+    expected_origin = urlsplit(BASE_URL)
+    if (
+        parts.scheme,
+        parts.hostname,
+        parts.port,
+        parts.username,
+        parts.password,
+        parts.path,
+        parts.fragment,
+    ) != (
+        expected_origin.scheme,
+        expected_origin.hostname,
+        expected_origin.port,
+        None,
+        None,
+        "/Disclaimer/Accept",
+        "",
+    ):
+        _raise_protected("disclaimer-action")
 
 
 def _parse_disclaimer(body: bytes) -> tuple[str, tuple[FormField, ...]] | None:
@@ -1064,6 +1131,10 @@ class DevonRoutingError(ValueError):
         super().__init__(f"Devon cannot route reference {reference}")
 
 
+class DevonProtectedRouteError(ValueError):
+    """A live request falls outside Devon's observed official routes."""
+
+
 class DevonReferenceMismatchError(ValueError):
     """A detail response published a different reference."""
 
@@ -1082,3 +1153,7 @@ def _raise_pagination(code: str) -> NoReturn:
 
 def _raise_checkpoint(code: str) -> NoReturn:
     raise DevonCheckpointError(code)
+
+
+def _raise_protected(code: str) -> NoReturn:
+    raise DevonProtectedRouteError(code)

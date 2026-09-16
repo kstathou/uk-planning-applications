@@ -185,9 +185,11 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         "is live-qualified; two later weekly cycles remain pending"
     )
     assert devon_status.evidence == (
-        "live-qualified Devon disclaimer, advanced search, canonical pager, "
-        "detail, and document-metadata contracts",
-        "typed qualification receipt records a zero-network terminal rerun",
+        (
+            "live-qualified Devon disclaimer, advanced search, canonical pager, "
+            "detail, and document-metadata contracts; typed qualification receipt "
+            "records a zero-network terminal rerun"
+        ),
     )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())

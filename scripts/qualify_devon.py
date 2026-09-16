@@ -38,7 +38,7 @@ from yimby.evidence import EvidenceStore
 from yimby.http_transport import HttpxPortalSession
 from yimby.orchestration import ProcessLock
 from yimby.registry import AuthorityRegistry
-from yimby.store import SqliteStore
+from yimby.store import EvidenceRegistrationAudit, SqliteStore
 from yimby.transport import PortalSession
 
 _AUTHORITY_ID = AuthorityId("devon")
@@ -262,18 +262,38 @@ def _evidence_inventory(data_dir: Path) -> tuple[str, ...]:
     )
 
 
-def _evidence_integrity(data_dir: Path, missing_paths: tuple[str, ...]) -> bool:
+def _evidence_integrity(
+    data_dir: Path,
+    audit: EvidenceRegistrationAudit,
+    application_count: int,
+) -> bool:
     inventory = _evidence_inventory(data_dir)
-    if missing_paths or not inventory:
+    registrations = audit.registrations
+    registered_paths = tuple(item.path for item in registrations)
+    registered_pairs = tuple(
+        (item.application_id, item.digest) for item in registrations
+    )
+    if (
+        not inventory
+        or audit.application_count != application_count
+        or audit.applications_with_evidence != application_count
+        or audit.missing_digests
+        or len(registered_pairs) != len(set(registered_pairs))
+        or set(registered_paths) != set(inventory)
+    ):
         return False
     evidence_root = data_dir / "evidence"
-    for relative in inventory:
-        path = evidence_root / relative
+    for registration in registrations:
+        digest = str(registration.digest)
+        expected_path = f"{digest[:2]}/{digest}.gz"
+        if registration.path != expected_path:
+            return False
+        path = evidence_root / registration.path
         try:
             body = gzip.decompress(path.read_bytes())
         except (OSError, EOFError):
             return False
-        if sha256(body).hexdigest() != path.stem:
+        if sha256(body).hexdigest() != digest:
             return False
     return True
 
@@ -294,7 +314,7 @@ def _base_checks(
     audit = _checkpoint_audit(store, scope)
     state = store.discovery_state(_AUTHORITY_ID)
     applications = _application_references(store)
-    missing_paths = store.missing_evidence_paths()
+    evidence_audit = store.evidence_registration_audit(_AUTHORITY_ID)
     return (
         QualificationCheck(
             name="terminal-checkpoint-coherence",
@@ -330,7 +350,11 @@ def _base_checks(
         ),
         QualificationCheck(
             name="evidence-integrity",
-            ok=_evidence_integrity(data_dir, missing_paths),
+            ok=_evidence_integrity(
+                data_dir,
+                evidence_audit,
+                snapshot.applications,
+            ),
         ),
         QualificationCheck(
             name="unmapped-records",

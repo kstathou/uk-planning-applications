@@ -82,6 +82,23 @@ class _ApplicationSection(FrozenModel):
     status: str
 
 
+class RetainedEvidenceRegistration(FrozenModel):
+    """One application's durable link to a registered evidence object."""
+
+    application_id: ApplicationId
+    digest: EvidenceDigest
+    path: str
+
+
+class EvidenceRegistrationAudit(FrozenModel):
+    """Authority-scoped reconciliation facts for retained native evidence."""
+
+    application_count: int
+    applications_with_evidence: int
+    registrations: tuple[RetainedEvidenceRegistration, ...]
+    missing_digests: tuple[EvidenceDigest, ...]
+
+
 class SqliteStore:
     """Own the only SQLite writer connection for a collection runtime."""
 
@@ -1479,6 +1496,56 @@ class SqliteStore:
                 "SELECT digest, path, source_url, media_type "
                 "FROM evidence ORDER BY digest"
             )
+        )
+    def evidence_registration_audit(
+        self, authority_id: AuthorityId
+    ) -> EvidenceRegistrationAudit:
+        """Reconcile authority applications, native links, and evidence rows."""
+        registrations: list[RetainedEvidenceRegistration] = []
+        missing: list[EvidenceDigest] = []
+        applications_with_evidence = 0
+        rows = tuple(
+            self._connection.execute(
+                """
+                SELECT application.id, rebuild.evidence_digests_json
+                FROM applications AS application
+                LEFT JOIN native_rebuild_inputs AS rebuild
+                    ON rebuild.application_id = application.id
+                WHERE application.authority_id = ?
+                ORDER BY application.id
+                """,
+                (authority_id,),
+            )
+        )
+        for row in rows:
+            digest_values = (
+                ()
+                if row["evidence_digests_json"] is None
+                else tuple(json.loads(row["evidence_digests_json"]))
+            )
+            if digest_values:
+                applications_with_evidence += 1
+            for digest_value in digest_values:
+                digest = EvidenceDigest(digest_value)
+                evidence = self._connection.execute(
+                    "SELECT path FROM evidence WHERE digest = ?",
+                    (digest,),
+                ).fetchone()
+                if evidence is None:
+                    missing.append(digest)
+                    continue
+                registrations.append(
+                    RetainedEvidenceRegistration(
+                        application_id=ApplicationId(row["id"]),
+                        digest=digest,
+                        path=evidence["path"],
+                    )
+                )
+        return EvidenceRegistrationAudit(
+            application_count=len(rows),
+            applications_with_evidence=applications_with_evidence,
+            registrations=tuple(registrations),
+            missing_digests=tuple(missing),
         )
 
     def migration_versions(self) -> tuple[int, ...]:
