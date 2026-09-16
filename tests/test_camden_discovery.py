@@ -3,14 +3,23 @@
 
 """Camden GeneralSearch discovery and checkpoint behavior."""
 
-from datetime import date
+import asyncio
+from datetime import UTC, date, datetime
+from hashlib import sha256
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 from pydantic import ValidationError
 
 from yimby.authorities.camden import discovery
-from yimby.domain import DiscoveryWindow
+from yimby.authorities.camden.adapter import CamdenAdapter
+from yimby.domain import (
+    EvidenceCapture,
+    EvidenceDigest,
+    DiscoveryWindow,
+    TransportMode,
+)
+from yimby.transport import PortalRequest, RequestMethod
 
 
 def _window(*, include_open: bool = True) -> DiscoveryWindow:
@@ -295,3 +304,176 @@ def test_camden_result_pages_fail_closed(
 ) -> None:
     with pytest.raises(discovery.CamdenDiscoveryParseError, match=match):
         discovery._parse_result_page(body, requested_offset=offset)
+
+
+def _mock_page(
+    references: tuple[tuple[str, str], ...],
+    *,
+    offset: int,
+    total: int,
+    token: str,
+) -> bytes:
+    if total == 0:
+        return b"No Records Found. Please resubmit search with different criteria."
+    rows = references[offset : offset + 10]
+    first = offset + 1
+    last = offset + len(rows)
+    marker = f"Record {first} of {total}" if len(rows) == 1 else f"Records {first} to {last} of {total}"
+    rendered = "".join(
+        f"""
+        <tr class="Row1"><td title="View Application Details">
+          <a href="StdDetails.aspx?PARAM0={locator}&amp;PUBLIC=Y">{reference}</a>
+        </td><td>Address</td></tr>
+        """
+        for reference, locator in rows
+    )
+    pager = ""
+    if last < total:
+        pager = (
+            '<a href="StdResults.aspx?PT=Planning&amp;PS=10'
+            f'&amp;XMLLoc={token}&amp;p={last}">Next</a>'
+        )
+    return f"""
+      <span id="lblPagePosition">{marker}</span>{pager}
+      <table summary="Results of the Search">
+        <tr><th>Application Number</th><th>Address</th></tr>{rendered}
+      </table>
+    """.encode()
+
+
+class _DiscoveryPortal:
+    def __init__(self, *, drift: bool = False) -> None:
+        recent = tuple((f"2026/{index}/P", str(1000 + index - 1)) for index in range(1, 13))
+        if drift:
+            recent = (("2026/CHANGED/P", "9999"), *recent[1:])
+        self.rows = {
+            "DATE_RECEIVED": recent,
+            "DATE_VALID": (("2026/1/P", "1000"),),
+            "DATE_DECISION": (),
+            "status:4": (("TP/TP/12531/180693", "161799"),),
+            "status:14": (),
+        }
+        self.tokens: dict[str, str] = {}
+        self.submissions: dict[str, int] = {}
+
+    def __call__(self, request: PortalRequest) -> bytes:
+        url = str(request.url)
+        if request.method == RequestMethod.GET and url == discovery.GENERAL_SEARCH_URL:
+            return _search_form()
+        if request.method == RequestMethod.POST:
+            fields = dict((field.name, field.value) for field in request.form)
+            key = (
+                f"status:{fields['cboStatusCode']}"
+                if fields["rbGroup"] == "rbNotApplicable"
+                else fields["cboSelectDateValue"]
+            )
+            sequence = self.submissions.get(key, 0) + 1
+            self.submissions[key] = sequence
+            token = f"fresh-{key}-{sequence}"
+            self.tokens[token] = key
+            rows = self.rows[key]
+            return _mock_page(rows, offset=0, total=len(rows), token=token)
+        parameters = dict(parse_qsl(urlsplit(url).query))
+        token = parameters["XMLLoc"]
+        key = self.tokens[token]
+        offset = int(parameters["p"])
+        rows = self.rows[key]
+        return _mock_page(rows, offset=offset, total=len(rows), token=token)
+
+
+class _DiscoverySession:
+    def __init__(self, portal: _DiscoveryPortal) -> None:
+        self.portal = portal
+        self.requests: list[PortalRequest] = []
+
+    async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+        self.requests.append(request)
+        body = self.portal(request)
+        return EvidenceCapture(
+            url=request.url,
+            media_type="text/html",
+            body=body,
+            digest=EvidenceDigest(sha256(body).hexdigest()),
+        )
+
+    @property
+    def mode(self) -> TransportMode:
+        return TransportMode.LIVE
+
+
+async def _first_batch(
+    adapter: CamdenAdapter,
+    session: _DiscoverySession,
+    window: DiscoveryWindow,
+) -> object:
+    batches = adapter.discover(session, window, None)
+    first = await anext(batches)
+    await batches.aclose()
+    return first
+
+
+async def _all_batches(
+    adapter: CamdenAdapter,
+    session: _DiscoverySession,
+    window: DiscoveryWindow,
+    checkpoint: object,
+) -> list[object]:
+    return [batch async for batch in adapter.discover(session, window, checkpoint)]  # type: ignore[arg-type]
+
+
+def test_camden_live_discovery_resumes_with_fresh_session_and_full_replay() -> None:
+    adapter = CamdenAdapter()
+    window = _window()
+    first_session = _DiscoverySession(_DiscoveryPortal())
+    first = asyncio.run(_first_batch(adapter, first_session, window))
+    assert len(first.references) == 10  # type: ignore[attr-defined]
+    checkpoint = first.next_checkpoint  # type: ignore[attr-defined]
+    assert "XMLLoc" not in checkpoint.model_dump_json()
+
+    resumed_session = _DiscoverySession(_DiscoveryPortal())
+    batches = asyncio.run(
+        _all_batches(adapter, resumed_session, window, checkpoint)
+    )
+
+    emitted = [reference.reference for batch in batches for reference in batch.references]  # type: ignore[attr-defined]
+    assert emitted[:2] == ["2026/11/P", "2026/12/P"]
+    assert emitted.count("2026/1/P") == 0
+    assert emitted[-1] == "TP/TP/12531/180693"
+    assert batches[-1].complete  # type: ignore[attr-defined]
+    terminal = batches[-1].next_checkpoint  # type: ignore[attr-defined]
+    live = terminal.root
+    assert isinstance(live, discovery.CamdenLiveCheckpointV1)
+    assert isinstance(live.progress, discovery.CamdenTerminalV1)
+    assert [result.reported_count for result in live.completed_queries] == [
+        12,
+        1,
+        0,
+        1,
+        0,
+    ]
+    requested = [str(request.url) for request in resumed_session.requests]
+    assert all("fresh-DATE_RECEIVED-1" in url or "XMLLoc" not in url for url in requested[:3])
+
+    rerun = _DiscoverySession(_DiscoveryPortal())
+    rerun_batches = asyncio.run(_all_batches(adapter, rerun, window, terminal))
+    assert len(rerun_batches) == 1
+    assert rerun_batches[0].complete  # type: ignore[attr-defined]
+    assert rerun.requests == []
+
+
+def test_camden_live_discovery_rejects_resumed_prefix_drift() -> None:
+    adapter = CamdenAdapter()
+    window = _window()
+    first = asyncio.run(
+        _first_batch(adapter, _DiscoverySession(_DiscoveryPortal()), window)
+    )
+
+    with pytest.raises(discovery.CamdenResumeDriftError):
+        asyncio.run(
+            _all_batches(
+                adapter,
+                _DiscoverySession(_DiscoveryPortal(drift=True)),
+                window,
+                first.next_checkpoint,  # type: ignore[attr-defined]
+            )
+        )
