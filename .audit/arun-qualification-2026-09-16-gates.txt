@@ -842,3 +842,21 @@ OUTPUT: <empty>
 COMMAND: git status --short
 EXIT STATUS: 0
 OUTPUT: <empty>
+
+Post-a9f57b9 verification record (summarized successful rerun)
+Recorded complete: 2026-09-16T16:07:16Z
+
+This section records every command and its material result, not a byte-for-byte
+terminal transcript. It supersedes the prior receipt identifiers.
+
+COMMAND: PYTHONPATH=scripts .venv/bin/python -c '<run the same receipt-generation program recorded in full above>'
+EXIT STATUS: 0
+OUTPUT:
+{"checks_ok": 25, "created_at": "2026-09-16T16:05:41.961761+00:00", "final_resume_attempt": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "provenance": {"code_revision": "a9f57b92650a6c723edd1c6fe546bb40aa112493", "immediate_follow_up": {"cost": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "finished_at": "2026-09-16T16:05:33.048010Z", "run_id": "54025d07-317b-4399-a02d-74fd829a4ec9", "started_at": "2026-09-16T16:05:33.012497Z"}, "publication": {"cost": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "finished_at": "2026-09-16T16:05:23.637032Z", "run_id": "5adc1f05-7dfa-4080-8d63-3043b5da26b6", "started_at": "2026-09-16T16:05:23.548141Z"}}, "rerun": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "run_count": 25}
+
+COMMANDS: uv lock --check; frozen Ruff lint and format; configured mypy; active-suppression Ruff; frozen pytest; uv build --no-sources; both pre-commit stages; scripts/verify_pilot.py; typed receipt/SQLite assertions; git diff --check; git status --short
+EXIT STATUS: 0 for every command
+OUTPUT: lock resolved 73 packages; 119 files formatted; mypy found no issues in 80 source files; Ruff passed; 404 tests passed in 24.44s with 6,357 statements and 1,616 branches at 100 percent coverage; source distribution and wheel built; both hook stages passed; pilot verification emitted no errors; diff and status were empty
+
+RECEIPT ASSERTION OUTPUT:
+{"checks_ok": 25, "code_revision": "a9f57b92650a6c723edd1c6fe546bb40aa112493", "created_at": "2026-09-16T16:05:41.961761+00:00", "immediate_follow_up_run_id": "54025d07-317b-4399-a02d-74fd829a4ec9", "last_source_success_at": "2026-09-16T12:06:26.180505+00:00", "memberships": 736, "publication_run_id": "5adc1f05-7dfa-4080-8d63-3043b5da26b6", "unique_portal_records": 648}
