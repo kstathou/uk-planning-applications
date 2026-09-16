@@ -255,7 +255,7 @@
       "map|mapsources/WebTeam|decided_planning_apps_solo"
     ],
     "query_completion_requires": "advertised, observed, and unique counts must agree for every exact query",
-    "legacy_identity_requires": "every legacy-current PKID must have an official HGY reference, Salesforce record ID, and retained evidence digest, with no unresolved or ambiguous PKIDs",
+    "legacy_identity_requires": "every legacy-current PKID must have an official HGY reference, Salesforce record ID, and evidence digest present in the validated retained-evidence set, with no unresolved or ambiguous PKIDs",
     "current_legacy_identity_state": {
       "legacy_current_pkids": 826,
       "officially_resolved_pkids": 0,

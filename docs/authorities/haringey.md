@@ -260,7 +260,8 @@ seams. A terminal checkpoint must contain the exact five overlapping weekly
 queries plus the Arcus-current, legacy-current, and legacy-decided map queries,
 with advertised, observed, and unique counts reconciled for each. Every legacy
 current PKID must also have an official HGY reference, Salesforce record ID,
-and retained evidence digest, with no unresolved or ambiguous PKIDs. A single
+and retained evidence digest that exists in SQLite and passes decompression and
+content-hash validation, with no unresolved or ambiguous PKIDs. A single
 completion boolean cannot certify that inventory.
 
 The typed schema-v1 receipt additionally records the two still-pending,
@@ -280,6 +281,6 @@ failed checks
 before opening a browser. Neither the final receipt nor any randomized
 temporary receipt was created. The sanitized blocker evidence is committed as
 `docs/evidence/haringey-qualification-blocker-2026-09-16-v1.json`; its SHA-256
-is `18af4e6f81dc603edab049f1027d9ae5f1a3ee51fd434b8ef1564159b215a36b`.
+is `2a773e51dcbc705daae6281d68753395967c394e21d3e38fda5840621b4aaeac`.
 The tool therefore makes the current source boundary reproducible; it does not
 relax it.

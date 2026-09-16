@@ -1099,6 +1099,17 @@ class SqliteStore:
                 invalid.append(row["path"])
         return tuple(invalid)
 
+    def valid_evidence_digests(self) -> frozenset[str]:
+        """Return digests whose retained gzip bodies still hash correctly."""
+        invalid_paths = set(self.invalid_evidence_paths())
+        return frozenset(
+            row["digest"]
+            for row in self._connection.execute(
+                "SELECT digest, path FROM evidence ORDER BY digest"
+            )
+            if row["path"] not in invalid_paths
+        )
+
     def migration_versions(self) -> tuple[int, ...]:
         """Return applied migration versions in order."""
         return tuple(

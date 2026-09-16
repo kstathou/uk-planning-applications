@@ -310,7 +310,12 @@ def _terminal_checkpoint(store: SqliteStore, scope: QualificationScope) -> bool:
         and bool(durable)
         and len(seen) == len(set(seen))
         and set(seen) == set(durable)
-        and _checkpoint_inventory_complete(checkpoint, scope, durable)
+        and _checkpoint_inventory_complete(
+            checkpoint,
+            scope,
+            durable,
+            store.valid_evidence_digests(),
+        )
     )
 
 
@@ -328,6 +333,7 @@ def _checkpoint_inventory_complete(
     checkpoint: HaringeyCheckpointV1,
     scope: QualificationScope,
     durable_references: tuple[str, ...],
+    valid_evidence_digests: frozenset[str],
 ) -> bool:
     completed = checkpoint.completed_queries
     query_keys = tuple(query.key for query in completed)
@@ -348,6 +354,10 @@ def _checkpoint_inventory_complete(
         and len(resolved_pkids) == len(set(resolved_pkids))
         and set(resolved_pkids) == set(legacy_pkids)
         and all(resolution.public_reference in durable for resolution in resolutions)
+        and all(
+            resolution.evidence_digest in valid_evidence_digests
+            for resolution in resolutions
+        )
     )
 
 
