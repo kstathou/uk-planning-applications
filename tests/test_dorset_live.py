@@ -1597,6 +1597,45 @@ def test_dorset_successful_controls_follow_browser_submission_rules() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "fields",
+    [
+        (
+            FormField(
+                name=(
+                    "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_"
+                    "dateInput_ClientState"
+                ),
+                value="",
+            ),
+        ),
+        (
+            FormField(
+                name="ctl00$ContentPlaceHolder1$txtDateReceivedFrom",
+                value="2026-08-18",
+            ),
+            FormField(
+                name="ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput",
+                value="19/08/2026",
+            ),
+            FormField(
+                name=(
+                    "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_"
+                    "dateInput_ClientState"
+                ),
+                value="",
+            ),
+        ),
+    ],
+)
+def test_dorset_telerik_state_rejects_missing_or_mismatched_date_controls(
+    fields: tuple[FormField, ...],
+) -> None:
+    """Client date state cannot conceal missing or contradictory visible fields."""
+    with pytest.raises(ValueError, match="advanced Telerik state"):
+        dorset_adapter._telerik_client_state(fields)
+
+
 def test_dorset_form_helpers_reject_missing_state_submit_and_action() -> None:
     """The local form helpers fail closed when exact state or action is absent."""
     form = _form(b'<form action="/wrong"><input name="present"></form>')

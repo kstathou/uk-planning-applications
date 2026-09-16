@@ -1,6 +1,10 @@
 # Pilot portal inventory
 
-This reference records the browser census taken on 15 September 2026. A successful entry-page check does not prove extraction completeness. Each authority still needs detail-page, pagination, failure, and incremental-refresh checks before live verification can pass.
+This reference records the browser census begun on 15 September 2026 and the
+dated Dorset follow-up on 16 September 2026. A successful entry-page check does
+not prove extraction completeness. Each authority still needs detail-page,
+pagination, failure, and incremental-refresh checks before live verification
+can pass.
 
 | Authority | Observed sources | Portal shape | Browser result |
 |---|---|---|---|
@@ -11,7 +15,7 @@ This reference records the browser census taken on 15 September 2026. A successf
 | Peak District National Park Authority | Legacy custom portal plus AssureLive replacement | Two linked services | A 33-record weekly query and one detail record were verified. JavaScript-loaded detail sections remained pending. See `authorities/peak-district.md`. |
 | Arun | `www1.arun.gov.uk/aplanning/OcellaWeb/` | Ocella | One decided detail record and its document index were verified without opening attachment bodies. See `authorities/arun.md`. |
 | Old Oak and Park Royal Development Corporation | `planning.agileapplications.co.uk/opdc` | Agile Applications | Two direct loads reached the citizen-portal title but returned a blank accessible document. See `authorities/opdc.md`. |
-| Dorset | `gi.dorsetcouncil.gov.uk/dorsetexplorer/planning/public` | Dorset Explorer map client | The JavaScript map and planning search-provider configuration loaded, but no bounded application enumeration was exposed. See `authorities/dorset.md`. |
+| Dorset | `planning.dorsetcouncil.gov.uk` plus the Explorer fixture source | ASP.NET and Telerik statutory register | A 30-day received query, complete outstanding query, 473 detail records, exact document metadata, and zero-network terminal rerun were verified without attachment bodies. See `authorities/dorset.md`. |
 | Cheshire East | `pa.cheshireeast.gov.uk/planning/index.html?fa=search` | Custom register | A valid-date search and its field inventory were verified. A selected result did not yield readable detail content. See `authorities/cheshire-east.md`. |
 | Blackburn with Darwen | `planning.blackburn.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned the same maintenance page. See `authorities/blackburn-with-darwen.md`. |
 | Birmingham | `eplanning.birmingham.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned HTTP 503. See `authorities/birmingham.md`. |
@@ -26,7 +30,9 @@ The registry must store sources separately from authorities. Camden and Peak Dis
 
 The collector must support server-side sessions. IDOX and Camden's JSF search both use per-session request state.
 
-The collector must support JavaScript capture. Haringey and Dorset did not expose application data in the first HTML response.
+The collector must support JavaScript capture. Haringey requires it for live
+discovery. Dorset Explorer remains a JavaScript fixture boundary, while the
+statutory register is collected through captured ASP.NET form requests.
 
 The collector must record portal blocks as coverage gaps. A maintenance page, HTTP 503, or blank client bootstrap is not an empty application result.
 
@@ -34,4 +40,9 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 
 ## Verification status
 
-Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, Peak District, and West Suffolk have recorded detail paths. Cheshire East and Leeds have recorded discovery paths but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn, Birmingham, and OPDC are blocked at their entry points. Every authority now has a dated walkthrough, while the unresolved paths remain explicit.
+Arun, Barnet, Camden, Cornwall, Devon, Dorset, Durham, Haringey, Peak District,
+and West Suffolk have recorded detail paths. Dorset also has a persisted
+same-day bootstrap for the required received and older-open inventory. Cheshire
+East and Leeds have recorded discovery paths but inconclusive detail retrieval.
+Blackburn, Birmingham, and OPDC are blocked at their entry points. Every
+authority now has a dated walkthrough, while unresolved paths remain explicit.

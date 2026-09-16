@@ -29,7 +29,7 @@ requirement.
 | Peak District National Park Authority | Verified | Migrated discovery and detail routes recorded; child sections partial | Rolling-week legacy adapter; client-loaded child sections explicitly failed | Open | Open |
 | Arun | Verified | Bounded received-date route, result cap, detail, and document index recorded | Received-date and Show All adapter; document action and older-open unresolved | Open | Open |
 | Old Oak and Park Royal Development Corporation | Verified | Source blocked | Blocked | Open | Open |
-| Dorset | Verified | Partial map-client boundary recorded | Client boundary unresolved | Open | Open |
+| Dorset | Verified | Statutory search, pagination, detail, document metadata, and unavailable comment text recorded | Fixed 30-day received and complete outstanding adapter; 473 applications persisted with exact reference and evidence agreement | Passed 16 September 2026; discovery-only | Pending: 23 and 30 September 2026 |
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
@@ -40,18 +40,19 @@ requirement.
 
 The deterministic column proves package ownership, typed native payloads, parsing, normalisation, source evidence retention, semantic idempotence, explicit section completeness, and attachment-body blocking through sanitised fixtures. It does not substitute for browser-to-scraper agreement.
 
-As of 16 September 2026, no authority has completed a verified live bootstrap.
-The Barnet smoke is incomplete because the source returned HTTP 429 during
-pagination; its saved checkpoint permits a later bounded resume without
-repeating completed pages. All fifteen authorities still require a live
-bootstrap and two successful weekly cycles. Blocked and partial authorities
-remain in coverage denominators and failure reporting until those checks
-succeed.
+As of 16 September 2026, Dorset has completed a verified same-day live
+bootstrap. Its terminal checkpoint, durable queue, and application table agree
+on 473 native identities; all retained evidence re-hashes; and its immediate
+terminal rerun made zero network requests. Dorset remains `discovery-only`
+until the two dated weekly cycles pass. The other fourteen authorities still
+require a complete live bootstrap, and all fifteen remain subject to their
+outstanding operational evidence. Blocked and partial authorities remain in
+coverage denominators and failure reporting until those checks succeed.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
 Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds
-were healthy for completed weekly discovery smokes. These results do not move
-their live-bootstrap cells because the smokes checkpoint discovery but do not
-persist every discovered application through the operational collection store.
-West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
-unverified detail surface.
+were healthy for completed weekly discovery smokes. Dorset's distinct
+qualification persisted every discovered application through the operational
+store, proved the complete query inventory, and retained no pending retry or
+failed section. West Suffolk fetched one bounded detail; Leeds stopped
+explicitly before its unverified detail surface.

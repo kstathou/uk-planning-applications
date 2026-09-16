@@ -129,6 +129,25 @@ the rolling seven-day quick link and reports the source-provided totals. It
 does not open application details or file links. Without `--confirm-live`,
 both commands exit before constructing a live session.
 
+Dorset has a dated, fixed-scope qualification command rather than a smoke:
+
+```sh
+uv run python scripts/qualify_dorset.py \
+  --confirm-live --include-open \
+  --data-dir .yimby/qualification-dorset-2026-09-16
+```
+
+The command fixes the inclusive received window at 18 August through 16
+September 2026 and requires the complete outstanding query. It uses one HTTP
+attempt per request, inherits the normal two-second host gap, persists a typed
+v1 receipt atomically, and performs an immediate terminal rerun that must make
+zero network requests. Reuse the same directory with `--resume` after a detail
+or transport failure. If the official same-day result ordering invalidates a
+nonterminal page checkpoint, add `--restart-discovery`. That explicit option
+preserves runs, evidence, queued identities, and observations while replacing
+only the stale query checkpoint. Terminal reference agreement still rejects a
+stale queued identity. Neither option satisfies the weekly-cycle requirement.
+
 Attachment bodies are outside policy. The transport blocks known attachment
 paths, download endpoints, and image or media browser subresources before a
 request. It rejects attachment media types or content dispositions before
