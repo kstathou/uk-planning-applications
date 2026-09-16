@@ -175,19 +175,18 @@ class PlaywrightBoundary:
         """Provide a fresh page without learning authority selectors."""
         page = await self._context.new_page()
         try:
-            return await operation(page)
+            result = await operation(page)
+            if self._storage_state is not None:
+                await self._context.storage_state(path=str(self._storage_state))
+            return result
         finally:
             await page.close()
 
     async def aclose(self) -> None:
         """Close context, browser, and Playwright driver."""
-        try:
-            if self._storage_state is not None:
-                await self._context.storage_state(path=str(self._storage_state))
-        finally:
-            await self._context.close()
-            await self._browser.close()
-            await self._playwright.stop()
+        await self._context.close()
+        await self._browser.close()
+        await self._playwright.stop()
 
 
 class PlaywrightPortalSession:

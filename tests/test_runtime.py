@@ -890,6 +890,8 @@ def test_playwright_production_boundary_lifecycle(
         await boundary.aclose()
 
         default_boundary = await PlaywrightBoundary.create()
+        assert await default_boundary.interact(successful_interaction) == "verified"
+        assert context.storage_state.await_count == 1
         await default_boundary.aclose()
 
     asyncio.run(exercise())
