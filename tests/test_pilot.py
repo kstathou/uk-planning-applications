@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError
 
 from yimby import AuthorityId, Collector, DiscoveryWindow, pilot_registry
 from yimby.authorities.arun.adapter import ArunParseError
@@ -371,6 +372,19 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
         "application_capture_sha256": _OPDC_APPLICATION_CAPTURE_SHA256,
         "content_digest_set_sha256": _OPDC_CONTENT_DIGEST_SET_SHA256,
     }
+    with pytest.raises(ValidationError):
+        receipt_model.model_validate(
+            {
+                **receipt,
+                "identities": [
+                    {
+                        "source_id": "opdc-agile-applications",
+                        "reference": "private",
+                        "locator": "private",
+                    }
+                ],
+            }
+        )
     assert manifest.live_status.evidence == (
         f"{_OPDC_EVIDENCE_PATH} records 55 complete applications",
     )
