@@ -455,7 +455,7 @@ def _restart_discovery_checkpoint(
         end=scope.end,
         include_open=scope.include_open,
     )
-    if current.live_scope != expected_scope or current.live_complete:
+    if current.live_scope != expected_scope:
         raise QualificationFailedError(("restart-checkpoint",))
     reset = DorsetCheckpointV1(object_offset="live", live_scope=expected_scope)
     run_id = store.begin_run(_AUTHORITY_ID)
