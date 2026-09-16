@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import sys
 from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -39,6 +40,7 @@ from yimby.transport import PortalRequest, RequestMethod, SourceUnavailableError
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
+    from types import ModuleType
 
 
 class _Session:
@@ -98,9 +100,12 @@ def _registry(package: Any) -> AuthorityRegistry:
 
 def _devon_qualification_module() -> ModuleType:
     path = Path(__file__).parents[1] / "scripts" / "qualify_devon.py"
-    spec = importlib.util.spec_from_file_location("qualify_devon", path)
-    assert spec is not None and spec.loader is not None
+    name = "_test_qualify_devon"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -1460,11 +1465,14 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         resumed_sessions.append(session)
         return session
 
-    assert module.main(
-        [*arguments, "--resume"],
-        session_factory=resumed_factory,
-        now=lambda: module.datetime(2026, 9, 16, 13, tzinfo=module.UTC),
-    ) == 0
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=resumed_factory,
+            now=lambda: module.datetime(2026, 9, 16, 13, tzinfo=module.UTC),
+        )
+        == 0
+    )
     capsys.readouterr()
     assert len(resumed_sessions) == 2
     assert all(session.requested_urls == () for session in resumed_sessions)
