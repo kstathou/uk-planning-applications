@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: C901, E501, EM102, PLR0911, PLR2004, TRY003
+# ruff: noqa: C901, E501, EM102, PLR0911, PLR0915, PLR2004, SLF001, TRY003
 
 """Barnet durable live-qualification receipt behaviour."""
 
@@ -81,6 +81,8 @@ def _advanced_form() -> bytes:
       </select>
       <input type="hidden" name="caseAddressType" value="">
       <input type="hidden" name="searchType" value="">
+      <input name="date(applicationReceivedStart)" value="">
+      <input name="date(applicationReceivedEnd)" value="">
     </form>
     """.encode()
 
@@ -113,6 +115,10 @@ class _BarnetQualificationMock:
         if path.endswith("/search.do") and action == "advanced":
             return httpx.Response(200, content=_advanced_form())
         if path.endswith("/advancedSearchResults.do"):
+            if fields["date(applicationReceivedStart)"]:
+                assert fields["date(applicationReceivedStart)"] == "18/08/2026"
+                assert fields["date(applicationReceivedEnd)"] == "16/09/2026"
+                return self._record(1, prefix="REC")
             selected = next(
                 fields[name]
                 for name in (
@@ -320,11 +326,12 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     assert receipt["query_inventory"] == list(
         barnet_adapter.expected_live_query_keys(scope)
     )
-    assert len(receipt["query_inventory"]) == 19
-    assert receipt["counts"]["applications"] == 19
-    assert receipt["counts"]["discovered_references"] == 19
-    assert receipt["counts"]["native_versions"] == 19
-    assert receipt["costs"]["initial"]["request_count"] == 97
+    assert len(receipt["query_inventory"]) == 20
+    assert receipt["query_inventory"][10] == ("advanced|received|2026-08-18|2026-09-16")
+    assert receipt["counts"]["applications"] == 20
+    assert receipt["counts"]["discovered_references"] == 20
+    assert receipt["counts"]["native_versions"] == 20
+    assert receipt["costs"]["initial"]["request_count"] == 102
     assert receipt["costs"]["initial"]["attachment_body_requests"] == 0
     assert receipt["costs"]["rerun"] == {
         "request_count": 0,
@@ -355,6 +362,18 @@ def test_barnet_qualification_persists_complete_typed_receipt(
     receipt_path = data_dir / "barnet-qualification-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert not (data_dir / ".barnet-qualification-v1.json.tmp").exists()
+
+    victim = tmp_path / "victim"
+    victim.write_text("preserve", encoding="utf-8")
+    predictable_temporary = data_dir / ".barnet-qualification-v1.json.tmp"
+    predictable_temporary.symlink_to(victim)
+    module._write_receipt(
+        receipt_path,
+        module.BarnetQualificationReceiptV1.model_validate(receipt),
+    )
+    assert victim.read_text(encoding="utf-8") == "preserve"
+    assert predictable_temporary.is_symlink()
+    predictable_temporary.unlink()
 
     sessions.clear()
     mocks.clear()

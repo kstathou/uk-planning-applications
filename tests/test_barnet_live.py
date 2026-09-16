@@ -98,6 +98,8 @@ ADVANCED_FORM = f"""
   </select>
   <input type="hidden" name="caseAddressType" value="">
   <input type="hidden" name="searchType" value="">
+  <input name="date(applicationReceivedStart)" value="">
+  <input name="date(applicationReceivedEnd)" value="">
   <input type="hidden" name="tag" value="one">
   <input type="hidden" name="tag" value="two">
 </form></body></html>
@@ -352,12 +354,20 @@ class _BarnetMock:
                 )
                 if submitted[field]
             )
-            assert len(selected) == 1
-            self.active_advanced = selected[0]
-            _field, value = selected[0]
-            index = (*OPEN_CASE_STATUSES, *ACTIVE_APPEAL_STATUSES).index(value) + 1
-            reference = "TCP/0001/26" if index == 1 else f"ADV/{index:04d}/26"
-            locator = "KEY-1" if index == 1 else f"ADV-{index}"
+            if submitted["date(applicationReceivedStart)"]:
+                assert selected == ()
+                assert submitted["date(applicationReceivedStart)"] == "14/09/2026"
+                assert submitted["date(applicationReceivedEnd)"] == "20/09/2026"
+                reference = "TCP/0001/26"
+                locator = "KEY-1"
+                index = 0
+            else:
+                assert len(selected) == 1
+                self.active_advanced = selected[0]
+                _field, value = selected[0]
+                index = (*OPEN_CASE_STATUSES, *ACTIVE_APPEAL_STATUSES).index(value) + 1
+                reference = "TCP/0001/26" if index == 1 else f"ADV/{index:04d}/26"
+                locator = "KEY-1" if index == 1 else f"ADV-{index}"
             return httpx.Response(
                 200,
                 content=_result_page(
@@ -511,7 +521,8 @@ def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
     assert checkpoint.completed_queries == expected
     assert checkpoint.live_scope == scope
     assert checkpoint.live_complete
-    assert len(expected) == 11
+    assert len(expected) == 12
+    assert expected[2] == "advanced|received|2026-09-14|2026-09-20"
     assert expected[-9:] == tuple(
         f"advanced|{field}|{value}"
         for field, values in (
@@ -528,10 +539,13 @@ def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
         for method, path, fields in mock.requests
         if method == "POST" and path.endswith("/advancedSearchResults.do")
     ]
-    assert len(advanced_posts) == 9
+    assert len(advanced_posts) == 10
+    received_post = dict(advanced_posts[0])
+    assert received_post["date(applicationReceivedStart)"] == "14/09/2026"
+    assert received_post["date(applicationReceivedEnd)"] == "20/09/2026"
     assert [
         value for fields in advanced_posts for name, value in fields if name == "tag"
-    ] == ["one", "two"] * 9
+    ] == ["one", "two"] * 10
 
 
 def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
@@ -755,6 +769,21 @@ def test_live_discovery_checkpoint_edges_are_explicit() -> None:
         assert terminal_session.requested_urls == ()
         await terminal_session.aclose()
 
+        corrupt_terminal_session = _session(_BarnetMock())
+        with pytest.raises(BarnetCheckpointError, match="terminal"):
+            async for _batch in adapter.discover(
+                corrupt_terminal_session,
+                WEEK,
+                BarnetCheckpointV1(
+                    cursor="live",
+                    live_scope=scope,
+                    live_complete=True,
+                ),
+            ):
+                pass
+        assert corrupt_terminal_session.requested_urls == ()
+        await corrupt_terminal_session.aclose()
+
         stale_session = _session(_BarnetMock())
         with pytest.raises(BarnetCheckpointError, match="unavailable"):
             async for _batch in adapter.discover(
@@ -880,6 +909,10 @@ def test_barnet_form_and_search_boundary_variants() -> None:
         ),
         ADVANCED_FORM.replace(b'name="searchCriteria.caseStatus"', b'name="other"'),
         ADVANCED_FORM.replace(b'name="searchType"', b'name="otherType"'),
+        ADVANCED_FORM.replace(
+            b'name="date(applicationReceivedStart)"',
+            b'name="otherDate"',
+        ),
     ):
         with pytest.raises(BarnetParseError, match="advanced form"):
             barnet_adapter._parse_advanced_form(malformed)
@@ -1013,6 +1046,29 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
         )
     )
     assert accepted.reported == 45
+
+    replayed_first_page = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            tuple((f"A-{index}", f"KEY-{index}") for index in range(1, 11)),
+            ("Showing 1-10 of 20",),
+            current_page="1",
+            numbered_page=2,
+        )
+    )
+    with pytest.raises(BarnetParseError, match="displayed result range"):
+        barnet_adapter._advance_checkpoint(
+            BarnetCheckpointV1(
+                cursor="live",
+                seen_references=tuple(f"A-{index}" for index in range(1, 11)),
+            ),
+            active_page=barnet_adapter._ActivePage(
+                query_key="weekly|2026-09-14|DC_Validated",
+                page=2,
+                row_count=10,
+            ),
+            search_page=replayed_first_page,
+            all_query_keys=("weekly|2026-09-14|DC_Validated",),
+        )
 
     invalid_showing_pages = (
         _showing_result_page((("A", "KEY"),), ("Showing one-1 of 1",)),
