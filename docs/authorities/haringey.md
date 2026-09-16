@@ -89,3 +89,24 @@ fixture, HTTP, and browser transports before a body request.
 This remains `BROWSER_ONLY`, not live-ready. The public UI exposes only a
 rolling seven-day quick link through this implemented path. Arbitrary date
 windows, older-open enumeration, and a complete live bootstrap are not proved.
+
+## Qualification attempt on 16 September 2026
+
+The official register index first reported `Something went wrong` and `The
+system was unable to load any registers.` at 09:42 Europe/London. A second
+check at 09:47 returned `Looks like the site is temporarily unavailable` and
+`Please try again in a bit.` The documented detail route for
+`HGY/2026/2582` returned the same temporary-unavailability message.
+
+The outage prevented a current walkthrough of the user-defined weekly and
+advanced-search controls. It also prevented proof of their exact date
+semantics, result caps, pagination, and complete older-open status inventory.
+The adapter therefore remains `BROWSER_ONLY`. No live collection ran, no
+qualification receipt was emitted, and both later weekly refresh cycles remain
+pending.
+
+The local blocker artifact is
+`.yimby/qualification-haringey-2026-09-16/source-blocker-v1.json`. It records
+the official URLs, visible messages, required checks that did not run, and the
+pending refresh cycles. The artifact is evidence of a blocked attempt. It is
+not a live-qualification receipt.

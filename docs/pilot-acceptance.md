@@ -55,3 +55,10 @@ their live-bootstrap cells because the smokes checkpoint discovery but do not
 persist every discovered application through the operational collection store.
 West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
 unverified detail surface.
+
+The Haringey source-health check at 09:42 Europe/London on 16 September 2026
+could not load the register list. At 09:47, both the register index and the
+previously recorded detail route reported that the site was temporarily
+unavailable. This blocks a current 30-day and older-open completeness
+walkthrough. Haringey remains `BROWSER_ONLY`; its live-bootstrap and both later
+weekly-cycle cells remain open.
