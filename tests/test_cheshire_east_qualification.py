@@ -164,7 +164,6 @@ class _QualificationSession:
         search_results: bytes | None = None,
         weekly_form: bytes | None = None,
         detail: bytes | None = None,
-        media_type: str = "text/html",
     ) -> None:
         self.requests: list[PortalRequest] = []
         self._bytes = 0
@@ -177,7 +176,6 @@ class _QualificationSession:
         )
         self._weekly_form = _weekly_form() if weekly_form is None else weekly_form
         self._detail = _detail() if detail is None else detail
-        self._media_type = media_type
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
@@ -199,7 +197,7 @@ class _QualificationSession:
         self._bytes += len(body)
         return EvidenceCapture(
             url=request.url,
-            media_type=self._media_type,
+            media_type="text/html",
             body=body,
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
@@ -238,6 +236,12 @@ class _UnavailableQualificationSession(_QualificationSession):
             body=body,
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
+
+
+class _NonHtmlQualificationSession(_QualificationSession):
+    async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+        capture = await super().fetch(request)
+        return capture.model_copy(update={"media_type": "application/xhtml+xml"})
 
 
 def test_cheshire_replays_exact_successful_search_controls() -> None:
@@ -763,9 +767,7 @@ def test_cheshire_non_html_search_form_becomes_an_offline_blocker_receipt(
     assert (
         module.main(
             arguments,
-            session_factory=lambda: _QualificationSession(
-                media_type="application/xhtml+xml"
-            ),
+            session_factory=_NonHtmlQualificationSession,
             now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
         )
         == 1

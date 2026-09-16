@@ -328,7 +328,7 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
         ):
             _raise_invariant("receipt-invariant-mismatch")
         _validate_attempted_request_shapes(self.scope, self.attempted_requests)
-        _validate_evidence_bindings(self.attempted_requests, self.evidence)
+        _validate_evidence_bindings(self)
 
         checks = {check.name: check.status for check in self.checks}
         if len(checks) != len(self.checks):
@@ -420,6 +420,10 @@ class QualificationEvidenceError(RuntimeError):
     """A retained response no longer matches its receipt."""
 
 
+class QualificationSourceMediaError(RuntimeError):
+    """An official response did not use the required HTML media type."""
+
+
 class _ProbeResult(FrozenModel):
     source_contract: SourceContractV1 | None
     blocker: QualificationBlockerV1 | None
@@ -481,10 +485,11 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
         cheshire.search_form_request(),
     )
     try:
-        search_form = cheshire.parse_search_form(search_form_capture.body)
+        search_form = cheshire.parse_search_form(_html_body(search_form_capture))
     except (
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
+        QualificationSourceMediaError,
     ):
         return _probe_result(
             session,
@@ -509,26 +514,26 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
             ),
         )
         recent_capture = await capture(recent_key, recent_request)
-        recent_boundary = cheshire.parse_search_boundary(recent_capture.body)
+        recent_boundary = cheshire.parse_search_boundary(_html_body(recent_capture))
 
         weekly_form_capture = await capture(
             "source-access|weekly-form",
             cheshire.weekly_received_form_request(),
         )
-        weekly_form = cheshire.parse_weekly_form(weekly_form_capture.body)
+        weekly_form = cheshire.parse_weekly_form(_html_body(weekly_form_capture))
         weekly_key = f"older-open|weekly-received|{_HISTORICAL_WEEK.isoformat()}"
         weekly_request = cheshire.weekly_received_request(
             weekly_form,
             _HISTORICAL_WEEK,
         )
         weekly_capture = await capture(weekly_key, weekly_request)
-        weekly_boundary = cheshire.parse_weekly_boundary(weekly_capture.body)
+        weekly_boundary = cheshire.parse_weekly_boundary(_html_body(weekly_capture))
 
         detail_key = f"detail|{_DETAIL_LOCATOR}"
         detail_portal_request = cheshire.detail_request(_DETAIL_LOCATOR)
         detail_capture = await capture(detail_key, detail_portal_request)
         detail = cheshire.parse_detail_contract(
-            detail_capture.body,
+            _html_body(detail_capture),
             expected_reference=_DETAIL_REFERENCE,
             expected_locator=_DETAIL_LOCATOR,
         )
@@ -542,6 +547,7 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
         cheshire.CheshireEastReferenceMismatchError,
+        QualificationSourceMediaError,
         ValidationError,
     ):
         return _probe_result(
@@ -562,6 +568,12 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
         attempted_requests,
         source_contract=source_contract,
     )
+
+
+def _html_body(capture: EvidenceCapture) -> bytes:
+    if capture.media_type != "text/html":
+        raise QualificationSourceMediaError
+    return capture.body
 
 
 def _probe_result(
@@ -719,18 +731,21 @@ def _unique_recorded_fields(
 
 
 def _validate_evidence_bindings(
-    requests: tuple[RecordedQueryV1, ...],
-    evidence: tuple[RetainedEvidenceV1, ...],
+    receipt: CheshireEastQualificationBlockerReceiptV2,
 ) -> None:
-    for request, item in zip(requests, evidence, strict=True):
+    last_index = len(receipt.evidence) - 1
+    for index, (request, item) in enumerate(
+        zip(receipt.attempted_requests, receipt.evidence, strict=True)
+    ):
         request_url = urlsplit(str(request.url))
         evidence_url = urlsplit(str(item.source_url))
+        final_blocker_media = receipt.source_contract is None and index == last_index
         if (
             evidence_url.scheme != request_url.scheme
             or evidence_url.netloc != request_url.netloc
             or evidence_url.path != request_url.path
             or evidence_url.query not in {"", request_url.query}
-            or item.media_type != "text/html"
+            or (item.media_type != "text/html" and not final_blocker_media)
         ):
             _raise_invariant("request-evidence-mismatch")
 
@@ -751,6 +766,10 @@ class _RetainedEvidenceReplay:
         errors: tuple[type[Exception], ...],
         blocker_code: str,
     ) -> Stage | None:
+        if self.receipt.evidence[index].media_type != "text/html":
+            if self.accepts_failure(index, blocker_code):
+                return None
+            raise QualificationEvidenceError
         try:
             return parser(self.bodies[index])
         except errors as error:
