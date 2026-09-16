@@ -1,63 +1,85 @@
 # Devon County Council portal walkthrough
 
-Walkthrough date: 15 September 2026.
+Walkthrough and qualification date: 16 September 2026.
 
-## Source
+## Source and scope
 
 - Planning register: `https://planning.devon.gov.uk/`
+- Covered records: minerals, waste, and county council development.
+- Qualification window: 18 August through 16 September 2026, inclusive.
+- Older-open policy: planning applications with `Outstanding=true`.
 
-The register covers minerals, waste, and county council development. It presents a copyright and data-use disclaimer before each requested route in the observed browser session.
+The official register presents a copyright and data-use disclaimer before a
+protected route when the session has not accepted it. The acceptance form posts
+to `/Disclaimer/Accept`; a disclaimer is never interpreted as an empty search or
+an application record.
 
-## Discovery
+## Exact discovery contract
 
-The register exposes direct searches for applications received or decided during the past 7 or 90 days. The observed received-within-7-days search returned no records. The received-within-90-days search returned seven records.
+The adapter fetches `/Search/Advanced`, requires one POST form with action
+`/Search/Results`, and preserves the form's successful controls in DOM order.
+The captured controls include the verification token, `AdvancedSearch`, the
+checkbox-plus-hidden pairs for `Outstanding`, `SearchPlanning`,
+`SearchEnforcement`, and `SearchAppeals`, and every text, select, and date field.
+Planning stays selected while enforcement and appeals stay unselected.
 
-Each result exposed a reference, application type, location, proposal, decision, and decision date. A zero-result page displayed an explicit no-records message. The scraper must distinguish that page from the disclaimer and from a failed request.
+The ordered qualification inventory is exactly:
 
-## Application record
+1. `received:2026-08-18:2026-09-16` — 3 rows.
+2. `determined:2026-08-18:2026-09-16` — 1 row, returned directly as the
+   page-one detail for `PRE/1820/2026`.
+3. `outstanding:planning:true` — 55 rows on six pages of
+   `10, 10, 10, 10, 10, 5`.
 
-Application `DCC/4473/2026` exposed type, case officer, received date, validation date, status, proposal, location, consultation deadline, decision fields, applicant, agent, addresses, district, electoral division, parish, and local member.
+The result pages do not publish a total or displayed row range. Completeness is
+therefore proved only from observable pager facts: one current-page marker, the
+complete consecutive numbered-link inventory, exact portal-provided locators,
+ten rows on every page with a forward link, and no forward link on the terminal
+page. The adapter never constructs a pagination URL. A full page without a
+pager, a malformed current marker, shifted replay content, a mixed detail/result
+shape, or a singleton after page one fails closed.
 
-The page organised map, documents, constraints, and consultees as client-side tabs. Their content and document links were already present in the returned document. The observed document URLs used `/Document/Download` with record, plan, image, media-type, and filename parameters.
+The persisted checkpoint stores the exact scope, completed-query prefix,
+active-page replay proofs, and every unique human reference with its detail
+locator. Resume replays already committed pages and compares their ordered
+references and pager evidence before continuing. A coherent terminal checkpoint
+returns before opening a network route.
 
-Public comments and consultee responses appeared as document metadata. The walkthrough did not open those files.
+## Application records and documents
 
-## Completeness rules
+Detail pages expose labelled fields for application number and type, case
+officer, received and valid dates, status, proposal, location, decision fields,
+applicant and agent, and plural district, electoral-division, and parish labels.
+A dash in an optional date is retained as no date.
 
-The scraper must accept the disclaimer through its session before every protected route when the server requests it. A disclaimer response is not an empty search or an application record.
+Associated documents are already present in the returned HTML. Their
+`/Document/Download` links expose module, record number, plan identifier, image
+identifier, plan flag, and filename metadata. The qualification retained 1,368
+current document metadata rows across 56 applications. It made zero attachment
+body requests. Public comments and consultee responses remain represented only
+as published document metadata, so the common comments section is explicitly
+excluded by policy.
 
-The detail parser must read hidden tab content from the complete HTML instead of clicking every tab. Attachment bodies remain blocked even though the index is present in the page.
+## Live qualification receipt
 
-## Known limits
+The durable receipt is
+`.yimby/qualification-devon-2026-09-16/devon-qualification-v1.json` with SHA-256
+`77612131ebd5cc1b3bb6de33e2d9986d4df22888d21d205c0d675c818017fe3d`.
+It records:
 
-This walkthrough covered received-date quick searches and one current record. It did not inspect advanced search caps, decided results, pagination, comment submission, retries, or incremental changes.
+- 56 unique discovered references and 56 persisted applications;
+- 56 native, application, and document-section versions;
+- zero pending retries, failed current sections, unmapped records, comment
+  versions, and attachment body requests;
+- SQLite and content-addressed evidence integrity passing;
+- 68 official requests and 6,648,256 transferred bytes on the first pass;
+- an immediate terminal rerun with 0 requests, 0 bytes, and 0 attachment bodies;
+- two succeeded run statuses for the qualification attempt; and
+- byte-for-byte receipt preservation across a separate resumed command that also
+  performed no network I/O.
 
-## Request contract capture
-
-The received-within-90-days route was rechecked on 16 September 2026. A
-protected request redirects to `/Disclaimer?returnUrl=...`; the acceptance form
-posts to `/Disclaimer/Accept?returnUrl=...` and then returns to the requested
-route. The collector must recognise this intermediate page for each protected
-request and must never parse it as an empty result.
-
-The received search uses
-`/Search/Standard?searchType=Received&days=90`. Its result document contains one
-`dl.searchResultsList` per record and links references to
-`/Planning/Display/<reference>`. Seven rows were again present. Each row exposed
-the application number, application type, location, proposal, decision, and
-decision date.
-
-The observed detail route `/Planning/Display/DCC/4473/2026` contained two
-`dl.details-grid` blocks for the core record and geography. Map, associated
-documents, constraints, and consultees were present in the same response.
-Document metadata links used `/Document/Download` with module, record number,
-plan identifier, image identifier, plan flag, and filename parameters. The
-capture enumerated link metadata only and did not retrieve an attachment body.
-
-## Implemented boundary
-
-The authority adapter now follows the exact rolling 90-day received route,
-accepts the intermediate disclaimer within the same session, and parses the
-record blocks and hidden document metadata from the returned HTML. It retains
-attachment links without following them. Other date windows, decided searches,
-and older-open enumeration remain explicit unsupported boundaries.
+All twelve named receipt checks pass. Weekly cycles due 23 and 30 September 2026
+are truthfully recorded as `pending`. The adapter and bootstrap are live
+collection verified for this scope, but operational qualification and
+`LIVE_READY` promotion remain prohibited until those genuinely later cycles
+succeed.

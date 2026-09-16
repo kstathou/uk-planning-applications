@@ -109,11 +109,13 @@ uv run python scripts/smoke_devon.py --confirm-live
 uv run python scripts/smoke_peak_district.py --confirm-live
 ```
 
-Arun and Devon restrict discovery to their recorded received-date paths.
-Peak District's smoke remains a small rolling-week diagnostic, while its
-complete bootstrap uses the qualification command below. Camden's smoke reads
-one explicit reference from its official Socrata API, without opening the
-planning portal. These commands refuse before creating a live session unless
+Arun restricts discovery to its recorded received-date path. Devon uses its
+exact advanced-search form for a maximum 30-day received and determined
+window, with optional complete outstanding planning enumeration. Peak
+District's smoke remains a small rolling-week diagnostic, while its complete
+bootstrap uses the qualification command below. Camden's smoke reads one
+explicit reference from its official Socrata API without opening the planning
+portal. These commands refuse before creating a live session unless
 `--confirm-live` is present.
 
 Peak District has a dedicated persisted qualification command:
@@ -166,6 +168,24 @@ select this HTTP API. Documents and comment text are unavailable from this
 source; neither the portal nor document links are fetched. The 16 September
 bootstrap collected 1,499 applications in four requests, then repeated it
 unchanged in four more requests. Two weekly qualification cycles remain open.
+
+Devon's complete persisted bootstrap has a dedicated qualification command:
+
+```sh
+uv run python scripts/qualify_devon.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-devon-2026-09-16 \
+  --start 2026-08-18 --end 2026-09-16 --include-open
+```
+
+The command requires an exact inclusive 30-day scope and an empty directory
+unless `--resume` is present. It runs the collection twice, verifies terminal
+checkpoint and query coherence, exact durable reference/application agreement,
+retry and section state, SQLite and evidence hashes, attachment policy,
+idempotence, and two succeeded run states, then fsyncs a versioned receipt. A
+terminal resume validates the current store without network I/O and preserves
+the original nonzero first-pass receipt. The receipt records later cycles as
+pending; it does not enable scheduling or promote registry readiness.
 
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:
