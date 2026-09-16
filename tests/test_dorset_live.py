@@ -79,9 +79,9 @@ def _disclaimer_form(return_url: str = "%2f") -> bytes:
 def _advanced_form() -> bytes:
     return b"""
     <form method="post" action="./advsearch.aspx">
-      <input type="hidden" name="__EVENTTARGET" value="">
-      <input type="hidden" name="__EVENTARGUMENT" value="">
       <input type="hidden" name="__VIEWSTATE" value="advanced-state">
+      <input type="hidden" name="__VIEWSTATEGENERATOR" value="F6350304">
+      <input type="hidden" name="__EVENTVALIDATION" value="validation-state">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="text" name="ctl00$ContentPlaceHolder1$txtDateReceivedFrom" value="">
@@ -338,9 +338,9 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
     ]
     assert _pairs(mock, ADVANCED_PATH) == [
         (
-            ("__EVENTTARGET", ""),
-            ("__EVENTARGUMENT", ""),
             ("__VIEWSTATE", "advanced-state"),
+            ("__VIEWSTATEGENERATOR", "F6350304"),
+            ("__EVENTVALIDATION", "validation-state"),
             ("tag", "one"),
             ("tag", "two"),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedFrom", "2026-08-18"),
@@ -356,9 +356,9 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             ("ctl00$ContentPlaceHolder1$btnSearch3", "Search"),
         ),
         (
-            ("__EVENTTARGET", ""),
-            ("__EVENTARGUMENT", ""),
             ("__VIEWSTATE", "advanced-state"),
+            ("__VIEWSTATEGENERATOR", "F6350304"),
+            ("__EVENTVALIDATION", "validation-state"),
             ("tag", "one"),
             ("tag", "two"),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedFrom", ""),
