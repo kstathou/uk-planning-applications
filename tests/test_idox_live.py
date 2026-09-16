@@ -339,8 +339,7 @@ def _result_page_with_showing_markers(
 ) -> bytes:
     visible = "" if visible_page is None else f"<strong>{visible_page}</strong>"
     markers = "".join(
-        '<p class="pager">'
-        f'<span class="showing">{count_text}</span>{visible}</p>'
+        f'<p class="pager"><span class="showing">{count_text}</span>{visible}</p>'
         for count_text in count_texts
     )
     page = _uncounted_result_page(
@@ -1411,7 +1410,8 @@ def test_west_suffolk_count_accepts_stale_hidden_marker_on_terminal_page() -> No
         visible_page="5",
     )
 
-    parsed = west_suffolk_adapter._parse_search_page(page)
+    parse_search_page = getattr(west_suffolk_adapter, "_parse_search_page")
+    parsed = parse_search_page(page)
 
     assert parsed.reported == 45
     assert len(parsed.references) == 5
@@ -1438,7 +1438,7 @@ def test_west_suffolk_count_rejects_invalid_visible_page_markers(
         west_suffolk_adapter.WestSuffolkParseError,
         match="reported result count",
     ):
-        west_suffolk_adapter._parse_search_page(body)
+        getattr(west_suffolk_adapter, "_parse_search_page")(body)
 
 
 async def _collect_live_case(

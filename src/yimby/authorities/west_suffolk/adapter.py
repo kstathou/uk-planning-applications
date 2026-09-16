@@ -865,9 +865,14 @@ def _reported_count(
         displayed_range = showing_ranges[0]
         if any(value != displayed_range for value in showing_ranges[1:]):
             _raise_parse("reported result count")
-        current_pages = _current_result_pages(
-            soup,
-            allow_empty_first_page_marker=allow_empty_first_page_marker,
+        visible_page = _visible_result_page(soup)
+        current_pages = (
+            (visible_page,)
+            if visible_page is not None
+            else _current_result_pages(
+                soup,
+                allow_empty_first_page_marker=allow_empty_first_page_marker,
+            )
         )
         numbered_pages = tuple(
             int(value)
@@ -891,6 +896,22 @@ def _reported_count(
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _visible_result_page(soup: BeautifulSoup) -> int | None:
+    labels = tuple(
+        marker.get_text(" ", strip=True)
+        for pager in soup.select(".pager")
+        for marker in pager.find_all("strong", recursive=False)
+    )
+    if not labels:
+        return None
+    if any(re.fullmatch(r"[1-9]\d*", label) is None for label in labels):
+        return _raise_parse("reported result count")
+    pages = tuple(int(label) for label in labels)
+    if any(page != pages[0] for page in pages[1:]):
+        return _raise_parse("reported result count")
+    return pages[0]
 
 
 def _current_result_pages(
