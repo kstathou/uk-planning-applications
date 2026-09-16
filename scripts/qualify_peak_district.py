@@ -69,6 +69,7 @@ class QualificationCounts(FrozenModel):
     document_versions: int = Field(ge=0)
     comment_versions: int = Field(ge=0)
     pending_retries: int = Field(ge=0)
+    retry_entries: int = Field(ge=0)
     failed_sections: int = Field(ge=0)
     unmapped_records: int = Field(ge=0)
 
@@ -270,24 +271,26 @@ def _reference_application_agreement(store: SqliteStore) -> bool:
 
 
 def _evidence_integrity(store: SqliteStore) -> bool:
-    records = tuple(
-        record
-        for record in store.retained_native_records()
-        if record.authority_id == _AUTHORITY_ID
-    )
-    return bool(records) and all(
-        record.evidence
-        and all(
-            sha256(capture.body).hexdigest() == str(capture.digest)
-            for capture in record.evidence
-        )
-        for record in records
+    try:
+        captures = store.retained_evidence()
+    except (KeyError, OSError, ValueError):
+        return False
+    return bool(captures) and all(
+        sha256(capture.body).hexdigest() == str(capture.digest) for capture in captures
     )
 
 
-def _counts(snapshot: QualificationSnapshot) -> QualificationCounts:
+def _counts(
+    store: SqliteStore,
+    snapshot: QualificationSnapshot,
+) -> QualificationCounts:
     return QualificationCounts.model_validate(
-        snapshot.model_dump(exclude={"authority_id"})
+        {
+            **snapshot.model_dump(exclude={"authority_id"}),
+            "retry_entries": sum(
+                item.authority_id == _AUTHORITY_ID for item in store.retry_items()
+            ),
+        }
     )
 
 
@@ -314,6 +317,12 @@ def _base_checks(
         QualificationCheck(
             name="pending-retries",
             ok=snapshot.pending_retries == 0,
+        ),
+        QualificationCheck(
+            name="retry-inventory",
+            ok=not any(
+                item.authority_id == _AUTHORITY_ID for item in store.retry_items()
+            ),
         ),
         QualificationCheck(
             name="failed-sections",
@@ -402,7 +411,7 @@ async def _qualify(
         created_at=created_at,
         scope=config.scope,
         query_inventory=_expected_inventory(config.scope),
-        counts=_counts(final_snapshot),
+        counts=_counts(store, final_snapshot),
         costs=QualificationCosts(initial=initial, rerun=rerun),
         run_statuses=run_statuses,
         checks=final_checks,

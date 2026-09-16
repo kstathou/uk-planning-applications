@@ -161,6 +161,7 @@ class PeakDistrictApplicationV1(FrozenModel):
     development_address: str | None = None
     planning_portal_reference: str | None = None
     validated_date: date | None = None
+    decision_date: date | None = None
     assurelive_url: HttpUrl | None = None
     loading_sections: tuple[str, ...] = ()
     applicant_name: str | None = None
@@ -177,6 +178,7 @@ class _AssureDetail(FrozenModel):
     parish: str
     address: str | None = None
     registered_date: date | None = None
+    decision_date: date | None = None
     applicant_name: str | None = None
     agent_name: str | None = None
     officer_name: str | None = None
@@ -286,20 +288,10 @@ class PeakDistrictAdapter:
         for query in queries:
             if query.key in progress.completed_queries:
                 continue
-            page_index = (
-                progress.next_page_index if progress.active_query == query.key else 0
-            )
-            row_count = (
-                progress.query_row_count if progress.active_query == query.key else 0
-            )
+            page_index = 0
+            row_count = 0
             query_request = _query_request(form, query)
             page_form: tuple[FormField, ...] | None = None
-            if page_index > 0:
-                first_capture = await session.fetch(query_request)
-                page_form = _parse_search_page(
-                    first_capture.body,
-                    expected_page=0,
-                ).form
             while True:
                 capture = await session.fetch(
                     query_request
@@ -421,6 +413,7 @@ class PeakDistrictAdapter:
             legacy_record_url=HttpUrl(reference.locator),
             development_address=parsed.address,
             validated_date=parsed.registered_date,
+            decision_date=parsed.decision_date,
             assurelive_url=HttpUrl(reference.locator),
             applicant_name=parsed.applicant_name,
             agent_name=parsed.agent_name,
@@ -467,11 +460,12 @@ class PeakDistrictAdapter:
                 Provenance(field="proposal", evidence=evidence),
                 Provenance(field="status", evidence=evidence),
             ),
-            normaliser_version="peak-district-v3",
+            normaliser_version="peak-district-v4",
             metadata=ApplicationMetadata(
                 application_type=payload.record_type,
                 address=payload.development_address,
                 validated_date=payload.validated_date,
+                decision_date=payload.decision_date,
                 aliases=(
                     ()
                     if payload.planning_portal_reference is None
@@ -905,6 +899,7 @@ def _parse_assure_detail(body: bytes) -> _AssureDetail:
         parish=parish,
         address=address,
         registered_date=_optional_date(fields, "registered"),
+        decision_date=_optional_date(fields, "decided"),
         applicant_name=_optional_field(fields, "applicant"),
         agent_name=_optional_field(fields, "agent/company", "agent"),
         officer_name=_optional_field(fields, "planning officer", "case officer"),
