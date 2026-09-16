@@ -104,11 +104,12 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         LiveTransportKind.BROWSER,
     ),
     AuthorityId("cheshire-east"): _status(
-        LiveReadiness.DISCOVERY_ONLY,
-        "valid-date-from table discovery is implemented but count, pagination, "
-        "window fidelity, and detail remain unresolved",
-        "captured Cheshire East form controls, result table, and numeric View locator",
-        LiveTransportKind.HTTP,
+        LiveReadiness.BLOCKED,
+        "the valid-date search contradicted a known pending detail, the 50-row "
+        "weekly boundary is not provably terminal, and automated source access "
+        "does not expose the recorded search form",
+        "captured Cheshire East form, search, weekly-list, direct detail, "
+        "document metadata, and qualification-blocker contracts",
     ),
     AuthorityId("blackburn-with-darwen"): _status(
         LiveReadiness.BLOCKED,
