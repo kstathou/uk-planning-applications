@@ -309,6 +309,14 @@ class _DorsetMock:
                     b"21/08/2026 - Location Plan",
                     b"21/08/2026 - ",
                 )
+            if self.fault == "blank-coordinates":
+                body = body.replace(
+                    b'<span class="applabel">Easting</span><p class="appdata">406008</p>',
+                    b'<span class="applabel">Easting</span><p class="appdata"></p>',
+                ).replace(
+                    b'<span class="applabel">Northing</span><p class="appdata">100386</p>',
+                    b'<span class="applabel">Northing</span><p class="appdata"></p>',
+                )
             if self.fault == "document-count":
                 body = body.replace(
                     b'\\"VirtualItemCount\\":1',
@@ -650,6 +658,46 @@ def test_dorset_live_detail_preserves_blank_document_title() -> None:
     assert native.documents[1].title is None
     assert collected.normalised.documents[1].title == "21/08/2026 (1mb)"
     assert session.attachment_body_requests == 0
+
+
+def test_dorset_live_detail_preserves_absent_coordinate_pair() -> None:
+    """Two explicitly blank source coordinates remain an absent location."""
+    package = pilot_registry().get(AuthorityId("dorset"))
+    session = _session(_DorsetMock(fault="blank-coordinates"))
+
+    async def collect_detail() -> Any:
+        collected = await package.collect(session, _live_reference())
+        await session.aclose()
+        return collected
+
+    collected = asyncio.run(collect_detail())
+    native = dorset_adapter.DorsetApplicationV1.model_validate_json(
+        collected.native_json
+    ).root
+
+    assert isinstance(native, dorset_adapter.DorsetLiveApplicationV1)
+    assert native.easting is None
+    assert native.northing is None
+    assert collected.normalised.metadata.location is None
+
+
+def test_dorset_live_detail_rejects_partial_coordinate_pair() -> None:
+    """One blank coordinate cannot silently erase the other source coordinate."""
+    reference = _live_reference()
+
+    def clear_easting(soup: BeautifulSoup) -> None:
+        label = soup.find("span", string="Easting")
+        assert isinstance(label, Tag)
+        value = label.find_next_sibling("p")
+        assert isinstance(value, Tag)
+        value.clear()
+
+    with pytest.raises(ValueError, match="detail coordinates"):
+        dorset_adapter._parse_live_detail(
+            _mutated(_detail_page(reference.reference), clear_easting),
+            reference,
+            HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={reference.locator}"),
+        )
 
 
 def test_dorset_live_resume_replays_committed_page_after_detail_consent() -> None:
