@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Literal
 
@@ -486,8 +487,11 @@ def _write_receipt(path: Path, receipt: QualificationReceipt) -> None:
         os.close(directory)
 
 
-async def _default_session() -> PortalSession:
-    return await BlackburnPlaywrightSession.create()
+async def _default_session(data_dir: Path) -> PortalSession:
+    state_path = data_dir / "browser-state.json"
+    return await BlackburnPlaywrightSession.create(
+        storage_state=state_path if state_path.is_file() else None
+    )
 
 
 def _default_clock() -> datetime:
@@ -517,7 +521,7 @@ def _error(code: str, exit_code: int, **details: object) -> int:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    session_factory: SessionFactory = _default_session,
+    session_factory: SessionFactory | None = None,
     now: Clock = _default_clock,
 ) -> int:
     """Run explicit live qualification and emit one atomic typed receipt."""
@@ -525,6 +529,11 @@ def main(
         config = _config(sys.argv[1:] if argv is None else argv)
     except QualificationConfigError as error:
         return _error(str(error), 2)
+    active_session_factory = (
+        partial(_default_session, config.data_dir)
+        if session_factory is None
+        else session_factory
+    )
     receipt_path = config.data_dir / _RECEIPT_NAME
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
@@ -533,7 +542,9 @@ def main(
                 EvidenceStore(config.data_dir / "evidence"),
             )
             try:
-                receipt = asyncio.run(_qualify(store, config, session_factory, now))
+                receipt = asyncio.run(
+                    _qualify(store, config, active_session_factory, now)
+                )
                 _write_receipt(receipt_path, receipt)
             finally:
                 store.close()

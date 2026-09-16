@@ -30,6 +30,7 @@ from yimby.transport import (
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
 _ATTACHMENT_SUFFIXES = {
     ".bmp",
@@ -124,11 +125,19 @@ class PlaywrightBoundary:
         self._context = context
 
     @classmethod
-    async def create(cls, *, headless: bool = True) -> PlaywrightBoundary:
+    async def create(
+        cls,
+        *,
+        headless: bool = True,
+        storage_state: Path | None = None,
+    ) -> PlaywrightBoundary:
         """Launch Chromium with a persistent in-memory cookie context."""
         playwright = await async_playwright().start()
         browser = await playwright.chromium.launch(headless=headless)
-        context = await browser.new_context(accept_downloads=False)
+        context = await browser.new_context(
+            accept_downloads=False,
+            storage_state=None if storage_state is None else str(storage_state),
+        )
 
         async def route_request(route: Route) -> None:
             request = route.request

@@ -209,6 +209,19 @@ def test_blackburn_default_session_reuses_verified_browser_state(
     create.assert_awaited_once_with(storage_state=state_path)
 
 
+def test_blackburn_default_session_starts_without_browser_state(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    module = _qualification_module()
+    create = AsyncMock(return_value=object())
+    monkeypatch.setattr(module.BlackburnPlaywrightSession, "create", create)
+
+    asyncio.run(module._default_session(tmp_path))
+
+    create.assert_awaited_once_with(storage_state=None)
+
+
 def test_blackburn_qualification_persists_complete_zero_network_receipt(
     tmp_path: Path,
     capsys: Any,

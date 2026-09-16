@@ -113,9 +113,12 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         LiveTransportKind.HTTP,
     ),
     AuthorityId("blackburn-with-darwen"): _status(
-        LiveReadiness.BLOCKED,
-        "the investigated public portal was in maintenance",
-        "portal inventory records a maintenance boundary",
+        LiveReadiness.BROWSER_ONLY,
+        "bounded discovery and detail collection require visible Chromium, and "
+        "same-day qualification is not yet complete",
+        "captured current Citizen search, detail, document-metadata, result-cap, "
+        "and human-verification contracts",
+        LiveTransportKind.BROWSER,
     ),
     AuthorityId("birmingham"): _status(
         LiveReadiness.BLOCKED,

@@ -848,15 +848,22 @@ def test_playwright_production_boundary_lifecycle(
         assert payload.body == b"<html>live</html>"
         await boundary.aclose()
 
+        default_boundary = await PlaywrightBoundary.create()
+        await default_boundary.aclose()
+
     asyncio.run(exercise())
-    browser.new_context.assert_awaited_once_with(
-        accept_downloads=False,
-        storage_state=str(tmp_path / "browser-state.json"),
-    )
-    context.route.assert_awaited_once()
-    context.close.assert_awaited_once()
-    browser.close.assert_awaited_once()
-    playwright.stop.assert_awaited_once()
+    assert browser.new_context.await_args_list[0].kwargs == {
+        "accept_downloads": False,
+        "storage_state": str(tmp_path / "browser-state.json"),
+    }
+    assert browser.new_context.await_args_list[1].kwargs == {
+        "accept_downloads": False,
+        "storage_state": None,
+    }
+    assert context.route.await_count == 2
+    assert context.close.await_count == 2
+    assert browser.close.await_count == 2
+    assert playwright.stop.await_count == 2
 
     missing_page = MagicMock()
     missing_page.goto = AsyncMock(return_value=None)
