@@ -128,18 +128,26 @@ def _canonical_query_plan(scope: ArunDiscoveryScope) -> tuple[ArunQuery, ...]:
     ]
     if not scope.include_open:
         return tuple(plan)
+    if scope.end < _OPEN_HISTORY_START:
+        return tuple(plan)
+    first_partition_end = min(scope.end, date(1999, 12, 31))
     plan.append(
         ArunOpenReceivedQuery(
             start=_OPEN_HISTORY_START,
-            end=date(1999, 12, 31),
+            end=first_partition_end,
         )
     )
+    if scope.end <= first_partition_end:
+        return tuple(plan)
     plan.extend(
         ArunOpenReceivedQuery(
             start=date(year, 1, 1),
-            end=date(year, 12, 31),
+            end=min(scope.end, date(year, 12, 31)),
         )
-        for year in range(2000, _OPEN_ANNUAL_END.year + 1)
+        for year in range(
+            2000,
+            min(scope.end.year, _OPEN_ANNUAL_END.year) + 1,
+        )
     )
     cursor = _OPEN_ANNUAL_END + timedelta(days=1)
     while cursor <= scope.end:
@@ -589,10 +597,19 @@ class ArunAdapter:
     ) -> NativeSnapshot[ArunApplicationV1]:
         if reference.source_id != SOURCE:
             raise ArunRoutingError(reference.reference)
-        url = reference.locator or (
-            f"{BASE_URL}/planningDetails?reference="
-            f"{quote(reference.reference, safe='')}&from=planningSearch"
-        )
+        if reference.locator is None:
+            url = (
+                f"{BASE_URL}/planningDetails?reference="
+                f"{quote(reference.reference, safe='')}&from=planningSearch"
+            )
+        else:
+            try:
+                url = _validated_detail_locator(
+                    reference.locator,
+                    reference.reference,
+                )
+            except ArunParseError as error:
+                raise ArunRoutingError(reference.reference) from error
         detail = await session.fetch(
             PortalRequest(url=HttpUrl(url), intent=RequestIntent.DETAIL)
         )
@@ -814,9 +831,11 @@ def _show_all_request(
 
 def _parse_search_results(body: bytes) -> _SearchResults:
     soup = BeautifulSoup(body, "html.parser")
+    if soup.select_one('[class*="pagination"], a[rel="next"]') is not None:
+        _raise_parse("result pagination")
     found = _parse_result_references(soup)
     text = soup.get_text(" ", strip=True)
-    reported = _parse_reported_count(soup, text, len(found))
+    reported = _parse_reported_count(soup, text)
     return _SearchResults(
         references=found,
         reported=reported,
@@ -829,10 +848,14 @@ def _parse_result_references(soup: BeautifulSoup) -> tuple[SourceReference, ...]
     seen = set()
     for link in soup.select('a[href*="planningDetails"]'):
         href = str(link.get("href", ""))
-        values = parse_qs(urlsplit(href).query).get("reference", [])
-        if len(values) != 1 or not values[0]:
+        resolved = urljoin(f"{BASE_URL}/", href)
+        parts = urlsplit(resolved)
+        values = parse_qs(parts.query)
+        references = values.get("reference", [])
+        if len(references) != 1 or not references[0]:
             _raise_parse("result reference")
-        reference = values[0]
+        reference = references[0]
+        locator = _validated_detail_locator(resolved, reference)
         if reference in seen:
             _raise_parse("duplicate result reference")
         seen.add(reference)
@@ -840,16 +863,35 @@ def _parse_result_references(soup: BeautifulSoup) -> tuple[SourceReference, ...]
             SourceReference(
                 source_id=SOURCE,
                 reference=reference,
-                locator=urljoin(f"{BASE_URL}/", href),
+                locator=locator,
             )
         )
     return tuple(found)
 
 
+def _validated_detail_locator(locator: str, expected_reference: str) -> str:
+    resolved = urljoin(f"{BASE_URL}/", locator)
+    parts = urlsplit(resolved)
+    base = urlsplit(BASE_URL)
+    query = parse_qs(parts.query)
+    allowed_queries = (
+        {"reference": [expected_reference]},
+        {"reference": [expected_reference], "from": ["planningSearch"]},
+    )
+    if (
+        parts.scheme != "https"
+        or parts.netloc != base.netloc
+        or parts.path != f"{base.path}/planningDetails"
+        or parts.fragment
+        or query not in allowed_queries
+    ):
+        _raise_parse("result reference")
+    return resolved
+
+
 def _parse_reported_count(
     soup: BeautifulSoup,
     text: str,
-    reference_count: int,
 ) -> int:
     if "retrieve more than 200 results" in text.casefold():
         raise ArunResultCapError
@@ -872,8 +914,6 @@ def _parse_reported_count(
         or "no results" in text.casefold()
     ):
         reported = 0
-    elif reference_count:
-        reported = reference_count
     else:
         _raise_parse("reported result count")
     if reported >= _RESULT_CAP:
@@ -920,7 +960,11 @@ def _document_request(body: bytes, expected_reference: str) -> PortalRequest:
     query = parse_qs(parts.query)
     if (
         str(form.get("method", "")).casefold() != "post"
+        or parts.scheme != "https"
         or parts.netloc != base.netloc
+        or parts.path != f"{base.path}/showDocuments"
+        or parts.fragment
+        or set(query) != {"reference", "module"}
         or query.get("module") != ["pl"]
     ):
         _raise_parse("document action")
