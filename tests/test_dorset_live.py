@@ -31,7 +31,12 @@ from yimby.domain import (
     StoredCheckpoint,
 )
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
-from yimby.transport import FormField
+from yimby.transport import (
+    FormField,
+    PortalRequest,
+    RequestIntent,
+    SourceUnavailableError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -917,6 +922,34 @@ def test_dorset_qualification_persists_exact_terminal_receipt(tmp_path: Path) ->
     assert not list(tmp_path.glob(".*.tmp"))
 
 
+def test_dorset_qualification_default_transport_refuses_redirect_hops() -> None:
+    """A redirect cannot issue an unmetered request inside Dorset qualification."""
+    module = _qualification_module()
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path == ADVANCED_PATH:
+            return httpx.Response(302, headers={"location": DISCLAIMER_PATH})
+        return httpx.Response(200, content=_disclaimer_form())
+
+    session = module._default_session()
+    session._client._transport = httpx.MockTransport(handler)
+
+    async def fetch_redirect() -> None:
+        with pytest.raises(SourceUnavailableError, match="HTTP 302"):
+            await session.fetch(
+                PortalRequest(
+                    url=HttpUrl(f"{BASE_URL}{ADVANCED_PATH}"),
+                    intent=RequestIntent.SEARCH,
+                )
+            )
+        await session.aclose()
+
+    asyncio.run(fetch_redirect())
+    assert paths == [ADVANCED_PATH]
+
+
 def test_dorset_qualification_fails_closed_on_corrupt_evidence(tmp_path: Path) -> None:
     """A terminal checkpoint cannot hide a corrupt retained gzip member."""
     module = _qualification_module()
@@ -1378,6 +1411,36 @@ def test_dorset_outstanding_query_clears_retained_received_dates() -> None:
         )["valueAsString"]
         == ""
     )
+
+
+@pytest.mark.parametrize("fault", ["missing", "text", "disabled"])
+def test_dorset_outstanding_query_requires_published_checkbox(fault: str) -> None:
+    """Outstanding discovery cannot fabricate a missing or disabled control."""
+
+    def break_checkbox(soup: BeautifulSoup) -> None:
+        control = soup.select_one(
+            'input[name="ctl00$ContentPlaceHolder1$chkOutstanding"]'
+        )
+        assert isinstance(control, Tag)
+        if fault == "missing":
+            control.decompose()
+        elif fault == "text":
+            control["type"] = "text"
+        else:
+            control["disabled"] = "disabled"
+
+    form = _form(_mutated(_advanced_form(), break_checkbox))
+
+    with pytest.raises(ValueError, match="advanced outstanding control"):
+        dorset_adapter._advanced_request(
+            form,
+            dorset_adapter._LIVE_QUERIES[1],
+            dorset_adapter.DorsetDiscoveryScope(
+                start=WINDOW.start,
+                end=WINDOW.end,
+                include_open=True,
+            ),
+        )
 
 
 def test_dorset_checkpoint_requires_page_one_for_a_fresh_query() -> None:
