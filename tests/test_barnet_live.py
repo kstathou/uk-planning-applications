@@ -930,6 +930,10 @@ def test_barnet_form_and_search_boundary_variants() -> None:
         WEEKLY_FORM.replace(b'name="week"', b'name="otherWeek"'),
         WEEKLY_FORM.replace(b'value="Application"', b'value="Other"'),
         WEEKLY_FORM.replace(
+            b'<input type="hidden" name="searchType" value="Application">',
+            b'<input type="checkbox" name="searchType" value="Application">',
+        ),
+        WEEKLY_FORM.replace(
             b'<input type="radio" name="dateType" value="DC_Decided">',
             b"",
         ),
@@ -1115,6 +1119,81 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             all_query_keys=("weekly|2026-09-14|DC_Validated",),
         )
 
+    duplicate_identity_page = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            (("A", "KEY"), ("A", "KEY")),
+            ("Showing 1-2 of 2",),
+        )
+    )
+    with pytest.raises(BarnetParseError, match="duplicate search result identity"):
+        barnet_adapter._advance_checkpoint(
+            BarnetCheckpointV1(cursor="live", tracks_locators=True),
+            active_page=barnet_adapter._ActivePage(
+                query_key="weekly|2026-09-14|DC_Validated",
+                page=1,
+                row_count=0,
+            ),
+            search_page=duplicate_identity_page,
+            all_query_keys=("weekly|2026-09-14|DC_Validated",),
+        )
+
+    repeated_second_page = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 2-2 of 2",),
+            current_page="2",
+        )
+    )
+    with pytest.raises(BarnetParseError, match="duplicate search result identity"):
+        barnet_adapter._advance_checkpoint(
+            BarnetCheckpointV1(
+                cursor="live",
+                active_query="weekly|2026-09-14|DC_Validated",
+                next_page=2,
+                query_row_count=1,
+                active_query_references=("A",),
+                seen_references=("A",),
+                seen_locators=("KEY",),
+                tracks_locators=True,
+            ),
+            active_page=barnet_adapter._ActivePage(
+                query_key="weekly|2026-09-14|DC_Validated",
+                page=2,
+                row_count=1,
+            ),
+            search_page=repeated_second_page,
+            all_query_keys=("weekly|2026-09-14|DC_Validated",),
+        )
+
+    changed_total = barnet_adapter._parse_search_page(
+        _showing_result_page(
+            tuple((f"A-{index}", f"KEY-{index}") for index in range(11, 16)),
+            ("Showing 11-15 of 15",),
+            current_page="2",
+        )
+    )
+    with pytest.raises(BarnetCountMismatchError, match="expected 20 actual 15"):
+        barnet_adapter._advance_checkpoint(
+            BarnetCheckpointV1(
+                cursor="live",
+                active_query="weekly|2026-09-14|DC_Validated",
+                next_page=2,
+                query_row_count=10,
+                query_reported_count=20,
+                active_query_references=tuple(f"A-{index}" for index in range(1, 11)),
+                seen_references=tuple(f"A-{index}" for index in range(1, 11)),
+                seen_locators=tuple(f"KEY-{index}" for index in range(1, 11)),
+                tracks_locators=True,
+            ),
+            active_page=barnet_adapter._ActivePage(
+                query_key="weekly|2026-09-14|DC_Validated",
+                page=2,
+                row_count=10,
+            ),
+            search_page=changed_total,
+            all_query_keys=("weekly|2026-09-14|DC_Validated",),
+        )
+
     conflicting_identity = barnet_adapter._parse_search_page(
         _result_page((("A", "OTHER-KEY"),), count=1)
     )
@@ -1230,6 +1309,11 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             current_page=None,
             numbered_page=2,
         ),
+        _showing_result_page(
+            (("A", "KEY"),),
+            ("Showing 1-1 of 1",),
+        )
+        + b'<a href="pagedSearchResults.do?action=next">next</a>',
         _showing_result_page(
             (("A", "KEY"),),
             ("Showing 1-1 of 1",),
