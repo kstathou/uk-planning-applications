@@ -618,6 +618,31 @@ def test_barnet_qualification_persists_complete_typed_receipt(
         assert sessions == []
         assert json.loads(receipt_path.read_text(encoding="utf-8")) == preserved_receipt
 
+    receipt_path.unlink()
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        connection.execute(
+            """
+            UPDATE qualification_lineage
+            SET scope_json = ?, created_at = '1789578000'
+            WHERE authority_id = 'barnet'
+            """,
+            (valid_scope_json,),
+        )
+        connection.commit()
+    sessions.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=session_factory,
+            now=lambda: now + timedelta(days=10),
+        )
+        == 1
+    )
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"error": "receipt-anchor-required"}
+    assert sessions == []
+
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         connection.execute(
             """
