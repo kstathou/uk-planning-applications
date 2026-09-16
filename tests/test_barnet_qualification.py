@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sqlite3
@@ -273,6 +274,16 @@ def test_barnet_qualification_requires_exact_safe_scope(
     assert json.loads(capsys.readouterr().err)["error"] == "data-dir-not-directory"
     assert file_target.read_text(encoding="utf-8") == "preserve"
     assert created == 0
+
+
+def test_barnet_qualification_uses_cautious_live_transport() -> None:
+    module = _qualification_module()
+    session = module._default_session()
+    try:
+        assert session._limiter._minimum_gap == 10.0
+        assert session._max_attempts == 1
+    finally:
+        asyncio.run(session.aclose())
 
 
 def test_barnet_qualification_persists_complete_typed_receipt(
