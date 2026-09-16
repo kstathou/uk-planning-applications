@@ -34,7 +34,12 @@ The adapter owns four query families:
 - Four native open-case statuses from Barnet's advanced form.
 - Five native active-appeal statuses from Barnet's advanced form.
 
-Private typed query objects produce one canonical ordered key inventory. The adapter validates the live form against that inventory before it submits a search. The qualification command imports the canonical inventory instead of repeating status strings.
+Private typed query objects produce one canonical ordered key inventory. Before
+submission, the adapter validates the weekly form's unique POST action, ward
+and week controls, `searchType=Application`, and exact validated/decided radio
+values, as well as the advanced form's status and date controls. The
+qualification command imports the canonical inventory instead of repeating
+status strings.
 
 Each query becomes complete only when its parsed rows reconcile with the portal's displayed total, displayed row span, and page markers. A range-less response cannot carry a paging control. This rejects a replayed earlier page or hidden forward page instead of counting it twice. The checkpoint retains stable reference-locator pairs; qualification validates every known pair against the durable queue while preserving the explicitly marked legacy checkpoint created by the blocked first run. The adapter yields every page with its next checkpoint so SQLite can commit references and progress together. A resumed page first recreates the server-side search session.
 

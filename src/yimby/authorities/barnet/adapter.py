@@ -775,12 +775,32 @@ def _reconcile_search_identities(
 
 def _parse_form(body: bytes) -> Tag:
     soup = BeautifulSoup(body, "html.parser")
-    form = soup.select_one("form")
-    if not isinstance(form, Tag):
+    forms = soup.select("form")
+    if not forms:
         _raise_parse("form")
+    if len(forms) != 1 or not isinstance(forms[0], Tag):
+        _raise_parse("weekly form")
+    form = forms[0]
     fields = _form_fields(form)
     if not any(field.name == "_csrf" and field.value for field in fields):
         _raise_parse("_csrf")
+    action = urljoin(f"{BASE_URL}/", str(form.get("action", "")))
+    date_types = form.select('input[name="dateType"]')
+    search_types = form.select('input[name="searchType"]')
+    if (
+        str(form.get("method", "")).casefold() != "post"
+        or action != _WEEKLY_RESULTS_URL
+        or len(form.select('select[name="searchCriteria.ward"]')) != 1
+        or len(form.select('select[name="week"]')) != 1
+        or len(search_types) != 1
+        or str(search_types[0].get("value", "")) != "Application"
+        or len(date_types) != len(_DATE_TYPES)
+        or any(
+            str(control.get("type", "")).casefold() != "radio" for control in date_types
+        )
+        or tuple(str(control.get("value", "")) for control in date_types) != _DATE_TYPES
+    ):
+        _raise_parse("weekly form")
     return form
 
 
