@@ -123,10 +123,10 @@ class PlaywrightBoundary:
         self._context = context
 
     @classmethod
-    async def create(cls) -> PlaywrightBoundary:
+    async def create(cls, *, headless: bool = True) -> PlaywrightBoundary:
         """Launch Chromium with a persistent in-memory cookie context."""
         playwright = await async_playwright().start()
-        browser = await playwright.chromium.launch(headless=True)
+        browser = await playwright.chromium.launch(headless=headless)
         context = await browser.new_context(accept_downloads=False)
 
         async def route_request(route: Route) -> None:
