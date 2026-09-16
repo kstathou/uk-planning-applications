@@ -127,7 +127,7 @@ schema-version-3 receipt atomically. The receipt proves:
   agreement between the complete native and normalised persisted models and
   their retained detail and document-index evidence, including persisted source
   identity and locator, with source identity and locator derived independently
-  from retained search-result evidence;
+  from digest-verified current and historical search-result evidence;
 - complete current application and document sections for every retained record;
 - a successful completed run plus an immediate successful rerun with a
   byte-for-byte semantic fingerprint match; all historical run outcomes and

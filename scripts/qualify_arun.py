@@ -518,6 +518,8 @@ def _source_evidence_references(
     for capture in captures:
         if str(capture.url).rstrip("/") != _SEARCH_URL:
             continue
+        if not _capture_is_valid(capture):
+            return None
         try:
             parsed = _parse_search_results(capture.body)
         except (ArunParseError, ArunResultCapError):

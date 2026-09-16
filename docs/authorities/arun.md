@@ -118,8 +118,9 @@ normalised as 4 appeal relationships, 2 `appeal-lodged` events, and 3
 `arun-v5` normaliser;
 the Unicode whitespace in the 253 `Undecided (On Hold)` source statuses is
 collapsed to the stable `undecided-(on-hold)` value. The receipt records 73 search captures and 1,296 application
-captures with their exact digests. It reparses every result capture, checks its
-exact query membership and source-published identity and locator, and also verifies SQLite
+captures with their exact digests. It verifies and reparses every current or
+historical result capture used for cumulative source identity, checks exact
+query membership and source-published identity and locator, and also verifies SQLite
 integrity, evidence paths, terminal checkpoint state, exact reference-set
 equality, current section completeness, the source cap, and the durable
 discovery-only registry status before publication. The 25 checks include exact

@@ -4,6 +4,7 @@
 """Arun live discovery and qualification contracts."""
 
 import asyncio
+import gzip
 import importlib.util
 import json
 import sqlite3
@@ -1886,7 +1887,15 @@ def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
         )
         == 0
     )
-    capsys.readouterr()
+    first_receipt = json.loads(capsys.readouterr().out)
+    old_search_digest = next(
+        query["expanded_evidence_digest"] or query["initial_evidence_digest"]
+        for query in first_receipt["query_inventory"]
+        if any(
+            reference["reference"] == "BR/1/26/PL"
+            for reference in query["source_references"]
+        )
+    )
 
     second_responder = _QualificationResponder()
     second_responder.references = ("BR/3/26/PL", "BR/4/26/PL")
@@ -1931,6 +1940,40 @@ def test_arun_qualification_accepts_a_new_scope_over_cumulative_sqlite_state(
     } == {"BR/3/26/PL"}
     assert receipt["counts"]["applications"] == 3
     assert all(check["ok"] for check in receipt["checks"])
+
+    receipt_path = data_dir / "arun-qualification-v3.json"
+    original = receipt_path.read_text(encoding="utf-8")
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        evidence_path = connection.execute(
+            "SELECT path FROM evidence WHERE digest = ?",
+            (old_search_digest,),
+        ).fetchone()[0]
+        connection.executescript(
+            """
+            UPDATE applications
+            SET source_id = 'tampered-source',
+                locator = 'https://example.test/tampered'
+            WHERE reference = 'BR/1/26/PL';
+            UPDATE discovery_queue
+            SET source_id = 'tampered-source',
+                locator = 'https://example.test/tampered'
+            WHERE reference = 'BR/1/26/PL';
+            UPDATE native_rebuild_inputs
+            SET source_id = 'tampered-source',
+                locator = 'https://example.test/tampered'
+            WHERE reference = 'BR/1/26/PL';
+            """
+        )
+        connection.commit()
+    (data_dir / "evidence" / evidence_path).write_bytes(
+        gzip.compress(b"<html><body>corrupted historical search</body></html>")
+    )
+
+    assert module.main(second_args, session_factory=second_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert error["error"] == "qualification-failed"
+    assert "source-evidence-identity" in error["failed_checks"]
+    assert receipt_path.read_text(encoding="utf-8") == original
 
 
 def test_arun_qualification_rejects_checkpoint_source_count_tampering(
