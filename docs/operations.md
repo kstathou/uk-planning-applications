@@ -147,6 +147,22 @@ evidence rows. Peak District is `LIVE_READY` for the receipt-backed HTTP
 contract, but remains operationally unqualified until successful weekly cycles
 occur on or after 23 September and 30 September 2026.
 
+Camden's bounded workflow uses a visible-Chrome session and the official five-
+query inventory:
+
+```sh
+uv run python scripts/qualify_camden.py \
+  --confirm-live --data-dir <empty-directory> \
+  --start 2026-08-18 --end 2026-09-16 --include-open
+```
+
+Add `--resume` when reusing that exact directory. The workflow remains blocked,
+not live-ready: five bounded attempts on 16 September 2026 reached a non-
+terminal checkpoint at 10 of 331 records on the first query and persisted four
+applications before an ordinary detail navigation remained on Camden's managed
+challenge for 60 seconds. Comments and the linked child pages also remain fail-
+closed qualification requirements.
+
 Cheshire East and Haringey expose their equally bounded contracts through two
 additional opt-in smokes:
 

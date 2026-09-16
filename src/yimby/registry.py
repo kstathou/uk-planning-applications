@@ -57,11 +57,14 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
         LiveTransportKind.HTTP,
     ),
     AuthorityId("camden"): _status(
-        LiveReadiness.DISCOVERY_ONLY,
-        "exact-reference detail and document collection are implemented; "
-        "bounded enumeration is unresolved",
-        "captured Camden JSF, Northgate, and CMWebDrawer contracts",
-        LiveTransportKind.HTTP,
+        LiveReadiness.BLOCKED,
+        "bounded five-query browser collection is implemented, but the live "
+        "bootstrap is blocked by Camden's managed challenge and unresolved "
+        "comment and linked-child verification",
+        "the 16 September 2026 blocker receipt records five bounded visible-"
+        "Chrome attempts, a non-terminal 10-of-331 checkpoint, and four "
+        "persisted applications",
+        LiveTransportKind.BROWSER,
     ),
     AuthorityId("haringey"): _status(
         LiveReadiness.BROWSER_ONLY,

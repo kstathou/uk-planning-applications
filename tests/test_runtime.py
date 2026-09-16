@@ -163,6 +163,23 @@ def test_pilot_live_readiness_is_truthful_and_persisted(tmp_path: Path) -> None:
         ),
         transport=LiveTransportKind.HTTP,
     )
+    camden = registry.manifest(AuthorityId("camden")).live_status
+    assert camden == LiveStatus(
+        readiness=LiveReadiness.BLOCKED,
+        reason=(
+            "bounded five-query browser collection is implemented, but the live "
+            "bootstrap is blocked by Camden's managed challenge and unresolved "
+            "comment and linked-child verification"
+        ),
+        evidence=(
+            (
+                "the 16 September 2026 blocker receipt records five bounded visible-"
+                "Chrome attempts, a non-terminal 10-of-331 checkpoint, and four "
+                "persisted applications"
+            ),
+        ),
+        transport=LiveTransportKind.BROWSER,
+    )
     store = _store(tmp_path)
     store.register_authorities(registry.manifests())
     snapshot = dashboard_snapshot(store, registry)
