@@ -521,9 +521,24 @@ def _reported_count(soup: BeautifulSoup) -> int:
     text = soup.get_text(" ", strip=True)
     if "no results found" in text.casefold():
         return 0
+    showing_totals = []
+    for marker in soup.select(".showing"):
+        match = re.fullmatch(
+            r"showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of\s+"
+            r"(\d+)(?:\s+results?)?",
+            marker.get_text(" ", strip=True),
+            re.IGNORECASE,
+        )
+        if match is None:
+            _raise_parse("reported result count")
+        showing_totals.append(int(match.group(1)))
+    if showing_totals:
+        reported = showing_totals[0]
+        if any(total != reported for total in showing_totals[1:]):
+            _raise_parse("reported result count")
+        return reported
     match = re.search(
-        r"(?:showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of|"
-        r"displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
+        r"(?:displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
         text,
         re.IGNORECASE,
     )
