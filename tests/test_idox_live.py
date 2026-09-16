@@ -27,9 +27,13 @@ from yimby import AuthorityId, Collector, DiscoveryWindow, pilot_registry
 from yimby.domain import (
     ApplicationId,
     DurableDiscoveryBatch,
+    RunMetrics,
+    RunOutcome,
+    RunStatus,
     SourceId,
     SourceReference,
     StoredCheckpoint,
+    TransportMode,
 )
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
@@ -2179,6 +2183,99 @@ def test_west_suffolk_qualification_persists_and_proves_idempotence(
     receipt_path = data_dir / "west-suffolk-qualification-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
     assert not (data_dir / ".west-suffolk-qualification-v1.json.tmp").exists()
+
+    sessions.clear()
+    assert (
+        module.main(
+            [*args, "--resume"],
+            session_factory=session_factory,
+            now=lambda: datetime(2026, 9, 16, 13, tzinfo=UTC),
+        )
+        == 0
+    )
+    resumed_receipt = json.loads(capsys.readouterr().out)
+    assert len(sessions) == 2
+    assert all(session.closed for session in sessions)
+    assert all(session.requested_urls == () for session in sessions)
+    assert resumed_receipt["costs"]["initial"]["request_count"] == 0
+    assert resumed_receipt["costs"]["rerun"]["request_count"] == 0
+
+
+def test_west_suffolk_qualification_restarts_a_wrong_scope_checkpoint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A terminal checkpoint qualifies only the exact scope that produced it."""
+    module = _qualification_module()
+    data_dir = tmp_path / "wrong-scope"
+    store = _store(data_dir)
+    run_id = store.begin_run(AuthorityId("west-suffolk"))
+    checkpoint = west_suffolk_adapter.WestSuffolkCheckpointV1(
+        result_page="live",
+        live_scope=west_suffolk_adapter.WestSuffolkDiscoveryScope(
+            start=date(2026, 9, 7),
+            end=date(2026, 9, 13),
+            include_open=True,
+        ),
+        live_complete=True,
+    )
+    store.commit_discovery(
+        run_id,
+        AuthorityId("west-suffolk"),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json=checkpoint.model_dump_json(),
+            ),
+            complete=True,
+        ),
+    )
+    store.finish_run(
+        run_id,
+        AuthorityId("west-suffolk"),
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=0,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.LIVE,
+        ),
+    )
+    store.close()
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        sessions.append(session)
+        return session
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--resume",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-09-14",
+            "--end",
+            "2026-09-20",
+            "--include-open",
+        ],
+        session_factory=session_factory,
+    )
+
+    assert result == 0
+    assert len(sessions[0].requested_urls) == 39
+    assert sessions[1].requested_urls == ()
+    assert json.loads(capsys.readouterr().out)["scope"] == {
+        "start": "2026-09-14",
+        "end": "2026-09-20",
+        "include_open": True,
+    }
 
 
 def test_west_suffolk_qualification_rejects_failed_current_sections(
