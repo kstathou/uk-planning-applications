@@ -72,7 +72,7 @@ _DATE_FORMATS = (
 )
 _MINIMUM_LABELLED_CELLS = 2
 _DOCUMENT_CELL_COUNT = 6
-_SUMMARY_BODY_ATTEMPTS = 3
+_DETAIL_BODY_ATTEMPTS = 3
 _TOO_MANY_RESULTS = "too many results found. please enter some more parameters."
 _CASE_TYPES = (
     ("DAG", "Agricultural Determination"),
@@ -894,17 +894,16 @@ async def _fetch_summary(
     session: PortalSession,
     locator: str,
 ) -> EvidenceCapture:
-    for attempt in range(_SUMMARY_BODY_ATTEMPTS):
+    for attempt in range(_DETAIL_BODY_ATTEMPTS):
         capture = await session.fetch(
             _detail_request(locator, "summary", RequestIntent.DETAIL)
         )
         soup = BeautifulSoup(capture.body, "html.parser")
         if soup.select("#simpleDetailsTable"):
             return capture
-        if attempt + 1 < _SUMMARY_BODY_ATTEMPTS:
+        if attempt + 1 < _DETAIL_BODY_ATTEMPTS:
             continue
-        message = capture.body.decode(errors="replace").casefold()
-        if "unable to perform this task" in message and "remote exception" in message:
+        if _is_remote_exception(capture.body):
             raise LeedsDetailUnavailableError
         raise LeedsDetailUnverifiedError
     raise LeedsDetailUnverifiedError
@@ -934,17 +933,27 @@ async def _fetch_documents(
     locator: str,
     evidence: list[EvidenceCapture],
 ) -> tuple[tuple[LeedsDocumentV1, ...], SectionState]:
-    try:
-        capture = await session.fetch(
-            _detail_request(locator, "documents", RequestIntent.DETAIL)
-        )
-    except SourceUnavailableError:
-        return (), FailedSection(code="source-unavailable")
+    for attempt in range(_DETAIL_BODY_ATTEMPTS):
+        try:
+            capture = await session.fetch(
+                _detail_request(locator, "documents", RequestIntent.DETAIL)
+            )
+        except SourceUnavailableError:
+            return (), FailedSection(code="source-unavailable")
+        if not _is_remote_exception(capture.body):
+            break
+        if attempt + 1 == _DETAIL_BODY_ATTEMPTS:
+            raise LeedsDetailUnavailableError
     evidence.append(capture)
     try:
         return _parse_documents(capture.body)
     except LeedsParseError as error:
         return (), FailedSection(code=error.code)
+
+
+def _is_remote_exception(body: bytes) -> bool:
+    message = body.decode(errors="replace").casefold()
+    return "unable to perform this task" in message and "remote exception" in message
 
 
 def _parse_documents(
@@ -1279,14 +1288,6 @@ class LeedsIdentityConflictError(LeedsParseError):
     def __init__(self, reference: str) -> None:
         """Name the conflicting public reference."""
         super().__init__(f"identity conflict {reference}")
-
-
-class LeedsOpenEnumerationUnsupportedError(RuntimeError):
-    """Older-open Leeds enumeration lacks a proven bounded partition."""
-
-    def __init__(self) -> None:
-        """Prevent weekly discovery from claiming full bootstrap coverage."""
-        super().__init__("Leeds older-open enumeration is not implemented")
 
 
 class LeedsCheckpointError(ValueError):
