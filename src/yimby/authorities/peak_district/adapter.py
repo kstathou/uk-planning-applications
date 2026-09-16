@@ -691,7 +691,7 @@ def _parse_search_page(body: bytes, *, expected_page: int) -> _SearchPage:
         raise PeakDistrictCountMismatchError(pages, page_count)
     observed_pages = {
         int(match.group(1))
-        for link in pagination.select("a[onclick]")
+        for link in soup.select('a[onclick*="PagingClick"]')
         if (match := _PAGE_PATTERN.search(str(link.get("onclick", "")))) is not None
     }
     if observed_pages != set(range(pages)):
