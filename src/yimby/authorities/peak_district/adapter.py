@@ -290,18 +290,23 @@ class PeakDistrictAdapter:
             row_count = (
                 progress.query_row_count if progress.active_query == query.key else 0
             )
+            query_request = _query_request(form, query)
             page_form: tuple[FormField, ...] | None = None
             if page_index > 0:
-                first_capture = await session.fetch(_query_request(form, query))
+                first_capture = await session.fetch(query_request)
                 page_form = _parse_search_page(
                     first_capture.body,
                     expected_page=0,
                 ).form
             while True:
                 capture = await session.fetch(
-                    _query_request(form, query)
+                    query_request
                     if page_index == 0
-                    else _pagination_request(form, page_form, page_index)
+                    else _pagination_request(
+                        query_request.form,
+                        page_form,
+                        page_index,
+                    )
                 )
                 search_page = _parse_search_page(
                     capture.body,
