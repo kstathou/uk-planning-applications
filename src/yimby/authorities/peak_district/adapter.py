@@ -328,13 +328,6 @@ class PeakDistrictAdapter:
                 page_index = next_checkpoint.next_page_index
                 row_count = next_checkpoint.query_row_count
                 page_form = search_page.form
-        if not progress.live_complete:
-            completed = progress.model_copy(update={"live_complete": True})
-            yield DiscoveryBatch(
-                references=(),
-                next_checkpoint=completed,
-                complete=True,
-            )
 
     async def fetch(
         self,
@@ -562,9 +555,7 @@ def _successful_controls(container: Tag) -> tuple[FormField, ...]:
     for control in container.select("input[name], select[name], textarea[name]"):
         if control.has_attr("disabled"):
             continue
-        name = control.get("name")
-        if not isinstance(name, str):
-            continue
+        name = str(control.get("name"))
         if control.name == "input":
             input_type = str(control.get("type", "text")).casefold()
             if input_type in {"button", "file", "image", "reset", "submit"}:
@@ -833,14 +824,10 @@ def _parse_assure_detail(body: bytes) -> _AssureDetail:
     labels = soup.select(
         ".row.btspace.tpspace .col-xs-12.padding-0 > .col-xs-12 > label"
     )
-    record_type = next(
-        (
-            label.get_text(" ", strip=True)
-            for label in labels
-            if label.get("id") != "applicationDisplayAddress"
-            and label.get_text(" ", strip=True)
-        ),
-        "",
+    record_type = (
+        labels[0].get_text(" ", strip=True)
+        if labels and labels[0].get("id") != "applicationDisplayAddress"
+        else ""
     )
     if not record_type:
         _raise_parse("detail record type")
@@ -896,7 +883,7 @@ def _required_element_text(
     return value
 
 
-async def _fetch_assure_documents(  # noqa: PLR0911
+async def _fetch_assure_documents(
     session: PortalSession,
     endpoint: str | None,
     reference: str,
@@ -923,18 +910,16 @@ async def _fetch_assure_documents(  # noqa: PLR0911
             )
         except PeakDistrictParseError as error:
             return (), FailedSection(code=error.code)
+        except PeakDistrictCountMismatchError:
+            return (), FailedSection(code="document-count-mismatch")
         for document in page.documents:
             url = str(document.url)
             if url in seen_urls:
                 return (), FailedSection(code="duplicate-document-url")
             seen_urls.add(url)
             documents.append(document)
-        if len(documents) > page.reported:
-            return (), FailedSection(code="document-count-mismatch")
         if len(documents) == page.reported:
             return tuple(documents), collection_state(len(documents))
-        if not page.documents:
-            return (), FailedSection(code="document-count-mismatch")
         page_index += 1
 
 
@@ -1047,26 +1032,17 @@ def _snapshot(
     payload: PeakDistrictApplicationV1,
     detail: EvidenceCapture,
 ) -> NativeSnapshot[PeakDistrictApplicationV1]:
-    loading = bool(payload.loading_sections)
     return NativeSnapshot(
         reference=reference,
         observed_at=datetime.now(UTC),
         payload=payload,
         completeness=Completeness(
             application=CompleteSection(item_count=1),
-            documents=(
-                FailedSection(code="client-section-loading")
-                if loading
-                else UnavailableSection(
-                    reason="AssureLive document collection is unresolved"
-                )
+            documents=UnavailableSection(
+                reason="fixture does not include document metadata"
             ),
-            comments=(
-                FailedSection(code="client-section-loading")
-                if loading
-                else UnavailableSection(
-                    reason="legacy comment enumeration is unresolved"
-                )
+            comments=UnavailableSection(
+                reason="fixture does not include public comments"
             ),
         ),
         evidence=(detail,),
