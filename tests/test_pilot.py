@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import importlib.util
 import json
+import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -62,6 +64,7 @@ from yimby.transport import FixtureResponse, FixtureSession
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import ModuleType
 
 WINDOW = DiscoveryWindow(
     start=date(2026, 8, 16),
@@ -70,6 +73,12 @@ WINDOW = DiscoveryWindow(
 _OPDC_APPLICATION_COUNT = 55
 _OPDC_INITIAL_REQUESTS = 168
 _OPDC_EVIDENCE_PATH = "docs/evidence/opdc-qualification-2026-09-16.json"
+_OPDC_APPLICATION_CAPTURE_SHA256 = (
+    "sha256:46c34a62e3faf144fc6a1de45892a9d8449e5e2dc52f362101f5125b7762149d"
+)
+_OPDC_CONTENT_DIGEST_SET_SHA256 = (
+    "sha256:8f2c5eb871927248dc6c53ca8e86853705cecadc1c727315833724f2531cf608"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -238,6 +247,18 @@ CASES = (
 )
 
 
+def _opdc_qualification_module() -> ModuleType:
+    path = Path(__file__).parents[1] / "scripts" / "qualify_opdc.py"
+    name = "_test_pilot_qualify_opdc"
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
 def test_authority_fixture_contract(case: _PilotCase, tmp_path: Path) -> None:
     """Every package survives an unchanged public-API rerun."""
@@ -328,6 +349,8 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
     """Live-ready proof remains reviewable without ignored local state."""
     receipt_path = Path(__file__).parents[1] / _OPDC_EVIDENCE_PATH
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    receipt_model = _opdc_qualification_module().OpdcSanitizedQualificationReceiptV1
+    validated = receipt_model.model_validate(receipt)
     manifest = pilot_registry().manifest(AuthorityId("opdc"))
 
     assert "identities" not in receipt
@@ -337,6 +360,17 @@ def test_opdc_live_status_points_to_sanitised_committed_receipt() -> None:
     assert receipt["costs"]["rerun"]["request_count"] == 0
     assert all(check["ok"] for check in receipt["checks"])
     assert "authority-readiness" in {check["name"] for check in receipt["checks"]}
+    assert validated.evidence_commitment.model_dump() == {
+        "canonicalization": "sha256-canonical-json-v1",
+        "applications": 55,
+        "captures_per_application": 3,
+        "capture_associations": 165,
+        "content_digests": 103,
+        "missing_paths": 0,
+        "invalid_paths": 0,
+        "application_capture_sha256": _OPDC_APPLICATION_CAPTURE_SHA256,
+        "content_digest_set_sha256": _OPDC_CONTENT_DIGEST_SET_SHA256,
+    }
     assert manifest.live_status.evidence == (
         f"{_OPDC_EVIDENCE_PATH} records 55 complete applications",
     )
