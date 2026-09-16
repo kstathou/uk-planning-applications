@@ -713,7 +713,11 @@ def test_live_collection_persists_locator_metadata_and_child_failures(
 
 def test_live_child_rate_limit_stops_before_later_sections() -> None:
     mock = _BarnetMock(child_rate_limited=True)
-    session = _session(mock)
+    session = HttpxPortalSession(
+        client=httpx.AsyncClient(transport=httpx.MockTransport(mock)),
+        limiter=HostRateLimiter(0),
+        max_attempts=1,
+    )
     reference = SourceReference(
         source_id=SourceId("barnet-idox-current"),
         reference="TCP/0001/26",

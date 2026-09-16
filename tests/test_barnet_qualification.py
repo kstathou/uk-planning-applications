@@ -409,12 +409,10 @@ def test_barnet_qualification_rejects_failed_current_sections(
     module = _qualification_module()
     data_dir = tmp_path / "failed-sections"
     sessions: list[_QualificationSession] = []
-    failed_documents = True
+    mock = _BarnetQualificationMock(failed_documents=True)
 
     def session_factory() -> _QualificationSession:
-        session = _QualificationSession(
-            _BarnetQualificationMock(failed_documents=failed_documents)
-        )
+        session = _QualificationSession(mock)
         sessions.append(session)
         return session
 
@@ -426,7 +424,7 @@ def test_barnet_qualification_rejects_failed_current_sections(
     assert sessions[0].closed
     assert not (data_dir / "barnet-qualification-v1.json").exists()
 
-    failed_documents = False
+    mock.failed_documents = False
     sessions.clear()
     assert (
         module.main(

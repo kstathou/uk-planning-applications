@@ -41,6 +41,10 @@ class SourceUnavailableError(RuntimeError):
     """A fixture or live source could not return the requested resource."""
 
 
+class RateLimitedError(SourceUnavailableError):
+    """The source explicitly rejected the request because of its request rate."""
+
+
 class AttachmentBodyBlockedError(RuntimeError):
     """A request attempted to retrieve attachment content."""
 

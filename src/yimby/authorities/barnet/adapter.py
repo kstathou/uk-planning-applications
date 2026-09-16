@@ -41,6 +41,7 @@ from yimby.domain import (
 from yimby.transport import (
     FormField,
     PortalRequest,
+    RateLimitedError,
     RequestIntent,
     RequestMethod,
     SourceUnavailableError,
@@ -530,6 +531,8 @@ class BarnetAdapter:
                     intent=RequestIntent.COMMENTS,
                 )
             )
+        except RateLimitedError:
+            raise
         except SourceUnavailableError:
             comments: tuple[BarnetCommentV1, ...] = ()
             comments_state = FailedSection(code="source-unavailable")
@@ -1483,6 +1486,8 @@ async def _fetch_documents(
         capture = await session.fetch(
             _detail_request(locator, "documents", RequestIntent.DETAIL)
         )
+    except RateLimitedError:
+        raise
     except SourceUnavailableError:
         return (), FailedSection(code="source-unavailable")
     evidence.append(capture)
@@ -1543,6 +1548,8 @@ async def _fetch_comments(
         capture = await session.fetch(
             _detail_request(locator, tab.active_tab, RequestIntent.COMMENTS)
         )
+    except RateLimitedError:
+        raise
     except SourceUnavailableError:
         return (), FailedSection(code="source-unavailable")
     evidence.append(capture)

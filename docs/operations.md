@@ -107,8 +107,10 @@ refresh entries remain pending until their real future dates.
 
 The Barnet qualification command leaves at least ten seconds between live
 requests and makes no automatic retry after a 429. If the source rate-limits a
-run, let the official site recover and then resume the same target. Do not run
-parallel Barnet collectors or rotate clients to evade the source limit.
+run, including on a document or comment page, it stops before requesting later
+sections or applications. Let the official site recover and then resume the
+same target. Other failed child sections remain queued for the next resume. Do
+not run parallel Barnet collectors or rotate clients to evade the source limit.
 Requalifying an already terminal target with zero live requests preserves the
 original receipt timestamp and the two follow-up due dates; it cannot postpone
 those cycles by repeatedly rewriting the receipt.

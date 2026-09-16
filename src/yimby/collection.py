@@ -14,6 +14,7 @@ from yimby.domain import (
     AuthorityId,
     CollectionReport,
     DiscoveryWindow,
+    FailedSection,
     RunMetrics,
     RunOutcome,
     RunStatus,
@@ -76,7 +77,23 @@ class Collector:
                 str(document.url) for document in collected.normalised.documents
             )
             application_ids.append(self._store.commit_observation(run_id, collected))
-            self._store.mark_retry_succeeded(authority_id, reference)
+            failed_sections = tuple(
+                state
+                for state in (
+                    collected.normalised.completeness.application,
+                    collected.normalised.completeness.documents,
+                    collected.normalised.completeness.comments,
+                )
+                if isinstance(state, FailedSection)
+            )
+            if failed_sections:
+                self._store.enqueue_retry(
+                    authority_id,
+                    reference,
+                    ",".join(section.code for section in failed_sections),
+                )
+            else:
+                self._store.mark_retry_succeeded(authority_id, reference)
             processed.add(key)
             context.active_reference = None
 

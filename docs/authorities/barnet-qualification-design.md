@@ -81,6 +81,8 @@ successful bootstrap. The two weekly refreshes remain future work and Barnet
 must remain discovery-only.
 
 The command now applies a Barnet-specific ten-second minimum inter-request gap
-and one attempt per request. A 429 therefore stops at the durable checkpoint;
-operators wait for ordinary source recovery and resume the same state rather
-than adding retries, parallel sessions, or alternate identities.
+and one attempt per request. A 429 on discovery, summary, document, or comment
+retrieval therefore stops before later requests; the active reference remains
+durably retryable. Other failed child sections are also queued for a future
+resume. Operators wait for ordinary source recovery and reuse the same state
+rather than adding retries, parallel sessions, or alternate identities.

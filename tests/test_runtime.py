@@ -511,7 +511,7 @@ def test_http_session_errors_are_bounded_and_sanitised() -> None:
 
     rate_limited_session = HttpxPortalSession(
         client=httpx.AsyncClient(
-            transport=httpx.MockTransport(lambda request: httpx.Response(429))
+            transport=httpx.MockTransport(lambda _: httpx.Response(429))
         ),
         limiter=HostRateLimiter(0),
         max_attempts=1,

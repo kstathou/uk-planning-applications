@@ -21,6 +21,7 @@ from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
 from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalRequest,
+    RateLimitedError,
     SourceUnavailableError,
 )
 
@@ -61,6 +62,7 @@ _ATTACHMENT_MEDIA_TYPES = {
 }
 _ATTACHMENT_MEDIA_PREFIXES = ("audio/", "image/", "video/")
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_RATE_LIMIT_STATUS = 429
 _SUCCESS_MIN = 200
 _SUCCESS_MAX = 300
 _MAX_ATTEMPTS = 5
@@ -309,6 +311,9 @@ def _attempts_error(safe_url: str, attempts: int) -> SourceUnavailableError:
 
 
 def _status_error(safe_url: str, status: int | None) -> SourceUnavailableError:
-    return SourceUnavailableError(
+    error_type = (
+        RateLimitedError if status == _RATE_LIMIT_STATUS else SourceUnavailableError
+    )
+    return error_type(
         f"source unavailable: {safe_url} HTTP {status or 'unknown'}"
     )
