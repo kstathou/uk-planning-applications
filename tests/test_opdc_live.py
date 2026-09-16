@@ -72,6 +72,7 @@ _QUALIFICATION_SESSION_COUNT = 2
 _INTERRUPTED_QUALIFICATION_SESSION_COUNT = 3
 _QUALIFICATION_REQUEST_COUNT = 15
 _QUALIFICATION_APPLICATION_COUNT = 4
+_SHIFTED_QUALIFICATION_APPLICATION_COUNT = 5
 _QUALIFICATION_APPLICATION_CAPTURE_SHA256 = (
     "sha256:9c334021f7e6c8aa73cea43ab9c4dbb9b9489b86ae62d2efb8be40a640ce0270"
 )
@@ -253,14 +254,30 @@ def _responses_body(*, duplicate: bool = False) -> bytes:
     return json.dumps(responses).encode()
 
 
-def _qualification_responses() -> dict[str, bytes | Exception]:
-    responses = _complete_responses()
-    for locator, reference in (
+def _qualification_responses(
+    window: DiscoveryWindow = WINDOW,
+    *,
+    registered: tuple[tuple[int, str], ...] = (
         (1, "26/0001/FULOPDC"),
         (2, "26/0002/FULOPDC"),
+    ),
+    determined: tuple[tuple[int, str], ...] = (
+        (2, "26/0002/FULOPDC"),
         (3, "26/0003/FULOPDC"),
+    ),
+    current: tuple[tuple[int, str], ...] = (
+        (1, "26/0001/FULOPDC"),
         (4, "15/0004/FULOPDC"),
-    ):
+    ),
+) -> dict[str, bytes | Exception]:
+    query_urls = _query_urls(window)
+    responses: dict[str, bytes | Exception] = {
+        query_urls[0]: _search(*registered),
+        query_urls[1]: _search(*determined),
+        query_urls[2]: _search(*current),
+    }
+    identities = dict((*registered, *determined, *current))
+    for locator, reference in identities.items():
         value = str(locator)
         responses[_detail_url(value)] = _detail_body(
             locator=locator,
@@ -287,6 +304,43 @@ def _store(root: Path) -> SqliteStore:
     return SqliteStore(root / "yimby.sqlite3", EvidenceStore(root / "evidence"))
 
 
+def _assert_qualified_store(store: SqliteStore) -> None:
+    authority = store.authority_states()[0]
+    assert authority.manifest.live_status.readiness == LiveReadiness.LIVE_READY
+    assert authority.manifest.live_status.transport == LiveTransportKind.HTTP
+    discovery = store.evidence_registration_audit(AuthorityId("opdc"))
+    assert [
+        (
+            item.query_key,
+            item.page,
+            item.response_url,
+            item.request_url,
+            item.request_method,
+            item.request_form,
+        )
+        for item in discovery.discovery_registrations
+    ] == sorted(
+        (
+            (query.value, 1, url, url, "GET", ())
+            for query, url in zip(OpdcDiscoveryQuery, _query_urls(), strict=True)
+        ),
+        key=lambda item: item[0],
+    )
+    for record in store.retained_native_records():
+        locator = record.reference.locator
+        assert locator is not None
+        assert tuple(str(capture.url) for capture in record.evidence) == (
+            _detail_url(locator),
+            _detail_url(locator, "/document"),
+            _detail_url(locator, "/responses"),
+        )
+        documents = store.get_application(record.application_id).documents
+        assert tuple(document.category for document in documents) == ("Report",)
+        assert tuple(document.published_date for document in documents) == (
+            date(2024, 1, 30),
+        )
+
+
 def test_opdc_live_discovery_exhausts_exact_full_array_queries() -> None:
     """The API's complete arrays implement the portal's client-side pages."""
     session = _OpdcSession(_complete_responses())
@@ -302,6 +356,21 @@ def test_opdc_live_discovery_exhausts_exact_full_array_queries() -> None:
         [("15/0004/FULOPDC", "4")],
     ]
     assert [batch.complete for batch in batches] == [False, False, True]
+    assert [batch.evidence_key for batch in batches] == [
+        "registered-window",
+        "determined-window",
+        "registered-open",
+    ]
+    assert [batch.evidence_page for batch in batches] == [1, 1, 1]
+    assert [
+        (
+            str(batch.evidence[0].url),
+            str(batch.evidence[0].request_url),
+            batch.evidence[0].request_method,
+            batch.evidence[0].request_form,
+        )
+        for batch in batches
+    ] == [(url, url, "GET", ()) for url in _query_urls()]
     final = batches[-1].next_checkpoint
     assert final.live_complete is True
     assert final.completed_queries == (
@@ -610,6 +679,8 @@ def test_opdc_live_detail_retains_metadata_comments_and_three_evidence_captures(
     assert normalised.status == "decision-issued"
     assert normalised.documents[0].title == "Committee report"
     assert str(normalised.documents[0].url) == document_url
+    assert normalised.documents[0].category == "Report"
+    assert normalised.documents[0].published_date == date(2024, 1, 30)
     assert normalised.comments[0].text == "I support the additional homes."
     assert normalised.metadata.aliases == ("PP-11999999",)
     assert normalised.metadata.application_type == "Full planning application"
@@ -870,17 +941,7 @@ def test_opdc_qualification_persists_typed_proof_and_zero_network_rerun(
     assert receipt["run_statuses"] == ["succeeded", "succeeded"]
     assert all(check["ok"] for check in receipt["checks"])
     store = _store(data_dir)
-    authority = store.authority_states()[0]
-    assert authority.manifest.live_status.readiness == LiveReadiness.LIVE_READY
-    assert authority.manifest.live_status.transport == LiveTransportKind.HTTP
-    for record in store.retained_native_records():
-        locator = record.reference.locator
-        assert locator is not None
-        assert tuple(str(capture.url) for capture in record.evidence) == (
-            _detail_url(locator),
-            _detail_url(locator, "/document"),
-            _detail_url(locator, "/responses"),
-        )
+    _assert_qualified_store(store)
     store.close()
     receipt_path = data_dir / "opdc-qualification-v1.json"
     assert json.loads(receipt_path.read_text(encoding="utf-8")) == receipt
@@ -1182,17 +1243,32 @@ def test_opdc_qualification_rejects_digest_mismatched_evidence(
     assert not (data_dir / "opdc-qualification-v1.json").exists()
 
 
-def test_opdc_qualification_refuses_a_changed_scope_before_network(
+def test_opdc_qualification_accepts_a_shifted_scope_without_overwriting_history(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """A non-empty qualification store cannot accumulate another date scope."""
+    """A later exact window adds proof while retaining an older decided case."""
     module = _qualification_module()
     data_dir = tmp_path / "scope"
     sessions: list[_OpdcSession] = []
+    shifted = WINDOW.model_copy(
+        update={"start": date(2026, 8, 19), "end": date(2026, 9, 17)}
+    )
+    current_window = WINDOW
 
     def session_factory() -> _OpdcSession:
-        session = _OpdcSession(_qualification_responses())
+        responses = (
+            _qualification_responses()
+            if current_window == WINDOW
+            else _qualification_responses(
+                shifted,
+                determined=(
+                    (2, "26/0002/FULOPDC"),
+                    (5, "26/0005/FULOPDC"),
+                ),
+            )
+        )
+        session = _OpdcSession(responses)
         sessions.append(session)
         return session
 
@@ -1206,14 +1282,198 @@ def test_opdc_qualification_refuses_a_changed_scope_before_network(
     ]
     assert module.main(original, session_factory=session_factory) == 0
     capsys.readouterr()
+    store = _store(data_dir)
+    old_record = next(
+        record
+        for record in store.retained_native_records()
+        if record.reference.reference == "26/0003/FULOPDC"
+    )
+    old_application = store.get_application(old_record.application_id)
+    original_discovery = store.evidence_registration_audit(
+        AuthorityId("opdc")
+    ).discovery_registrations
+    store.close()
     sessions.clear()
 
+    current_window = shifted
     changed = original.copy()
     changed[4] = "2026-09-17"
     changed.append("--resume")
-    assert module.main(changed, session_factory=session_factory) == _CONFIG_ERROR
-    assert json.loads(capsys.readouterr().err)["error"] == "scope-mismatch"
+    assert module.main(changed, session_factory=session_factory) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["scope"] == {
+        "start": "2026-08-19",
+        "end": "2026-09-17",
+        "include_open": True,
+    }
+    assert {item["reference"] for item in receipt["identities"]} == {
+        "15/0004/FULOPDC",
+        "26/0001/FULOPDC",
+        "26/0002/FULOPDC",
+        "26/0005/FULOPDC",
+    }
+    assert receipt["counts"]["applications"] == _SHIFTED_QUALIFICATION_APPLICATION_COUNT
+    assert (
+        receipt["evidence_commitment"]["applications"]
+        == _SHIFTED_QUALIFICATION_APPLICATION_COUNT
+    )
+    assert len(sessions) == _QUALIFICATION_SESSION_COUNT
+    assert sessions[1].requested_urls == ()
+
+    store = _store(data_dir)
+    retained = store.retained_native_records()
+    preserved = next(
+        record for record in retained if record.reference.reference == "26/0003/FULOPDC"
+    )
+    assert preserved == old_record
+    assert store.get_application(preserved.application_id) == old_application
+    accumulated = store.evidence_registration_audit(
+        AuthorityId("opdc")
+    ).discovery_registrations
+    assert len(accumulated) == len(original_discovery) + len(tuple(OpdcDiscoveryQuery))
+    assert set(original_discovery).issubset(accumulated)
+    store.close()
+
+
+def test_opdc_failed_shifted_scope_preserves_the_last_qualified_proof(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A failed later window cannot replace either published success artifact."""
+    module = _qualification_module()
+    data_dir = tmp_path / "failed-shift"
+    shifted = WINDOW.model_copy(
+        update={"start": date(2026, 8, 19), "end": date(2026, 9, 17)}
+    )
+    current_window = WINDOW
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        responses = _qualification_responses(current_window)
+        if current_window == shifted:
+            responses[_query_urls(shifted)[0]] = _search(
+                (1, "26/0001/FULOPDC"),
+                total=2,
+            )
+        session = _OpdcSession(responses)
+        sessions.append(session)
+        return session
+
+    original = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(original, session_factory=session_factory) == 0
+    capsys.readouterr()
+    public_path = data_dir / "opdc-qualification-v1.json"
+    proof_path = data_dir / "opdc-qualification-proof-v1.json"
+    public = public_path.read_bytes()
+    proof = proof_path.read_bytes()
+
+    current_window = shifted
+    changed = [*original[:-2], "2026-09-17", "--include-open", "--resume"]
+    assert module.main(changed, session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "runtime-failure",
+        "exception": "OpdcParseError",
+    }
+    assert sessions[-1].closed
+    assert public_path.read_bytes() == public
+    assert proof_path.read_bytes() == proof
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "request-url",
+        "request-method",
+        "request-form",
+        "response-url",
+        "query-key",
+        "page",
+        "deletion",
+    ],
+)
+def test_opdc_qualification_rejects_corrupt_discovery_provenance(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    corruption: str,
+) -> None:
+    """A checkpoint digest cannot replace its persisted request subject."""
+    module = _qualification_module()
+    data_dir = tmp_path / corruption
+    sessions: list[_OpdcSession] = []
+
+    def session_factory() -> _OpdcSession:
+        session = _OpdcSession(_qualification_responses())
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "opdc-qualification-v1.json"
+    original = receipt_path.read_bytes()
+
+    with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
+        if corruption == "request-url":
+            connection.execute(
+                "UPDATE discovery_evidence SET request_url = ? "
+                "WHERE query_key = 'registered-window'",
+                (f"{API_BASE_URL}/api/application/search?status=registered",),
+            )
+        elif corruption == "request-method":
+            connection.execute(
+                "UPDATE discovery_evidence SET request_method = 'POST' "
+                "WHERE query_key = 'registered-window'"
+            )
+        elif corruption == "request-form":
+            connection.execute(
+                "UPDATE discovery_evidence SET request_form_json = ? "
+                "WHERE query_key = 'registered-window'",
+                ('[["unexpected","value"]]',),
+            )
+        elif corruption == "response-url":
+            connection.execute(
+                "UPDATE discovery_evidence SET response_url = ? "
+                "WHERE query_key = 'registered-window'",
+                (f"{API_BASE_URL}/api/application/search?status=registered",),
+            )
+        elif corruption == "query-key":
+            connection.execute(
+                "UPDATE discovery_evidence SET query_key = 'changed-query' "
+                "WHERE query_key = 'registered-window'"
+            )
+        elif corruption == "page":
+            connection.execute(
+                "UPDATE discovery_evidence SET page = 2 "
+                "WHERE query_key = 'registered-window'"
+            )
+        else:
+            connection.execute(
+                "DELETE FROM discovery_evidence WHERE query_key = 'registered-window'"
+            )
+        connection.commit()
+
+    sessions.clear()
+    assert module.main([*args, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["bootstrap-provenance"],
+    }
     assert sessions == []
+    assert receipt_path.read_bytes() == original
 
 
 def test_opdc_qualification_rejects_checkpoint_reference_disagreement(
