@@ -197,6 +197,18 @@ class _QualificationSession:
         return None
 
 
+class _UnavailableQualificationSession(_QualificationSession):
+    async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+        self.requests.append(request)
+        body = b""
+        return EvidenceCapture(
+            url=request.url,
+            media_type="text/html",
+            body=body,
+            digest=EvidenceDigest(sha256(body).hexdigest()),
+        )
+
+
 def test_cheshire_replays_exact_successful_search_controls() -> None:
     form = cheshire.parse_search_form(_search_form())
     request = cheshire.valid_date_request(
@@ -559,6 +571,69 @@ def test_cheshire_blocker_receipt_is_durable_and_resumes_offline(
             (data_dir / "evidence" / item.relative_path).read_bytes()
         )
         assert sha256(body).hexdigest() == item.digest
+
+    def forbidden_factory() -> _QualificationSession:
+        message = "offline resume constructed a portal session"
+        raise AssertionError(message)
+
+    resumed = module.main(
+        [*arguments, "--resume"],
+        session_factory=forbidden_factory,
+        now=lambda: datetime(2026, 9, 16, 9, 1, tzinfo=UTC),
+    )
+    assert resumed == 1
+
+
+def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
+    tmp_path: Path,
+) -> None:
+    module = _qualification_module()
+    sessions: list[_UnavailableQualificationSession] = []
+
+    def session_factory() -> _UnavailableQualificationSession:
+        session = _UnavailableQualificationSession()
+        sessions.append(session)
+        return session
+
+    data_dir = tmp_path / "qualification-cheshire-east-2026-09-16"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    result = module.main(
+        arguments,
+        session_factory=session_factory,
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    assert len(sessions) == 1
+    assert len(sessions[0].requests) == 1
+    receipt_path = data_dir / "cheshire-east-qualification-blocker-v1.json"
+    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
+        receipt_path.read_text(encoding="utf-8")
+    )
+    assert receipt.source_contract is None
+    assert receipt.query_inventory == ("source-access|search-form",)
+    assert receipt.pending_query_inventory == (
+        "recent|valid|2026-08-18|2026-09-16",
+        "older-open|weekly-received|2024-01-01",
+        "detail|406569",
+    )
+    assert tuple(blocker.code for blocker in receipt.blockers) == (
+        "official-search-form-unavailable",
+    )
+    assert receipt.costs.request_count == 1
+    assert receipt.costs.transferred_bytes == 0
+    assert receipt.costs.attachment_body_requests == 0
+    assert len(receipt.evidence) == 1
+    assert not (data_dir / "yimby.sqlite3").exists()
 
     def forbidden_factory() -> _QualificationSession:
         message = "offline resume constructed a portal session"
