@@ -6,8 +6,10 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
 import importlib.util
 import json
+import sqlite3
 import sys
 from datetime import date, datetime
 from hashlib import sha256
@@ -847,6 +849,33 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
                 _Session(_DevonMock()), reference.model_copy(update={"locator": None})
             )
         )
+    for locator in (
+        "https://evil.test/Planning/Display/DCC/4473/2026",
+        f"{devon.BASE_URL}/Document/Download?id=1",
+    ):
+        session = _Session(_DevonMock())
+        with pytest.raises(devon.DevonProtectedRouteError):
+            asyncio.run(
+                adapter.fetch(session, reference.model_copy(update={"locator": locator}))
+            )
+        assert session.requests == []
+
+    malicious_disclaimer = _devon_disclaimer("advanced").replace(
+        b'action="/Disclaimer/Accept',
+        b'action="https://evil.test/Disclaimer/Accept',
+    )
+    session = _Session(lambda request: malicious_disclaimer)
+    with pytest.raises(devon.DevonProtectedRouteError):
+        asyncio.run(
+            devon._fetch_protected(
+                session,
+                PortalRequest(
+                    url=HttpUrl(devon._ADVANCED_FORM_URL),
+                    intent=devon.RequestIntent.SEARCH,
+                ),
+            )
+        )
+    assert len(session.requests) == 1
 
 
 def test_camden_discovery_search_document_and_identity_boundaries() -> None:
@@ -1158,6 +1187,20 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
             page=terminal_page.model_copy(update={"references": (changed,)}),
             all_query_keys=keys,
         )
+    with pytest.raises(devon.DevonCheckpointError, match="query-duplicate"):
+        devon._advance_checkpoint(
+            progress,
+            query=query,
+            page=devon._DiscoveryPage(
+                references=(references[0],),
+                page=2,
+                numbered_pages=(1, 2),
+                numbered_links=links,
+                next_locator=None,
+                terminal=True,
+            ),
+            all_query_keys=keys,
+        )
 
     with pytest.raises(devon.DevonParseError, match="advanced form"):
         devon._parse_advanced_form(b"<html></html>")
@@ -1184,7 +1227,7 @@ def test_devon_checkpoint_form_and_replay_fail_closed_boundaries() -> None:
         )
     address = form.select_one('input[name="Address"]')
     assert address is not None
-    address["name"] = ["not-string"]  # type: ignore[assignment]
+    cast("Any", address)["name"] = ["not-string"]
     parish = form.select_one('select[name="Parish"]')
     assert parish is not None
     parish.clear()
@@ -1478,6 +1521,60 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     assert all(session.requested_urls == () for session in resumed_sessions)
     assert resumed_output == receipt
     assert json.loads(receipt_path.read_text()) == receipt
+
+
+def test_devon_qualification_reconciles_registered_evidence(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _devon_qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    def session_factory() -> _Session:
+        return _Session(_DevonMock())
+
+    assert module.main(arguments, session_factory=session_factory) == 0
+    capsys.readouterr()
+
+    body = b"unregistered evidence"
+    digest = sha256(body).hexdigest()
+    orphan = data_dir / "evidence" / digest[:2] / f"{digest}.gz"
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_bytes(gzip.compress(body))
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["evidence-integrity"],
+    }
+    orphan.unlink()
+
+    with sqlite3.connect(data_dir / "yimby.sqlite3") as connection:
+        connection.execute(
+            """
+            UPDATE native_rebuild_inputs
+            SET evidence_digests_json = ?
+            WHERE application_id = (
+                SELECT application_id FROM native_rebuild_inputs
+                ORDER BY application_id LIMIT 1
+            )
+            """,
+            (json.dumps(["0" * 64]),),
+        )
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["evidence-integrity"],
+    }
 
 
 def test_camden_search_and_parser_boundaries() -> None:
