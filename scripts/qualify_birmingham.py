@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Sequence
 from datetime import UTC, date, datetime, timedelta
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Literal, NoReturn, cast
 from urllib.parse import urlencode
 
-from pydantic import Field, HttpUrl
+from pydantic import ConfigDict, Field, HttpUrl, ValidationError
 
 from yimby.authorities.birmingham.adapter import ARCGIS_LAYER_URL
 from yimby.domain import (
@@ -48,33 +49,59 @@ _OBSERVED_NULL_DECISIONS = 3276
 _OBSERVED_UNRESOLVED_CANDIDATES = 1419
 _QUALIFICATION_START = date(2026, 8, 18)
 _QUALIFICATION_END = date(2026, 9, 16)
-_OBSERVED_FIELDS = (
-    "OBJECTID",
-    "SHAPE",
-    "REFERENCE",
-    "application_type_code",
-    "TYPE",
-    "Stat_Return_Code",
-    "Sub_Cat",
-    "Received",
-    "LOCATION",
-    "Dev",
-    "Date_Accepted",
-    "AGENT",
-    "Decision_Level",
-    "APPLICATION_DECISION",
-    "Decision_Date",
-    "Date_Issued",
-    "APPEAL_DECISION",
-    "Appeal_Decision_Date",
-    "Officer",
-    "PGP_PK",
-    "PA_NO",
-    "Number",
-    "TypeOfObj",
-    "SHAPE_Length",
-    "SHAPE_Area",
+_OBSERVED_FIELD_SCHEMA = (
+    ("OBJECTID", "OBJECTID", "esriFieldTypeOID", None),
+    ("SHAPE", "SHAPE", "esriFieldTypeGeometry", None),
+    ("REFERENCE", "REFERENCE", "esriFieldTypeString", 13),
+    ("application_type_code", "application_type_code", "esriFieldTypeString", 12),
+    ("TYPE", "TYPE", "esriFieldTypeString", 40),
+    ("Stat_Return_Code", "Stat_Return_Code", "esriFieldTypeString", 12),
+    ("Sub_Cat", "Sub_Cat", "esriFieldTypeString", 40),
+    ("Received", "Received", "esriFieldTypeDate", 8),
+    ("LOCATION", "LOCATION", "esriFieldTypeString", 120),
+    ("Dev", "DEV", "esriFieldTypeString", 254),
+    ("Date_Accepted", "Date_Accepted", "esriFieldTypeDate", 8),
+    ("AGENT", "AGENT", "esriFieldTypeString", 100),
+    ("Decision_Level", "DECISION_LEVEL", "esriFieldTypeString", 10),
+    ("APPLICATION_DECISION", "APPLICATION_DECISION", "esriFieldTypeString", 40),
+    ("Decision_Date", "Decision_Date", "esriFieldTypeDate", 8),
+    ("Date_Issued", "Date_Issued", "esriFieldTypeDate", 8),
+    ("APPEAL_DECISION", "APPEAL_DECISION", "esriFieldTypeString", 40),
+    ("Appeal_Decision_Date", "Appeal_Decision_Date", "esriFieldTypeDate", 8),
+    ("Officer", "Officer", "esriFieldTypeString", 50),
+    ("PGP_PK", "PGP_PK", "esriFieldTypeInteger", None),
+    ("PA_NO", "PA_NO", "esriFieldTypeString", 20),
+    ("Number", "Number", "esriFieldTypeString", 20),
+    ("TypeOfObj", "TypeOfObj", "esriFieldTypeString", 10),
+    ("SHAPE_Length", "SHAPE_Length", "esriFieldTypeDouble", None),
+    ("SHAPE_Area", "SHAPE_Area", "esriFieldTypeDouble", None),
 )
+_OBSERVED_ADVANCED_QUERY_CAPABILITIES = {
+    "supportsCountDistinct": True,
+    "supportsDistinct": True,
+    "supportsHavingClause": True,
+    "supportsOrderBy": True,
+    "supportsPagination": True,
+    "supportsQueryWithDistance": True,
+    "supportsReturningQueryExtent": True,
+    "supportsSqlExpression": True,
+    "supportsStatistics": True,
+    "supportsTrueCurve": True,
+    "useStandardizedQueries": True,
+}
+_SAMPLE_ATTRIBUTE_KEYS = frozenset(
+    {
+        "REFERENCE",
+        "TYPE",
+        "Received",
+        "APPLICATION_DECISION",
+        "Decision_Date",
+        "Date_Issued",
+        "APPEAL_DECISION",
+    }
+)
+_TERMINAL_APPEAL_DECISIONS = frozenset({"Dismissed", "Withdrawn"})
+_REFERENCE_PATTERN = re.compile(r"\d{4}/\d{5}/PA")
 _RECENT_WHERE = (
     "Received >= DATE '2026-08-18 00:00:00' AND Received < DATE '2026-09-17 00:00:00'"
 )
@@ -115,7 +142,11 @@ def _fail_invariant(code: str) -> NoReturn:
     raise QualificationInvariantError(code)
 
 
-class QualificationScopeV1(FrozenModel):
+class _QualificationModel(FrozenModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class QualificationScopeV1(_QualificationModel):
     """The exact inclusive window assessed by this command."""
 
     start: date
@@ -124,7 +155,7 @@ class QualificationScopeV1(FrozenModel):
     inclusive_days: Literal[30] = 30
 
 
-class EvidenceReferenceV1(FrozenModel):
+class EvidenceReferenceV1(_QualificationModel):
     """One content-addressed raw ArcGIS response."""
 
     sha256: str
@@ -133,7 +164,7 @@ class EvidenceReferenceV1(FrozenModel):
     byte_count: int = Field(ge=0)
 
 
-class QueryObservationV1(FrozenModel):
+class QueryObservationV1(_QualificationModel):
     """One exact query and its retained response."""
 
     name: str
@@ -141,7 +172,7 @@ class QueryObservationV1(FrozenModel):
     evidence: EvidenceReferenceV1
 
 
-class RecentDiscoveryV1(FrozenModel):
+class RecentDiscoveryV1(_QualificationModel):
     """Internally reconciled recent-window result."""
 
     status: Literal["proven"] = "proven"
@@ -156,7 +187,7 @@ class RecentDiscoveryV1(FrozenModel):
     latest_received: date
 
 
-class SourceFreshnessV1(FrozenModel):
+class SourceFreshnessV1(_QualificationModel):
     """Fresh latest record, without inferring continuity from sample volumes."""
 
     status: Literal["not-proven"] = "not-proven"
@@ -174,7 +205,7 @@ class SourceFreshnessV1(FrozenModel):
     )
 
 
-class OlderOpenV1(FrozenModel):
+class OlderOpenV1(_QualificationModel):
     """Observed older-record ambiguity that blocks completeness."""
 
     status: Literal["not-proven"] = "not-proven"
@@ -185,7 +216,7 @@ class OlderOpenV1(FrozenModel):
     contradictions: tuple[str, ...]
 
 
-class ActiveAppealsV1(FrozenModel):
+class ActiveAppealsV1(_QualificationModel):
     """Current appeal membership is not represented by the layer."""
 
     status: Literal["not-proven"] = "not-proven"
@@ -194,13 +225,13 @@ class ActiveAppealsV1(FrozenModel):
     )
 
 
-class SectionGapV1(FrozenModel):
+class SectionGapV1(_QualificationModel):
     """A required child section absent from the ArcGIS contract."""
 
     status: Literal["not-exposed"] = "not-exposed"
 
 
-class SectionGapsV1(FrozenModel):
+class SectionGapsV1(_QualificationModel):
     """All required child surfaces absent from this layer."""
 
     documents: SectionGapV1
@@ -210,14 +241,14 @@ class SectionGapsV1(FrozenModel):
     relationships: SectionGapV1
 
 
-class TransportCostV1(FrozenModel):
+class TransportCostV1(_QualificationModel):
     """Network work performed by the initial evidence pass."""
 
     request_count: int = Field(ge=0)
     attachment_body_requests: int = Field(ge=0)
 
 
-class LocalIntegrityV1(FrozenModel):
+class LocalIntegrityV1(_QualificationModel):
     """Local stores verified before the receipt is published."""
 
     sqlite_integrity: Literal["ok"] = "ok"
@@ -225,7 +256,7 @@ class LocalIntegrityV1(FrozenModel):
     evidence_count: int = Field(ge=0)
 
 
-class OfflineReplayV1(FrozenModel):
+class OfflineReplayV1(_QualificationModel):
     """A replay that has no transport dependency by construction."""
 
     request_count: Literal[0] = 0
@@ -233,7 +264,7 @@ class OfflineReplayV1(FrozenModel):
     evidence_integrity: Literal["verified"] = "verified"
 
 
-class RegistryReadinessV1(FrozenModel):
+class RegistryReadinessV1(_QualificationModel):
     """Proof that qualification did not promote Birmingham."""
 
     before: Literal["blocked"] = "blocked"
@@ -241,7 +272,7 @@ class RegistryReadinessV1(FrozenModel):
     promotion_attempted: Literal[False] = False
 
 
-class BirminghamArcgisCheckpointV1(FrozenModel):
+class BirminghamArcgisCheckpointV1(_QualificationModel):
     """Terminal recent-window pagination state."""
 
     schema_version: Literal[1] = 1
@@ -252,7 +283,7 @@ class BirminghamArcgisCheckpointV1(FrozenModel):
     collected_count: int = Field(ge=0)
 
 
-class PendingWeeklyCycleV1(FrozenModel):
+class PendingWeeklyCycleV1(_QualificationModel):
     """A later operational cycle that a blocked bootstrap cannot schedule."""
 
     ordinal: Literal[1, 2]
@@ -263,7 +294,7 @@ class PendingWeeklyCycleV1(FrozenModel):
     completed_at: None = None
 
 
-class BirminghamBlockedQualificationReceiptV1(FrozenModel):
+class BirminghamBlockedQualificationReceiptV1(_QualificationModel):
     """Versioned proof of a successful fail-closed assessment."""
 
     schema_version: Literal[1] = 1
@@ -285,12 +316,12 @@ class BirminghamBlockedQualificationReceiptV1(FrozenModel):
     weekly_cycles: tuple[PendingWeeklyCycleV1, PendingWeeklyCycleV1]
 
 
-class _Config(FrozenModel):
+class _Config(_QualificationModel):
     data_dir: Path
     scope: QualificationScopeV1
 
 
-class _SourceFacts(FrozenModel):
+class _SourceFacts(_QualificationModel):
     latest_received: date
     latest_accepted: date
     count_2025: int
@@ -298,7 +329,7 @@ class _SourceFacts(FrozenModel):
     count_2026_august: int
 
 
-class _RecentFacts(FrozenModel):
+class _RecentFacts(_QualificationModel):
     reported_count: int
     feature_count: int
     unique_reference_count: int
@@ -309,7 +340,7 @@ class _RecentFacts(FrozenModel):
     next_offset: int
 
 
-class _OlderOpenFacts(FrozenModel):
+class _OlderOpenFacts(_QualificationModel):
     application_decision_null_count: int
     decision_date_mismatch_count: int
     unresolved_candidate_count: int
@@ -565,20 +596,22 @@ def _first_attributes(value: dict[str, Any]) -> dict[str, Any]:
     return features[0]
 
 
+def _observed_field_definitions() -> list[dict[str, object]]:
+    return [
+        {
+            "name": name,
+            "alias": alias,
+            "type": field_type,
+            "domain": None,
+            **({"length": length} if length is not None else {}),
+        }
+        for name, alias, field_type, length in _OBSERVED_FIELD_SCHEMA
+    ]
+
+
 def _validate_schema(metadata: dict[str, Any]) -> None:
     fields = metadata.get("fields")
-    if not isinstance(fields, list):
-        _fail_invariant("layer-schema-mismatch")
-    names = tuple(
-        field.get("name") if isinstance(field, dict) else None for field in fields
-    )
     capabilities = metadata.get("advancedQueryCapabilities")
-    required_capabilities = (
-        "supportsPagination",
-        "supportsStatistics",
-        "supportsOrderBy",
-        "supportsDistinct",
-    )
     if (
         metadata.get("id") != _LAYER_ID
         or metadata.get("name") != "Post 1990 Planning Application"
@@ -586,9 +619,21 @@ def _validate_schema(metadata: dict[str, Any]) -> None:
         or metadata.get("maxRecordCount") != _LAYER_MAX_RECORD_COUNT
         or metadata.get("hasAttachments") is not False
         or metadata.get("relationships") != []
-        or names != _OBSERVED_FIELDS
-        or not isinstance(capabilities, dict)
-        or any(capabilities.get(name) is not True for name in required_capabilities)
+        or metadata.get("subLayers") != []
+        or metadata.get("displayField") != "REFERENCE"
+        or metadata.get("geometryField")
+        != {
+            "name": "SHAPE",
+            "alias": "SHAPE",
+            "type": "esriFieldTypeGeometry",
+        }
+        or metadata.get("geometryType") != "esriGeometryPolygon"
+        or metadata.get("supportedQueryFormats") != "JSON, AMF, geoJSON"
+        or metadata.get("supportsAdvancedQueries") is not True
+        or metadata.get("supportsStatistics") is not True
+        or metadata.get("useStandardizedQueries") is not True
+        or fields != _observed_field_definitions()
+        or capabilities != _OBSERVED_ADVANCED_QUERY_CAPABILITIES
     ):
         _fail_invariant("layer-schema-mismatch")
 
@@ -650,16 +695,15 @@ def _historical_sample_dates(
         application_type = attributes.get("TYPE")
         appeal_decision = attributes.get("APPEAL_DECISION")
         if (
-            not isinstance(reference, str)
+            frozenset(attributes) != _SAMPLE_ATTRIBUTE_KEYS
+            or not isinstance(reference, str)
             or not reference.strip()
             or not isinstance(application_type, str)
             or not application_type.strip()
             or attributes.get("APPLICATION_DECISION") is not None
             or (
                 appeal_decision is not None
-                and (
-                    not isinstance(appeal_decision, str) or not appeal_decision.strip()
-                )
+                and appeal_decision not in _TERMINAL_APPEAL_DECISIONS
             )
         ):
             _fail_invariant("historical-sample-predicate-mismatch")
@@ -824,6 +868,7 @@ async def _recent_facts(
         object_id = attributes.get("OBJECTID")
         if (
             not isinstance(reference, str)
+            or _REFERENCE_PATTERN.fullmatch(reference) is None
             or isinstance(object_id, bool)
             or not isinstance(object_id, int)
         ):
@@ -975,8 +1020,7 @@ async def _older_open_facts(
         and unresolved_dates[0] == unresolved_earliest
         and any(item.get("Date_Issued") is not None for item in issued_sample)
         and any(
-            isinstance(item.get("APPEAL_DECISION"), str)
-            and bool(item["APPEAL_DECISION"].strip())
+            item.get("APPEAL_DECISION") in _TERMINAL_APPEAL_DECISIONS
             for item in unresolved_sample
         )
         and any(
@@ -1023,6 +1067,13 @@ async def _qualify(
     finally:
         await session.aclose()
 
+    created_at = now()
+    if created_at.tzinfo is None or created_at.utcoffset() is None:
+        _fail_invariant("qualification-clock-must-be-aware")
+    current_date = created_at.astimezone(UTC).date()
+    if recent.latest_received < current_date - timedelta(days=_RECENCY_MAX_LAG_DAYS):
+        _fail_invariant("latest-record-not-current-at-execution")
+
     registry = pilot_registry()
     readiness_before = registry.manifest(_AUTHORITY_ID).live_status.readiness
     sqlite_integrity = store.database_integrity()
@@ -1035,7 +1086,7 @@ async def _qualify(
         _fail_invariant("registry-readiness-changed")
     gap = SectionGapV1()
     receipt = BirminghamBlockedQualificationReceiptV1(
-        created_at=now(),
+        created_at=created_at,
         scope=config.scope,
         source_freshness=SourceFreshnessV1(
             latest_received=source.latest_received,
@@ -1109,9 +1160,13 @@ async def _qualify(
 def replay_persisted_state(data_dir: Path) -> OfflineReplayV1:
     """Recompute the receipt from retained responses without network access."""
     receipt_path = data_dir / _RECEIPT_NAME
-    receipt = BirminghamBlockedQualificationReceiptV1.model_validate_json(
-        receipt_path.read_text(encoding="utf-8")
-    )
+    try:
+        receipt = BirminghamBlockedQualificationReceiptV1.model_validate_json(
+            receipt_path.read_text(encoding="utf-8")
+        )
+    except ValidationError as error:
+        message = "invalid-persisted-receipt"
+        raise QualificationInvariantError(message) from error
     database = data_dir / "yimby.sqlite3"
     if not database.is_file():
         _fail_invariant("missing-database")
