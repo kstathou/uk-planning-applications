@@ -10,7 +10,7 @@ import json
 import sys
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qsl
 
 import httpx
@@ -36,7 +36,7 @@ from yimby.domain import (
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
     from types import ModuleType
 
 WINDOW = DiscoveryWindow(
@@ -106,9 +106,13 @@ def _weekly_form() -> bytes:
 
 def _live_weekly_form() -> bytes:
     """Render the week values exactly as the live Leeds portal does."""
-    return _weekly_form().replace(b"/08/2026", b" Aug 2026").replace(
-        b"/09/2026",
-        b" Sep 2026",
+    return (
+        _weekly_form()
+        .replace(b"/08/2026", b" Aug 2026")
+        .replace(
+            b"/09/2026",
+            b" Sep 2026",
+        )
     )
 
 
@@ -363,7 +367,10 @@ def test_leeds_uses_visible_page_when_hidden_page_marker_is_stale() -> None:
 
     async def resume_page() -> DiscoveryBatch[LeedsCheckpointV1]:
         session = _session(_LeedsVisiblePageMock())
-        batches = LeedsAdapter().discover(session, WINDOW, checkpoint)
+        batches = cast(
+            "AsyncGenerator[DiscoveryBatch[LeedsCheckpointV1]]",
+            LeedsAdapter().discover(session, WINDOW, checkpoint),
+        )
         try:
             return await anext(batches)
         finally:
