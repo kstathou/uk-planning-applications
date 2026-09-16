@@ -86,23 +86,23 @@ The typed v1 receipt is
 `.yimby/qualification-dorset-2026-09-16/dorset-qualification-v1.json`.
 It records:
 
-- 48 received-date pages and 136 unrestricted outstanding pages exhausted.
-- 486 received-date identities plus 951 additional older-open identities.
-- 1,437 current applications, queued references, and terminal-checkpoint
+- 49 received-date pages and 136 unrestricted outstanding pages exhausted.
+- 489 received-date identities plus 949 additional older-open identities.
+- 1,438 current applications, queued references, and terminal-checkpoint
   references with
   the same SHA-256 identity-set hash,
-  `38d2f3a03c8a5085f55a9c820f0f1f32a14a21ecad46018d4f17c66006c627dc`.
-- 1,443 retained application evidence records and 1,443 unique evidence
-  digests, all decompressed and re-hashed successfully. Six retained historical
-  applications are outside the terminal inventory.
-- Successful live source run `06a7738f-1d43-41df-8c0a-fd5a362b42fe` made 1,628
-  single-attempt fetches, transferred 175,220,556 bytes, and made zero
+  `c7a723dd58efcc5ce8f29472097f76a49d3ebc59e878412fb1fa7ef4cba25162`.
+- 1,445 retained application evidence records and 1,445 unique evidence
+  digests, all decompressed and re-hashed successfully. Seven retained
+  historical applications are outside the terminal inventory.
+- Successful live source run `02645b74-153a-4e81-82af-577502f15bb8` made 1,629
+  single-attempt fetches, transferred 175,352,179 bytes, and made zero
   attachment-body requests.
 - Zero pending retries, failed sections, and unmapped records.
 - A second successful terminal run with zero fetches, zero transferred bytes,
   and no database or evidence change.
 - Receipt SHA-256
-  `6a046dcd0fa87d42bcab9ce9129759d6b6ecb8780d3fbcc45a7bf766a5682fd5`.
+  `bcdc3d7f000d601d39b87c1aceccb5f05ad767e61455495063efd4114ffa5269`.
 
 An earlier receipt was superseded after independent review showed that its
 outstanding query had inherited the bounded received dates. The corrected
@@ -127,6 +127,14 @@ and zero attachment count directly. A later validation-only resume must match
 the prior typed receipt's source run, request count, byte count, and attachment
 count to durable run metrics; it cannot synthesize historical attachment
 accounting.
+A subsequent independent review found the inverse form-state risk: a prechecked
+outstanding control could narrow the received-date request. The adapter now
+requires that published checkbox to be present, enabled, typed correctly, and
+initially unchecked before either query is built. The review also exposed an
+impossible 48-page documentation claim; the official received query is 49
+pages. The complete qualification was restarted again after that fix, and the
+receipt above cites that final source run rather than the earlier 1,437-identity
+run.
 
 ## Readiness
 
