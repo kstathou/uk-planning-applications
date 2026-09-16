@@ -433,11 +433,11 @@ def _west_suffolk_open_page(
                 )
             if fault == "detail-on-page-two":
                 return _advanced_detail_redirect()
-            rows = () if fault == "stalled-pagination" else (open_rows[1],)
-            if not rows:
-                return _result_page(rows, count=3)
+            remaining_rows = () if fault == "stalled-pagination" else (open_rows[1],)
+            if not remaining_rows:
+                return _result_page(remaining_rows, count=3)
             return _result_page_with_showing_markers(
-                rows,
+                remaining_rows,
                 ("Showing 3-3 of 3", "Showing 3-3 of 3"),
                 current_page="2",
                 numbered_page=1,
@@ -1105,7 +1105,7 @@ def test_west_suffolk_open_discovery_exhausts_all_active_partitions() -> None:
         request.form
         for request in session.requests
         if request.method.value == "POST"
-        and request.url.path.endswith("/advancedSearchResults.do")
+        and str(request.url.path).endswith("/advancedSearchResults.do")
     ]
     expected_queries = [
         ("searchCriteria.caseStatus", "Pending Consideration"),
@@ -1135,7 +1135,7 @@ def test_west_suffolk_open_discovery_resumes_without_duplicate_references() -> N
     first_session = _session(first_mock)
 
     async def stop_after_first_open_page() -> tuple[list[str], StoredCheckpoint]:
-        references = []
+        references: list[str] = []
         discovery = cast(
             "AsyncGenerator[DurableDiscoveryBatch]",
             package.discover(first_session, window, None),
