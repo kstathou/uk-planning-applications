@@ -775,11 +775,24 @@ def _parse_documents_grid(
     table = soup.select_one("#ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00")
     if not isinstance(table, Tag):
         _raise_parse("document grid")
+    rows = table.select("tbody tr")
+    if len(rows) == 1 and rows[0].get("class") == ["rgNoRecords"]:
+        cells = rows[0].find_all("td", recursive=False)
+        if (
+            len(cells) != 1
+            or str(cells[0].get("colspan", "")) != "2"
+            or cells[0].select("a[href]")
+            or cells[0].get_text(" ", strip=True)
+            != "There are currently no scanned documents for this application."
+        ):
+            _raise_parse("document grid")
+        _assert_document_grid_proof(soup, 0)
+        return ()
     documents = []
     indices = []
     document_index_url = HttpUrl(f"{source_url}#")
     prefix = "ctl00_ContentPlaceHolder1_DocumentsGrid_ctl00__"
-    for row in table.select("tbody tr"):
+    for row in rows:
         row_id = str(row.get("id", ""))
         match = re.fullmatch(rf"{re.escape(prefix)}(\d+)", row_id)
         links = row.select("a[href]")
