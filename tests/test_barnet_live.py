@@ -1062,6 +1062,25 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
             all_query_keys=("weekly|2026-09-14|DC_Validated",),
         )
 
+    conflicting_identity = barnet_adapter._parse_search_page(
+        _result_page((("A", "OTHER-KEY"),), count=1)
+    )
+    with pytest.raises(BarnetParseError, match="search result identity"):
+        barnet_adapter._advance_checkpoint(
+            BarnetCheckpointV1(
+                cursor="live",
+                seen_references=("A",),
+                seen_locators=("KEY",),
+            ),
+            active_page=barnet_adapter._ActivePage(
+                query_key="weekly|2026-09-14|DC_Decided",
+                page=1,
+                row_count=0,
+            ),
+            search_page=conflicting_identity,
+            all_query_keys=("weekly|2026-09-14|DC_Decided",),
+        )
+
     replayed_first_page = barnet_adapter._parse_search_page(
         _showing_result_page(
             tuple((f"A-{index}", f"KEY-{index}") for index in range(1, 11)),
