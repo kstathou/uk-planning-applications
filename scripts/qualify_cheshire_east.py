@@ -532,10 +532,17 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
             expected_reference=_DETAIL_REFERENCE,
             expected_locator=_DETAIL_LOCATOR,
         )
+        source_contract = _source_contract_from_boundaries(
+            tuple(attempted_requests),
+            recent_boundary,
+            weekly_boundary,
+            detail,
+        )
     except (
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
         cheshire.CheshireEastReferenceMismatchError,
+        ValidationError,
     ):
         return _probe_result(
             session,
@@ -549,12 +556,6 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
                 ),
             ),
         )
-    source_contract = _source_contract_from_boundaries(
-        tuple(attempted_requests),
-        recent_boundary,
-        weekly_boundary,
-        detail,
-    )
     return _probe_result(
         session,
         captures,
@@ -753,14 +754,17 @@ class _RetainedEvidenceReplay:
         try:
             return parser(self.bodies[index])
         except errors as error:
-            if (
-                self.receipt.source_contract is None
-                and len(self.receipt.blockers) == 1
-                and self.receipt.blockers[0].code == blocker_code
-                and len(self.receipt.attempted_requests) == index + 1
-            ):
+            if self.accepts_failure(index, blocker_code):
                 return None
             raise QualificationEvidenceError from error
+
+    def accepts_failure(self, index: int, blocker_code: str) -> bool:
+        return (
+            self.receipt.source_contract is None
+            and len(self.receipt.blockers) == 1
+            and self.receipt.blockers[0].code == blocker_code
+            and len(self.receipt.attempted_requests) == index + 1
+        )
 
     def require_following_request(self, parsed_index: int) -> None:
         if len(self.receipt.attempted_requests) == parsed_index + 1:
@@ -850,13 +854,30 @@ def _verify_request_evidence_contract(
     )
     if detail is None:
         return
-    expected_contract = _source_contract_from_boundaries(
-        requests,
-        recent,
-        weekly,
-        detail,
-    )
-    if receipt.source_contract != expected_contract:
+    _verify_replayed_source_contract(replay, recent, weekly, detail)
+
+
+def _verify_replayed_source_contract(
+    replay: _RetainedEvidenceReplay,
+    recent: cheshire.CheshireEastSearchBoundaryV1,
+    weekly: cheshire.CheshireEastWeeklyBoundaryV1,
+    detail: cheshire.CheshireEastDetailContractV1,
+) -> None:
+    try:
+        expected_contract = _source_contract_from_boundaries(
+            replay.receipt.attempted_requests,
+            recent,
+            weekly,
+            detail,
+        )
+    except ValidationError as error:
+        if replay.accepts_failure(
+            _DETAIL_REQUEST_INDEX,
+            "official-source-contract-drift",
+        ):
+            return
+        raise QualificationEvidenceError from error
+    if replay.receipt.source_contract != expected_contract:
         raise QualificationEvidenceError
 
 

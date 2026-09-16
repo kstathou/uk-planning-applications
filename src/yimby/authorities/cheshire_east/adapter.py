@@ -457,6 +457,8 @@ def parse_weekly_boundary(body: bytes) -> CheshireEastWeeklyBoundaryV1:
         for link in boundary.select('.pagination a[href], a[rel="next"], a[rel="prev"]')
     )
     total = _reported_total(boundary)
+    if total is not None and total < len(rows):
+        _raise_parse("reported result total")
     terminal_marker = any(
         _normalise_label(element.get_text(" ", strip=True))
         in {"all applications loaded", "all results loaded"}
@@ -632,6 +634,7 @@ def _assert_document_url(url: str, expected_locator: str) -> None:
         or len(values.get("id", [])) != 1
         or not values["id"][0].isdigit()
         or values.get("public_record_id") != [expected_locator]
+        or set(values) != {"fa", "id", "public_record_id"}
     ):
         _raise_parse("document metadata link")
 
