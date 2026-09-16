@@ -24,6 +24,7 @@ from yimby import (
     barnet_registry,
     pilot_registry,
 )
+from yimby import geo as geo_module
 from yimby.adapters import NativeSchemaMismatchError
 from yimby.authorities.barnet import BARNET_PACKAGE
 from yimby.authorities.barnet.fixtures import fixture_session
@@ -497,6 +498,29 @@ def test_coordinate_conversion_and_camden_fixture(tmp_path: Path) -> None:
     assert camden.metadata.location is not None
     assert camden.metadata.location.bng_easting == CAMDEN_FIXTURE_EASTING
     store.close()
+
+
+def test_coordinate_conversion_uses_a_stable_transform_direction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Coverage instrumentation cannot invalidate pyproj's default enum value."""
+    calls: list[tuple[float, float, str]] = []
+
+    class _Transformer:
+        def transform(
+            self,
+            easting: float,
+            northing: float,
+            *,
+            direction: str,
+        ) -> tuple[float, float]:
+            calls.append((easting, northing, direction))
+            return -0.1, 51.5
+
+    monkeypatch.setattr(geo_module, "_BNG_TO_WGS84", _Transformer())
+
+    assert bng_to_wgs84(530000, 180000) is not None
+    assert calls == [(530000, 180000, "FORWARD")]
 
 
 def test_offline_rebuild_preserves_versions_and_requires_matching_schema(
