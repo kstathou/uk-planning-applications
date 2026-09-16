@@ -637,3 +637,143 @@ COMMAND: git status --short
 EXIT STATUS: 0
 OUTPUT:
 <empty>
+
+Final post-b3e89c9 complete verification transcript
+Recorded complete: 2026-09-16T15:39:57Z
+Every command below ran from the working directory named in the file header.
+The output is the complete combined stdout/stderr returned by that command.
+
+COMMAND: PYTHONPATH=scripts .venv/bin/python -c 'import json; import qualify_arun as q; argv=["--confirm-live","--data-dir",".yimby/qualification-arun-2026-09-16","--start","2026-08-18","--end","2026-09-16","--include-open","--resume"]; config=q._config(argv); receipt=q._run_qualification(config,q._default_session,q._default_clock); q._write_receipt(config.data_dir / "arun-qualification-v3.json", receipt); print(json.dumps({"checks_ok":sum(check.ok for check in receipt.checks),"created_at":receipt.created_at.isoformat(),"final_resume_attempt":receipt.costs.final_resume_attempt.model_dump(),"provenance":receipt.provenance.model_dump(mode="json") if receipt.provenance else None,"rerun":receipt.costs.rerun.model_dump(),"run_count":len(receipt.run_statuses)},sort_keys=True))'
+EXIT STATUS: 0
+OUTPUT:
+{"checks_ok": 25, "created_at": "2026-09-16T15:38:09.254967+00:00", "final_resume_attempt": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "provenance": {"code_revision": "b3e89c916e374220fb96378f7acc4dc086736beb", "immediate_follow_up": {"cost": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "finished_at": "2026-09-16T15:37:58.555860Z", "run_id": "d4d2a9b1-62b7-4901-82d0-5db511b5920d", "started_at": "2026-09-16T15:37:58.518700Z"}, "publication": {"cost": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "finished_at": "2026-09-16T15:37:48.145049Z", "run_id": "ef32e694-8071-477d-a1dc-8ddc58423821", "started_at": "2026-09-16T15:37:48.030673Z"}}, "rerun": {"attachment_body_requests": 0, "request_count": 0, "transferred_bytes": 0}, "run_count": 21}
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv lock --check
+EXIT STATUS: 0
+OUTPUT:
+Resolved 73 packages in 3ms
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --output-format=github .
+EXIT STATUS: 0
+OUTPUT:
+<empty>
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff format --check .
+EXIT STATUS: 0
+OUTPUT:
+119 files already formatted
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen mypy
+EXIT STATUS: 0
+OUTPUT:
+Success: no issues found in 80 source files
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen ruff check --no-cache --extend-select RUF100 .
+EXIT STATUS: 0
+OUTPUT:
+All checks passed!
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen pytest
+EXIT STATUS: 0
+OUTPUT:
+============================= test session starts ==============================
+platform darwin -- Python 3.13.15, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/kostasutil/.codex/worktrees/5291/uk-planning-applications
+configfile: pyproject.toml
+testpaths: tests
+plugins: cov-7.1.0, anyio-4.15.1
+collected 404 items
+
+tests/test_arun_live.py ................................................ [ 11%]
+................                                                         [ 15%]
+tests/test_barnet_live.py .........                                      [ 18%]
+tests/test_browser_authorities_live.py ....................              [ 23%]
+tests/test_cli.py ...                                                    [ 23%]
+tests/test_collection.py ..........                                      [ 26%]
+tests/test_contract_live.py ............                                 [ 29%]
+tests/test_idox_live.py ................................................ [ 41%]
+........................................................................ [ 58%]
+........................................................................ [ 76%]
+..................                                                       [ 81%]
+tests/test_operations.py ...............                                 [ 84%]
+tests/test_pilot.py ................................                     [ 92%]
+tests/test_runtime.py .............................                      [100%]
+
+================================ tests coverage ================================
+______________ coverage: platform darwin, python 3.13.15-final-0 _______________
+
+Name    Stmts   Miss Branch BrPart  Cover   Missing
+---------------------------------------------------
+TOTAL    6357      0   1616      0   100%
+
+70 files skipped due to complete coverage.
+Coverage XML written to file coverage.xml
+Required test coverage of 100% reached. Total coverage: 100.00%
+============================= 404 passed in 21.91s =============================
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv build --no-sources
+EXIT STATUS: 0
+OUTPUT:
+Building source distribution...
+Building wheel from source distribution...
+Successfully built dist/yimby-0.1.0.tar.gz
+Successfully built dist/yimby-0.1.0-py3-none-any.whl
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --all-files
+EXIT STATUS: 0
+OUTPUT:
+check for added large files..............................................Passed
+check python ast.........................................................Passed
+check for case conflicts.................................................Passed
+check json...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check toml...............................................................Passed
+check yaml...............................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+fix end of files.........................................................Passed
+mixed line ending........................................................Passed
+trim trailing whitespace.................................................Passed
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run pre-commit run --hook-stage pre-push --all-files
+EXIT STATUS: 0
+OUTPUT:
+check for added large files..............................................Passed
+check python ast.........................................................Passed
+check for case conflicts.................................................Passed
+check json...........................................(no files to check)Skipped
+check for merge conflicts................................................Passed
+check toml...............................................................Passed
+check yaml...............................................................Passed
+debug statements (python)................................................Passed
+detect private key.......................................................Passed
+fix end of files.........................................................Passed
+mixed line ending........................................................Passed
+trim trailing whitespace.................................................Passed
+ruff check...............................................................Passed
+ruff format..............................................................Passed
+mypy.....................................................................Passed
+pytest...................................................................Passed
+
+COMMAND: UV_CACHE_DIR=/tmp/yimby-uv-cache UV_PYTHON_INSTALL_DIR=/tmp/yimby-uv-python uv run --frozen python scripts/verify_pilot.py
+EXIT STATUS: 0
+OUTPUT:
+<empty>
+
+COMMAND: PYTHONPATH=scripts .venv/bin/python -c 'import json, sqlite3, subprocess; from pathlib import Path; from qualify_arun import ArunQualificationReceiptV3; root=Path(".yimby/qualification-arun-2026-09-16"); receipt=ArunQualificationReceiptV3.model_validate_json((root / "arun-qualification-v3.json").read_text()); assert len(receipt.checks)==25 and all(check.ok for check in receipt.checks); assert {"native-evidence-agreement","normalised-evidence-agreement","source-evidence-identity","run-provenance"} <= {check.name for check in receipt.checks}; assert receipt.provenance is not None; head=subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(); assert receipt.provenance.code_revision==head; assert len(receipt.query_inventory)==60 and sum(len(query.references) for query in receipt.query_inventory)==736; assert receipt.counts.applications==648; assert receipt.costs.final_resume_attempt.request_count==receipt.costs.final_resume_attempt.transferred_bytes==receipt.costs.final_resume_attempt.attachment_body_requests==0; assert receipt.costs.rerun.request_count==receipt.costs.rerun.transferred_bytes==receipt.costs.rerun.attachment_body_requests==0; db=sqlite3.connect(root / "yimby.sqlite3"); assert db.execute("PRAGMA integrity_check").fetchone()==("ok",) and db.execute("PRAGMA foreign_key_check").fetchall()==[]; runs=db.execute("SELECT r.id,r.started_at,d.finished_at,d.request_count,d.transferred_bytes,d.attachment_body_requests FROM runs AS r JOIN run_details AS d ON d.run_id=r.id WHERE r.authority_id=? ORDER BY r.rowid DESC LIMIT 2",("arun",)).fetchall(); follow,publication=runs; assert receipt.provenance.publication.run_id==publication[0] and receipt.provenance.immediate_follow_up.run_id==follow[0]; assert all(run[3:]==(0,0,0) for run in runs); freshness=db.execute("SELECT last_success_at FROM authorities WHERE authority_id=?",("arun",)).fetchone()[0]; print(json.dumps({"checks_ok":len(receipt.checks),"code_revision":head,"created_at":receipt.created_at.isoformat(),"last_source_success_at":freshness,"memberships":sum(len(query.references) for query in receipt.query_inventory),"publication_run_id":publication[0],"immediate_follow_up_run_id":follow[0],"unique_portal_records":receipt.counts.applications},sort_keys=True))'
+EXIT STATUS: 0
+OUTPUT:
+{"checks_ok": 25, "code_revision": "b3e89c916e374220fb96378f7acc4dc086736beb", "created_at": "2026-09-16T15:38:09.254967+00:00", "immediate_follow_up_run_id": "d4d2a9b1-62b7-4901-82d0-5db511b5920d", "last_source_success_at": "2026-09-16T12:06:26.180505+00:00", "memberships": 736, "publication_run_id": "ef32e694-8071-477d-a1dc-8ddc58423821", "unique_portal_records": 648}
+
+COMMAND: git diff --check
+EXIT STATUS: 0
+OUTPUT:
+<empty>
+
+COMMAND: git status --short
+EXIT STATUS: 0
+OUTPUT:
+<empty>
