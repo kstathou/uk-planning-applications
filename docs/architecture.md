@@ -53,8 +53,10 @@ attachment-body request type. The live client blocks known attachment paths and
 download endpoints, rejects attachment media types or content dispositions
 before it consumes the response body, validates every redirect destination
 against an optional request-owned origin and path boundary before following it,
-and aborts image and media browser subresources. The collector also compares
-retrieved request URLs with emitted document links.
+rate-limits every physical request in a redirect chain while retaining the host
+slot through response consumption, and aborts image and media browser
+subresources. The collector also compares retrieved request URLs with emitted
+document links.
 
 ## Storage invariants
 
@@ -84,8 +86,9 @@ Evidence uses gzip-compressed, content-addressed files. The store writes the
 file before it commits its digest, and every observation links to each evidence
 digest that produced it. Qualification reconciles those historical links, the
 complete evidence registry, canonical digest paths, decompressed body hashes,
-and the filesystem inventory. A crash can leave an unreferenced file, but it
-cannot leave a database row that points to a missing file.
+and every file in the filesystem inventory. A crash can leave an unreferenced
+or partial file, but qualification rejects it; it cannot leave a database row
+that points to a missing file.
 
 ## Module ownership
 

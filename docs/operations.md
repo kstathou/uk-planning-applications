@@ -181,8 +181,9 @@ uv run python scripts/qualify_devon.py \
 The command requires an exact inclusive 30-day scope and an empty directory
 unless `--resume` is present. It runs the collection twice, verifies terminal
 checkpoint and query coherence, exact durable reference/application agreement,
-retry and section state, SQLite integrity, per-observation evidence links,
-complete database/filesystem evidence reconciliation, attachment policy,
+durable per-query row and page totals, retry and section state, SQLite
+integrity, per-observation evidence links, complete database/filesystem evidence
+reconciliation including noncanonical residual files, attachment policy,
 idempotence, and two succeeded run states, then fsyncs a versioned receipt. A
 terminal resume validates the current store without network I/O and preserves
 the original nonzero first-pass receipt. The receipt records later cycles as
