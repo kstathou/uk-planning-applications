@@ -49,6 +49,18 @@ _EXACT_WINDOW_REQUIRED = "exact-30-day-window-required"
 _DATA_DIR_NOT_DIRECTORY = "data-dir-not-directory"
 _RESUME_REQUIRED = "resume-required"
 _RECEIPT_REQUIRED = "receipt-required"
+_ATTACHMENT_MEDIA_TYPES = frozenset(
+    {
+        "application/msword",
+        "application/octet-stream",
+        "application/pdf",
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/zip",
+    }
+)
+_ATTACHMENT_MEDIA_PREFIXES = ("audio/", "image/", "video/")
 
 SessionFactory = Callable[[], PortalSession]
 Clock = Callable[[], datetime]
@@ -66,8 +78,7 @@ class QualificationScopeV1(FrozenModel):
     include_open: Literal[True] = True
 
     @model_validator(mode="after")
-    def exact_window(self) -> Self:
-        """Require one exact inclusive 30-day range."""
+    def _exact_window(self) -> Self:
         if self.end - self.start != timedelta(days=29):
             raise ValueError(_EXACT_WINDOW_REQUIRED)
         return self
@@ -109,8 +120,7 @@ class RecentContractV1(FrozenModel):
     terminal_marker: bool
 
     @model_validator(mode="after")
-    def zero_agrees_with_references(self) -> Self:
-        """Require exactly one of an explicit zero or visible result rows."""
+    def _zero_agrees_with_references(self) -> Self:
         if self.explicit_zero == bool(self.visible_references):
             _raise_invariant("recent-result-mismatch")
         if self.explicit_zero and (
@@ -136,8 +146,7 @@ class WeeklyContractV1(FrozenModel):
     terminal_marker: bool
 
     @model_validator(mode="after")
-    def total_covers_rows(self) -> Self:
-        """Reject a published total smaller than the rows on the page."""
+    def _total_covers_rows(self) -> Self:
         if self.reported_total is not None and self.reported_total < self.row_count:
             _raise_invariant("weekly-total-mismatch")
         return self
@@ -163,8 +172,7 @@ class DetailContractV1(FrozenModel):
     documents: tuple[DocumentContractV1, ...]
 
     @model_validator(mode="after")
-    def count_matches_documents(self) -> Self:
-        """Require the published count to describe the retained metadata rows."""
+    def _count_matches_documents(self) -> Self:
         if self.document_count != len(self.documents):
             _raise_invariant("document-count-mismatch")
         for document in self.documents:
@@ -306,8 +314,7 @@ class CheshireEastQualificationBlockerReceiptV2(FrozenModel):
     weekly_cycles: tuple[PendingWeeklyCycleV1, PendingWeeklyCycleV1]
 
     @model_validator(mode="after")
-    def semantic_invariants(self) -> Self:
-        """Reject receipts whose independently useful facts disagree."""
+    def _semantic_invariants(self) -> Self:
         planned = _planned_query_inventory(self.scope)
         attempted = tuple(request.key for request in self.attempted_requests)
         expected_pending = planned[len(attempted) :]
@@ -412,16 +419,16 @@ class _Config(FrozenModel):
     resume: bool
 
 
-class QualificationConfigError(ValueError):
-    """One safety flag or scope value is invalid."""
+class _QualificationConfigError(ValueError):
+    pass
 
 
-class QualificationEvidenceError(RuntimeError):
-    """A retained response no longer matches its receipt."""
+class _QualificationEvidenceError(RuntimeError):
+    pass
 
 
-class QualificationSourceMediaError(RuntimeError):
-    """An official response did not use the required HTML media type."""
+class _QualificationSourceMediaError(RuntimeError):
+    pass
 
 
 class _ProbeResult(FrozenModel):
@@ -446,27 +453,27 @@ def _parser() -> argparse.ArgumentParser:
 def _config(argv: Sequence[str]) -> _Config:
     arguments = _parser().parse_args(argv)
     if not arguments.confirm_live:
-        raise QualificationConfigError(_CONFIRMATION_REQUIRED)
+        raise _QualificationConfigError(_CONFIRMATION_REQUIRED)
     if not arguments.include_open:
-        raise QualificationConfigError(_INCLUDE_OPEN_REQUIRED)
+        raise _QualificationConfigError(_INCLUDE_OPEN_REQUIRED)
     try:
         start = date.fromisoformat(arguments.start)
         end = date.fromisoformat(arguments.end)
     except ValueError as error:
-        raise QualificationConfigError(_INVALID_DATE) from error
+        raise _QualificationConfigError(_INVALID_DATE) from error
     if start > end:
-        raise QualificationConfigError(_INVALID_WINDOW)
+        raise _QualificationConfigError(_INVALID_WINDOW)
     try:
         scope = QualificationScopeV1(start=start, end=end, include_open=True)
     except ValueError as error:
-        raise QualificationConfigError(_EXACT_WINDOW_REQUIRED) from error
+        raise _QualificationConfigError(_EXACT_WINDOW_REQUIRED) from error
     data_dir = Path(arguments.data_dir).expanduser()
     if data_dir.exists() and not data_dir.is_dir():
-        raise QualificationConfigError(_DATA_DIR_NOT_DIRECTORY)
+        raise _QualificationConfigError(_DATA_DIR_NOT_DIRECTORY)
     if data_dir.exists() and any(data_dir.iterdir()) and not arguments.resume:
-        raise QualificationConfigError(_RESUME_REQUIRED)
+        raise _QualificationConfigError(_RESUME_REQUIRED)
     if arguments.resume and not (data_dir / _RECEIPT_NAME).is_file():
-        raise QualificationConfigError(_RECEIPT_REQUIRED)
+        raise _QualificationConfigError(_RECEIPT_REQUIRED)
     return _Config(data_dir=data_dir, scope=scope, resume=arguments.resume)
 
 
@@ -489,7 +496,7 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
     except (
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
-        QualificationSourceMediaError,
+        _QualificationSourceMediaError,
     ):
         return _probe_result(
             session,
@@ -547,7 +554,7 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
         cheshire.CheshireEastFormMethodUnavailableError,
         cheshire.CheshireEastParseError,
         cheshire.CheshireEastReferenceMismatchError,
-        QualificationSourceMediaError,
+        _QualificationSourceMediaError,
         ValidationError,
     ):
         return _probe_result(
@@ -572,7 +579,7 @@ async def _probe(scope: QualificationScopeV1, session: PortalSession) -> _ProbeR
 
 def _html_body(capture: EvidenceCapture) -> bytes:
     if capture.media_type != "text/html":
-        raise QualificationSourceMediaError
+        raise _QualificationSourceMediaError
     return capture.body
 
 
@@ -745,9 +752,16 @@ def _validate_evidence_bindings(
             or evidence_url.netloc != request_url.netloc
             or evidence_url.path != request_url.path
             or evidence_url.query not in {"", request_url.query}
+            or _is_attachment_media_type(item.media_type)
             or (item.media_type != "text/html" and not final_blocker_media)
         ):
             _raise_invariant("request-evidence-mismatch")
+
+
+def _is_attachment_media_type(media_type: str) -> bool:
+    return media_type in _ATTACHMENT_MEDIA_TYPES or media_type.startswith(
+        _ATTACHMENT_MEDIA_PREFIXES
+    )
 
 
 class _RetainedEvidenceReplay:
@@ -769,13 +783,13 @@ class _RetainedEvidenceReplay:
         if self.receipt.evidence[index].media_type != "text/html":
             if self.accepts_failure(index, blocker_code):
                 return None
-            raise QualificationEvidenceError
+            raise _QualificationEvidenceError
         try:
             return parser(self.bodies[index])
         except errors as error:
             if self.accepts_failure(index, blocker_code):
                 return None
-            raise QualificationEvidenceError from error
+            raise _QualificationEvidenceError from error
 
     def accepts_failure(self, index: int, blocker_code: str) -> bool:
         return (
@@ -787,7 +801,7 @@ class _RetainedEvidenceReplay:
 
     def require_following_request(self, parsed_index: int) -> None:
         if len(self.receipt.attempted_requests) == parsed_index + 1:
-            raise QualificationEvidenceError
+            raise _QualificationEvidenceError
 
 
 def _verify_request_evidence_contract(
@@ -821,7 +835,7 @@ def _verify_request_evidence_contract(
         ),
     )
     if requests[_RECENT_REQUEST_INDEX] != expected_recent:
-        raise QualificationEvidenceError
+        raise _QualificationEvidenceError
     recent = replay.parse_stage(
         _RECENT_REQUEST_INDEX,
         cheshire.parse_search_boundary,
@@ -847,7 +861,7 @@ def _verify_request_evidence_contract(
         cheshire.weekly_received_request(weekly_form, _HISTORICAL_WEEK),
     )
     if requests[_WEEKLY_REQUEST_INDEX] != expected_weekly:
-        raise QualificationEvidenceError
+        raise _QualificationEvidenceError
     weekly = replay.parse_stage(
         _WEEKLY_REQUEST_INDEX,
         cheshire.parse_weekly_boundary,
@@ -895,9 +909,9 @@ def _verify_replayed_source_contract(
             "official-source-contract-drift",
         ):
             return
-        raise QualificationEvidenceError from error
+        raise _QualificationEvidenceError from error
     if replay.receipt.source_contract != expected_contract:
-        raise QualificationEvidenceError
+        raise _QualificationEvidenceError
 
 
 def _retain_evidence(
@@ -910,7 +924,7 @@ def _retain_evidence(
         body = gzip.decompress(path.read_bytes())
         digest = sha256(body).hexdigest()
         if digest != capture.digest:
-            raise QualificationEvidenceError
+            raise _QualificationEvidenceError
         retained.append(
             RetainedEvidenceV1(
                 digest=digest,
@@ -1080,21 +1094,21 @@ def _verify_receipt(
 ) -> CheshireEastQualificationBlockerReceiptV2:
     receipt_path = data_dir / _RECEIPT_NAME
     if not receipt_path.is_file():
-        raise QualificationConfigError(_RECEIPT_REQUIRED)
+        raise _QualificationConfigError(_RECEIPT_REQUIRED)
     receipt = CheshireEastQualificationBlockerReceiptV2.model_validate_json(
         receipt_path.read_text(encoding="utf-8")
     )
     if receipt.scope != expected_scope:
-        raise QualificationConfigError(_INVALID_WINDOW)
+        raise _QualificationConfigError(_INVALID_WINDOW)
     evidence_root = (data_dir / "evidence").resolve(strict=True)
     bodies = []
     for item in receipt.evidence:
         candidate = (evidence_root / item.relative_path).resolve(strict=True)
         if not candidate.is_relative_to(evidence_root):
-            raise QualificationEvidenceError
+            raise _QualificationEvidenceError
         body = gzip.decompress(candidate.read_bytes())
         if len(body) != item.byte_count or sha256(body).hexdigest() != item.digest:
-            raise QualificationEvidenceError
+            raise _QualificationEvidenceError
         bodies.append(body)
     _verify_request_evidence_contract(receipt, tuple(bodies))
     return receipt
@@ -1122,7 +1136,7 @@ def main(
     """Capture or offline-verify the typed Cheshire East blocker."""
     try:
         config = _config(sys.argv[1:] if argv is None else argv)
-    except QualificationConfigError as error:
+    except _QualificationConfigError as error:
         return _error(str(error), 2)
     try:
         with ProcessLock(config.data_dir / "qualification.lock"):
@@ -1143,8 +1157,8 @@ def main(
         cheshire.CheshireEastParseError,
         cheshire.CheshireEastReferenceMismatchError,
         CollectionAlreadyRunningError,
-        QualificationConfigError,
-        QualificationEvidenceError,
+        _QualificationConfigError,
+        _QualificationEvidenceError,
         SourceUnavailableError,
     ) as error:
         return _error(

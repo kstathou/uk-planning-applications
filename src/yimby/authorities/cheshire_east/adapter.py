@@ -268,6 +268,8 @@ def parse_search_form(body: bytes) -> Tag:
     successful_names = _successful_field_names(form)
     if len(successful_names) != len(set(successful_names)):
         _raise_parse("duplicate successful search control")
+    if any(name not in successful_names for name in controls):
+        _raise_parse("required successful search control")
     return form
 
 
@@ -524,9 +526,11 @@ def parse_detail_contract(
     fields = _detail_fields(containers[0])
     published_reference = _required_detail_field(fields, "application reference number")
     if published_reference != expected_reference:
-        raise CheshireEastReferenceMismatchError(
-            expected_reference, published_reference
+        message = (
+            f"Cheshire East detail reference {published_reference} did not match "
+            f"{expected_reference}"
         )
+        raise CheshireEastReferenceMismatchError(message)
     grid = _grid_reference(_required_detail_field(fields, "grid reference"))
     documents = _parse_document_metadata(soup, expected_locator)
     return CheshireEastDetailContractV1(
@@ -760,12 +764,6 @@ class CheshireEastDetailUnavailableError(RuntimeError):
 
 class CheshireEastReferenceMismatchError(ValueError):
     """The direct detail response belongs to another public reference."""
-
-    def __init__(self, expected: str, published: str) -> None:
-        """Name both non-sensitive public references."""
-        super().__init__(
-            f"Cheshire East detail reference {published} did not match {expected}"
-        )
 
 
 class CheshireEastRoutingError(ValueError):

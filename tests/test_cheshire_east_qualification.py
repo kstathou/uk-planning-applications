@@ -154,6 +154,12 @@ def _qualification_module() -> ModuleType:
     return module
 
 
+_SEARCH_FORM_URL = str(cheshire.search_form_request().url)
+_SEARCH_POST_URL = "https://pa.cheshireeast.gov.uk/planning/index.html"
+_WEEKLY_URL = str(cheshire.weekly_received_form_request().url)
+_DETAIL_URL = str(cheshire.detail_request("406569").url)
+
+
 class _QualificationSession:
     def __init__(
         self,
@@ -178,17 +184,15 @@ class _QualificationSession:
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
         url = str(request.url)
-        if url == cheshire._SEARCH_URL and request.method == RequestMethod.GET:
+        if url == _SEARCH_FORM_URL and request.method == RequestMethod.GET:
             body = self._search_form
-        elif url == cheshire._SEARCH_POST_URL:
+        elif url == _SEARCH_POST_URL:
             body = self._search_results
-        elif (
-            url == cheshire._WEEKLY_RECEIVED_URL and request.method == RequestMethod.GET
-        ):
+        elif url == _WEEKLY_URL and request.method == RequestMethod.GET:
             body = self._weekly_form
-        elif url == cheshire._WEEKLY_RECEIVED_URL:
+        elif url == _WEEKLY_URL:
             body = self._weekly_results
-        elif url == cheshire._DETAIL_URL.format(locator="406569"):
+        elif url == _DETAIL_URL:
             body = self._detail
         else:
             raise AssertionError(request)
@@ -361,10 +365,18 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         "html.parser",
     ).select_one("form")
     assert isinstance(custom, Tag)
-    assert tuple(
-        (field.name, field.value)
-        for field in cheshire._successful_form_fields(custom, {})
-    ) == (("f", "f"), ("g", "g"))
+    request = cheshire.valid_date_request(
+        custom,
+        DiscoveryWindow(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+    )
+    assert tuple((field.name, field.value) for field in request.form) == (
+        ("f", "f"),
+        ("g", "g"),
+    )
 
 
 def test_cheshire_weekly_contract_failure_boundaries() -> None:
@@ -524,15 +536,6 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
             expected_reference="26/3335/PRIOR-1A",
             expected_locator="406569",
         )
-
-    cheshire._assert_window(
-        cheshire.CheshireEastCheckpointV1(search_page="live"),
-        DiscoveryWindow(
-            start=date(2026, 8, 18),
-            end=date(2026, 9, 16),
-            include_open=True,
-        ),
-    )
 
 
 def test_cheshire_live_detail_remains_unreachable_from_partial_discovery() -> None:
