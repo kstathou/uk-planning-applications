@@ -115,9 +115,20 @@ def test_barnet_fixture_collection_is_idempotent_and_failure_safe(
     state = store.discovery_state(AuthorityId("barnet"))
     assert state.model_dump(mode="json") == {
         "references": ["23/0001"],
+        "queued": [
+            {
+                "source_id": "barnet-idox-current",
+                "reference": "23/0001",
+                "locator": None,
+            }
+        ],
         "checkpoint": {
             "schema_version": 1,
-            "payload_json": '{"cursor":"complete"}',
+            "payload_json": (
+                '{"cursor":"complete","completed_queries":[],'
+                '"active_query":null,"next_page":1,"query_row_count":0,'
+                '"seen_references":[],"live_complete":false}'
+            ),
         },
     }
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:

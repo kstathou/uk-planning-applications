@@ -316,7 +316,7 @@ def test_offline_rebuild_preserves_versions_and_requires_matching_schema(
     application_id = _collect_barnet(store)
     retained = store.retained_native_records()[0]
     rebuilt_v2 = BARNET_PACKAGE.rebuild(retained).model_copy(
-        update={"normaliser_version": "barnet-v2"}
+        update={"normaliser_version": "barnet-v3"}
     )
     store.commit_rebuild(application_id, rebuilt_v2)
     assert (
@@ -334,7 +334,7 @@ def test_offline_rebuild_preserves_versions_and_requires_matching_schema(
 
     report = rebuild_normalised(store, barnet_registry())
     assert report.model_dump() == {"rebuilt": 1, "transport_requests": 0}
-    assert store.application_view(application_id).normaliser_version == "barnet-v1"
+    assert store.application_view(application_id).normaliser_version == "barnet-v2"
     assert (
         store.semantic_version_count(application_id, "application")
         == UNCHANGED_AND_REBUILT_VERSIONS
@@ -530,7 +530,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     """Health and dashboard models expose complete 15-authority denominators."""
     store = _store(tmp_path / "data")
     application_id = _collect_barnet(store)
-    assert store.migration_versions() == (1, 2, 3)
+    assert store.migration_versions() == (1, 2, 3, 4)
     healthy = run_doctor(
         store,
         tmp_path / "data",
@@ -566,7 +566,7 @@ def test_doctor_dashboard_migrations_and_examples(tmp_path: Path) -> None:
     store.close()
 
     reopened = _store(tmp_path / "data")
-    assert reopened.migration_versions() == (1, 2, 3)
+    assert reopened.migration_versions() == (1, 2, 3, 4)
     reopened.close()
 
     launchd = Path("examples/launchd/com.example.yimby-sync.plist.example").read_text()

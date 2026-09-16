@@ -195,15 +195,18 @@ class SqliteStore:
                 self._connection.execute(
                     """
                     INSERT INTO discovery_queue(
-                        authority_id, source_id, reference, first_run_id, last_run_id
-                    ) VALUES (?, ?, ?, ?, ?)
+                        authority_id, source_id, reference, locator,
+                        first_run_id, last_run_id
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(source_id, reference) DO UPDATE SET
+                        locator = COALESCE(excluded.locator, discovery_queue.locator),
                         last_run_id = excluded.last_run_id
                     """,
                     (
                         authority_id,
                         reference.source_id,
                         reference.reference,
+                        reference.locator,
                         run_id,
                         run_id,
                     ),
@@ -249,15 +252,18 @@ class SqliteStore:
         with self._connection:
             self._connection.execute(
                 """
-                INSERT INTO applications(id, authority_id, source_id, reference)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT(source_id, reference) DO NOTHING
+                INSERT INTO applications(
+                    id, authority_id, source_id, reference, locator
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(source_id, reference) DO UPDATE SET
+                    locator = COALESCE(excluded.locator, applications.locator)
                 """,
                 (
                     application_id,
                     normalised.authority_id,
                     normalised.reference.source_id,
                     normalised.reference.reference,
+                    normalised.reference.locator,
                 ),
             )
             self._connection.execute(
@@ -306,11 +312,12 @@ class SqliteStore:
                 """
                 INSERT INTO native_rebuild_inputs(
                     application_id, authority_id, source_id, reference, schema_name,
-                    payload_json, observed_at, completeness_json,
+                    locator, payload_json, observed_at, completeness_json,
                     evidence_digests_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(application_id) DO UPDATE SET
                     schema_name = excluded.schema_name,
+                    locator = COALESCE(excluded.locator, native_rebuild_inputs.locator),
                     payload_json = excluded.payload_json,
                     observed_at = excluded.observed_at,
                     completeness_json = excluded.completeness_json,
@@ -322,6 +329,7 @@ class SqliteStore:
                     normalised.reference.source_id,
                     normalised.reference.reference,
                     collected.native_schema,
+                    normalised.reference.locator,
                     collected.native_json,
                     collected.observed_at.isoformat(),
                     normalised.completeness.model_dump_json(),
@@ -389,6 +397,7 @@ class SqliteStore:
                     reference=SourceReference(
                         source_id=SourceId(row["source_id"]),
                         reference=row["reference"],
+                        locator=row["locator"],
                     ),
                     native_schema=row["schema_name"],
                     native_json=row["payload_json"],
@@ -556,16 +565,16 @@ class SqliteStore:
 
     def discovery_state(self, authority_id: AuthorityId) -> DiscoveryState:
         """Return the durable queue and matching checkpoint."""
-        references = tuple(
-            row["reference"]
-            for row in self._connection.execute(
+        queue_rows = tuple(
+            self._connection.execute(
                 """
-                SELECT reference FROM discovery_queue
+                SELECT source_id, reference, locator FROM discovery_queue
                 WHERE authority_id = ? ORDER BY reference
                 """,
                 (authority_id,),
             )
         )
+        references = tuple(row["reference"] for row in queue_rows)
         row = self._connection.execute(
             """
             SELECT schema_version, payload_json FROM checkpoints
@@ -581,7 +590,18 @@ class SqliteStore:
                 payload_json=row["payload_json"],
             )
         )
-        return DiscoveryState(references=references, checkpoint=checkpoint)
+        return DiscoveryState(
+            references=references,
+            queued=tuple(
+                SourceReference(
+                    source_id=SourceId(row["source_id"]),
+                    reference=row["reference"],
+                    locator=row["locator"],
+                )
+                for row in queue_rows
+            ),
+            checkpoint=checkpoint,
+        )
 
     def semantic_version_count(
         self,
@@ -611,10 +631,11 @@ class SqliteStore:
             self._connection.execute(
                 """
                 INSERT INTO retry_queue(
-                    authority_id, source_id, reference, attempts,
+                    authority_id, source_id, reference, locator, attempts,
                     next_attempt_at, last_error, status
-                ) VALUES (?, ?, ?, 1, ?, ?, 'pending')
+                ) VALUES (?, ?, ?, ?, 1, ?, ?, 'pending')
                 ON CONFLICT(authority_id, source_id, reference) DO UPDATE SET
+                    locator = COALESCE(excluded.locator, retry_queue.locator),
                     attempts = retry_queue.attempts + 1,
                     next_attempt_at = excluded.next_attempt_at,
                     last_error = excluded.last_error,
@@ -624,6 +645,7 @@ class SqliteStore:
                     authority_id,
                     reference.source_id,
                     reference.reference,
+                    reference.locator,
                     datetime.now(UTC).isoformat(),
                     error,
                 ),
@@ -652,6 +674,7 @@ class SqliteStore:
                 reference=SourceReference(
                     source_id=SourceId(row["source_id"]),
                     reference=row["reference"],
+                    locator=row["locator"],
                 ),
                 attempts=row["attempts"],
                 last_error=row["last_error"],

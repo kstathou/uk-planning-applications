@@ -52,8 +52,8 @@ def _status(
 PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     AuthorityId("barnet"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "weekly live collection is bounded but older-open enumeration is unresolved",
+        "captured weekly IDOX request and detail-tab contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("camden"): _status(

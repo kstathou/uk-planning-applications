@@ -188,6 +188,7 @@ class SourceReference(FrozenModel):
 
     source_id: SourceId
     reference: str
+    locator: str | None = None
 
 
 class StoredCheckpoint(FrozenModel):
@@ -360,6 +361,7 @@ class DiscoveryState(FrozenModel):
     """Durable references and their matching checkpoint."""
 
     references: tuple[str, ...]
+    queued: tuple[SourceReference, ...]
     checkpoint: StoredCheckpoint | None
 
 

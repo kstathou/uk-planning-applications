@@ -5,10 +5,10 @@
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import PurePosixPath
-from typing import Protocol
+from typing import Protocol, Self
 from urllib.parse import urlsplit
 
-from pydantic import HttpUrl
+from pydantic import HttpUrl, model_validator
 
 from yimby.domain import EvidenceCapture, EvidenceDigest, FrozenModel, TransportMode
 
@@ -29,11 +29,35 @@ class RequestIntent(StrEnum):
     COMMENTS = "comments"
 
 
+class RequestMethod(StrEnum):
+    """HTTP methods permitted by the portal boundary."""
+
+    GET = "GET"
+    POST = "POST"
+
+
+class FormField(FrozenModel):
+    """One typed form field without headers or logging behaviour."""
+
+    name: str
+    value: str
+
+
 class PortalRequest(FrozenModel):
     """One allowlisted portal request."""
 
     url: HttpUrl
     intent: RequestIntent
+    method: RequestMethod = RequestMethod.GET
+    form: tuple[FormField, ...] = ()
+
+    @model_validator(mode="after")
+    def form_requires_post(self) -> Self:
+        """Reject ambiguous GET requests carrying a form body."""
+        if self.method == RequestMethod.GET and self.form:
+            message = "GET portal requests cannot carry form fields"
+            raise ValueError(message)
+        return self
 
 
 class FixtureResponse(FrozenModel):

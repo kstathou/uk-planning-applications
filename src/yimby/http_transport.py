@@ -12,7 +12,7 @@ from hashlib import sha256
 from pathlib import PurePosixPath
 from time import monotonic
 from typing import TYPE_CHECKING
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 
 import httpx
 from pydantic import HttpUrl
@@ -112,7 +112,11 @@ class HttpxPortalSession:
         if PurePosixPath(split.path).suffix.lower() in _ATTACHMENT_SUFFIXES:
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
-        response = await self._send_with_retries(raw_url, split.hostname or "")
+        response = await self._send_with_retries(
+            request,
+            raw_url,
+            split.hostname or "",
+        )
         if _is_attachment_response(response):
             self._attachment_body_requests += 1
             await response.aclose()
@@ -130,13 +134,28 @@ class HttpxPortalSession:
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
 
-    async def _send_with_retries(self, url: str, host: str) -> httpx.Response:
+    async def _send_with_retries(
+        self,
+        portal_request: PortalRequest,
+        url: str,
+        host: str,
+    ) -> httpx.Response:
         last_status: int | None = None
+        form = [(field.name, field.value) for field in portal_request.form]
+        encoded_form = urlencode(form).encode() if form else None
+        headers = (
+            {"content-type": "application/x-www-form-urlencoded"} if form else None
+        )
         for attempt in range(1, self._max_attempts + 1):
             try:
                 async with self._limiter.turn(host):
                     response = await self._client.send(
-                        self._client.build_request("GET", url),
+                        self._client.build_request(
+                            portal_request.method,
+                            url,
+                            content=encoded_form,
+                            headers=headers,
+                        ),
                         stream=True,
                     )
             except httpx.TransportError as error:
