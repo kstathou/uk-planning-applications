@@ -1,13 +1,12 @@
 # Copyright (c) 2026 Kostas Stathoulopoulos
-# ruff: noqa: D100, D103, E501, PLR2004
+# ruff: noqa: D100, E501, PLR2004
 
 from __future__ import annotations
 
 import asyncio
 import gzip
-import importlib.util
+import importlib
 import json
-import sys
 from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -152,18 +151,7 @@ def _detail() -> bytes:
 
 
 def _qualification_module() -> ModuleType:
-    path = _ROOT / "scripts" / "qualify_cheshire_east.py"
-    name = "_test_qualify_cheshire_east"
-    spec = importlib.util.spec_from_file_location(
-        name,
-        path,
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+    return importlib.reload(importlib.import_module("yimby.cheshire_qualification"))
 
 
 _SEARCH_FORM_URL = str(cheshire.search_form_request().url)
@@ -543,8 +531,7 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
         _search_results().replace(b"<th>Reference</th>", b"<th>Reference Notes</th>"),
         _search_results().replace(
             b"</table>",
-            b'</table><nav class="pagination" hidden>'
-            b'<a href="?page=2">Next</a></nav>',
+            b'</table><nav class="pagination" hidden><a href="?page=2">Next</a></nav>',
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -1024,7 +1011,8 @@ def test_cheshire_resume_continues_from_the_first_incomplete_stage(
         async def fetch(self, request: PortalRequest) -> EvidenceCapture:
             if len(self.requests) == 2:
                 self.requests.append(request)
-                raise SourceUnavailableError("interrupted")
+                message = "interrupted"
+                raise SourceUnavailableError(message)
             return await super().fetch(request)
 
     first = InterruptedSession()
@@ -1491,10 +1479,10 @@ def test_cheshire_changed_search_contract_becomes_a_typed_blocker(
         ),
         (
             {
-                "weekly_results": _weekly_results().replace(
-                    b"<table>",
-                    b'<table data-result-count="49">',
-                )
+                    "weekly_results": _weekly_results().replace(
+                        b"<table>",
+                        b'<table hidden data-result-count="49">',
+                    )
             },
             (
                 "source-access|search-form",

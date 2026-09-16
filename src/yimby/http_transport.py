@@ -12,7 +12,7 @@ from hashlib import sha256
 from pathlib import PurePosixPath
 from time import monotonic
 from typing import TYPE_CHECKING
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urljoin, urlsplit, urlunsplit
 
 import httpx
 from pydantic import HttpUrl
@@ -21,6 +21,7 @@ from yimby.domain import EvidenceCapture, EvidenceDigest, TransportMode
 from yimby.transport import (
     AttachmentBodyBlockedError,
     PortalRequest,
+    RequestMethod,
     SourceUnavailableError,
     canonical_source_media_type,
     is_source_document_media_type,
@@ -57,6 +58,8 @@ _SUCCESS_MIN = 200
 _SUCCESS_MAX = 300
 _MAX_ATTEMPTS = 5
 _MAX_RETRY_DELAY = 60.0
+_MAX_REDIRECTS = 5
+_REDIRECT_STATUS = {301, 302, 303, 307, 308}
 _DEFAULT_HEADERS = {
     "accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
     "user-agent": "yimby/0.1 (+local planning research; contact via source repository)",
@@ -113,7 +116,7 @@ class HttpxPortalSession:
             msg = "max_attempts must be between one and five"
             raise ValueError(msg)
         self._client = client or httpx.AsyncClient(
-            follow_redirects=True,
+            follow_redirects=False,
             headers=_DEFAULT_HEADERS,
             timeout=httpx.Timeout(30.0),
         )
@@ -132,33 +135,32 @@ class HttpxPortalSession:
         if _is_attachment_path(split.path):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
-        body, media_type = await self._read_with_retries_in_host_slot(
+        body, media_type, final_url = await self._read_source(
             request,
             raw_url,
             split.hostname or "",
         )
-        self._requested_urls.append(_safe_url(raw_url))
+        self._requested_urls.append(_safe_url(final_url))
         self._transferred_bytes += len(body)
         return EvidenceCapture(
-            url=HttpUrl(_safe_url(raw_url)),
+            url=HttpUrl(_safe_url(final_url)),
             media_type=media_type,
             body=body,
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
 
-    async def _read_with_retries_in_host_slot(
+    async def _read_source(
         self,
         portal_request: PortalRequest,
         url: str,
         host: str,
-    ) -> tuple[bytes, str]:
+    ) -> tuple[bytes, str, str]:
         safe_url = _safe_url(url)
-        form = [(field.name, field.value) for field in portal_request.form]
-        encoded_form = urlencode(form).encode() if form else None
-        headers = (
-            {"content-type": "application/x-www-form-urlencoded"} if form else None
-        )
+        encoded_form, headers = _request_payload(portal_request)
         attempt = 1
+        redirects = 0
+        current_url = url
+        current_method = portal_request.method
         while True:
             try:
                 async with self._limiter.turn(host):
@@ -166,13 +168,35 @@ class HttpxPortalSession:
                     try:
                         response = await self._client.send(
                             self._client.build_request(
-                                portal_request.method,
-                                url,
+                                current_method,
+                                current_url,
                                 content=encoded_form,
                                 headers=headers,
                             ),
                             stream=True,
+                            follow_redirects=False,
                         )
+                        redirect = self._redirect_request(
+                            response,
+                            current_url,
+                            host,
+                            redirects,
+                            safe_url,
+                        )
+                        if redirect is not None:
+                            redirects += 1
+                            current_url, current_method, encoded_form, headers = (
+                                _redirect_payload(
+                                    response,
+                                    redirect,
+                                    current_method,
+                                    encoded_form,
+                                    headers,
+                                )
+                            )
+                            await response.aclose()
+                            response = None
+                            continue
                         if (
                             response.status_code in _RETRYABLE_STATUS
                             and attempt < self._max_attempts
@@ -203,7 +227,7 @@ class HttpxPortalSession:
                                 "content-type", "application/octet-stream"
                             )
                         )
-                        return body, media_type
+                        return body, media_type, str(response.url)
                     finally:
                         if response is not None:
                             await response.aclose()
@@ -213,6 +237,29 @@ class HttpxPortalSession:
                 await self._sleep(_backoff(attempt))
                 attempt += 1
                 continue
+
+    def _redirect_request(
+        self,
+        response: httpx.Response,
+        current_url: str,
+        host: str,
+        redirects: int,
+        safe_url: str,
+    ) -> str | None:
+        target = _redirect_target(
+            response,
+            current_url,
+            host,
+            redirects,
+            safe_url,
+        )
+        if target is None:
+            return None
+        target_parts = urlsplit(target)
+        if _is_attachment_path(target_parts.path):
+            self._attachment_body_requests += 1
+            raise _attachment_error(target_parts.hostname)
+        return target
 
     @property
     def requested_urls(self) -> tuple[str, ...]:
@@ -251,6 +298,58 @@ def _response_is_forbidden(response: httpx.Response) -> bool:
         or "filename=" in disposition
         or not is_source_document_media_type(response.headers.get("content-type", ""))
     )
+
+
+def _request_payload(
+    request: PortalRequest,
+) -> tuple[bytes | None, dict[str, str] | None]:
+    return _request_payload_from_fields(
+        [(field.name, field.value) for field in request.form]
+    )
+
+
+def _redirect_payload(
+    response: httpx.Response,
+    target: str,
+    method: RequestMethod,
+    encoded_form: bytes | None,
+    headers: dict[str, str] | None,
+) -> tuple[str, RequestMethod, bytes | None, dict[str, str] | None]:
+    if response.status_code in {301, 302, 303}:
+        return target, RequestMethod.GET, None, None
+    return target, method, encoded_form, headers
+
+
+def _request_payload_from_fields(
+    form: list[tuple[str, str]],
+) -> tuple[bytes | None, dict[str, str] | None]:
+    if not form:
+        return None, None
+    return urlencode(form).encode(), {
+        "content-type": "application/x-www-form-urlencoded"
+    }
+
+
+def _redirect_target(
+    response: httpx.Response,
+    current_url: str,
+    host: str,
+    redirects: int,
+    safe_url: str,
+) -> str | None:
+    if response.status_code not in _REDIRECT_STATUS:
+        return None
+    location = response.headers.get("location")
+    target = urljoin(current_url, location) if location else ""
+    parts = urlsplit(target)
+    if (
+        not location
+        or parts.scheme != "https"
+        or parts.hostname != host
+        or redirects == _MAX_REDIRECTS
+    ):
+        raise _status_error(safe_url, response.status_code)
+    return target
 
 
 def _is_attachment_path(path: str) -> bool:
