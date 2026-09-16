@@ -569,6 +569,10 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<td class="hidden">26/3335/PRIOR-1A</td>',
         ),
         _search_results().replace(
+            b"<td>26/3335/PRIOR-1A</td>",
+            b'<td><span hidden>FAKE</span>26/3335/PRIOR-1A</td>',
+        ),
+        _search_results().replace(
             b"<td>Single storey rear extension.</td>\n      <td>"
             b'<button class="view_application" data-id="406569">View</button></td>',
             b"<td>Single storey rear extension."
@@ -610,6 +614,17 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
             b'<div class="push-30-t"><strong class="text-danger">'
             b'No Results Found.</strong></div><span data-result-count="1"></span></div>'
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b'No Results Found.</strong></div><button type="button" '
+            b'aria-label="Next page"></button></div>'
+        ),
+        (
+            b'<div class="col-sm-12 col-md-12 animation-fadeIn application-list">'
+            b'<div class="push-30-t"><strong class="text-danger">'
+            b'<span hidden>No</span> Results Found.</strong></div></div>'
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -760,6 +775,9 @@ def test_cheshire_weekly_contract_failure_boundaries() -> None:
         _weekly_results().replace(
             b"<td>24/0001D</td>", b'<td class="hidden">24/0001D</td>'
         ),
+        _weekly_results().replace(
+            b"<td>24/0001D</td>", b'<td><span hidden>24/0001D</span></td>'
+        ),
         _weekly_results() + _weekly_results().replace(b"<table>", b"<table hidden>", 1),
         b'<main class="hidden">' + _weekly_results() + b"</main>",
         b'<main style="visibility:hidden!important">' + _weekly_results() + b"</main>",
@@ -870,6 +888,14 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
         ),
         (
             _detail().replace(
+                b'<td data-field-name="document_type">Submitted Plans</td>',
+                b'<td data-field-name="document_type"><span hidden>FAKE</span>'
+                b"Submitted Plans</td>",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
                 b'<td data-field-name="thumbnail">', b'<td data-field-name="wrong">'
             ),
             cheshire.CheshireEastParseError,
@@ -920,6 +946,27 @@ def test_cheshire_detail_contract_failure_boundaries() -> None:
         ),
         (
             b'<main style="display:none !important">' + _detail() + b"</main>",
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b"<strong>Application Status:</strong>",
+                b"<strong><span hidden>Wrong</span>Application Status:</strong>",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b" disabled>All Documents Loaded</button>",
+                b" disabled><span hidden>All</span> Documents Loaded</button>",
+            ),
+            cheshire.CheshireEastParseError,
+        ),
+        (
+            _detail().replace(
+                b'style="display:none">Show More</button>',
+                b'style="display:none"><span hidden>Show</span> More</button>',
+            ),
             cheshire.CheshireEastParseError,
         ),
     )
