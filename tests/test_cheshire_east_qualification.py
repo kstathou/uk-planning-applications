@@ -461,19 +461,19 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
     paged = cheshire.parse_search_boundary(
         _search_results().replace(
             b"</table>",
-            b'</table><span data-result-count="2"></span>'
-            b'<nav class="pagination"><a href="?page=2">Next</a></nav>',
+            b'</table><nav class="pagination">'
+            b'<a href="?page=2">Next</a></nav>',
         )
     )
-    assert paged.reported_total == 2
+    assert paged.reported_total is None
     assert paged.pagination_links == ("?page=2",)
-    counted_container = cheshire.parse_search_boundary(
-        _search_results().replace(
-            b'<div class="centered application-list">',
-            b'<div class="centered application-list" data-result-count="1">',
+    with pytest.raises(cheshire.CheshireEastParseError):
+        cheshire.parse_search_boundary(
+            _search_results().replace(
+                b'<div class="centered application-list">',
+                b'<div class="centered application-list" data-result-count="1">',
+            )
         )
-    )
-    assert counted_container.reported_total == 1
 
     for body in (
         b"<main></main>",
