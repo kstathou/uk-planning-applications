@@ -94,3 +94,11 @@ confirming that the legacy layer is a stale cutover snapshot rather than an
 active-status set, but content matching is not an identity crosswalk. Until all
 legacy PKIDs have an official zero-ambiguity mapping, live bootstrap and the two
 later weekly cycles remain open.
+
+The legacy decided layer was then reconciled independently in 16 throttled map
+tiles: its advertised 13,974 features became 13,974 unique, unambiguous
+PKID-to-HGY pairs. None of those PKIDs occurs among the 826 legacy-current
+PKIDs. The council's decided layer is therefore internally complete but cannot
+provide the missing cutover crosswalk. A Salesforce `FULL` guest layout also
+exposed only system fields, and the public object-info endpoint rejected guest
+access, so no hidden migrated identifier is available through that route.

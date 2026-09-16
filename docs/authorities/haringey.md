@@ -192,6 +192,17 @@ whole-borough shape request independently returned 826 feature identifiers and
 The newer current-layer WFS count was 1,442 at 10:52:10, down from 1,445 during
 the earlier observation, confirming that these are volatile live counts.
 
+At 11:26:57 Europe/London, the separately configured legacy-decided WFS
+advertised 13,974 features. A throttled 4-by-4 whole-borough shape
+reconciliation returned 13,974 unique PKIDs paired with 13,974 unique HGY
+references and no ambiguous PKID. The ordered tile bodies totalled 13,023,218
+bytes; framing each body with `row:column:byte-count` produced SHA-256 digest
+`b4d7d2461397c9c1d119747cda731a4bc4fe0a9cba56a890c82f94ab41d9882a`.
+The intersection between those 13,974 decided PKIDs and all 826
+legacy-current PKIDs was exactly zero. The decided layer is therefore a
+complete official PKID-to-HGY lookup for its own population, but cannot
+crosswalk even one member of the cutover-current population.
+
 The legacy-current layer is itself a stale cutover-era superset. PKID `19085`
 publishes address `70 Tetherdown` and the satellite-dish proposal; an exact
 register search finds `HGY/1999/0250`, now `Decision Made` and disposed on 9
@@ -209,7 +220,13 @@ current Arcus register for PKID `19085` returns no result. The rendered detail,
 the public record payload, and the configured detail sections expose the HGY
 reference and Salesforce record ID but no legacy PKID. The only external-ID
 field published in the detail contract is the Planning Portal reference, which
-is empty for both sampled historic records.
+is empty for both sampled historic records. A guest `RecordGvp.getRecord`
+request for the `FULL` layout exposed only the standard name, ID, ownership,
+record-type, creation, modification, and system-timestamp fields. It exposed no
+custom field at all. The guest UI-API object-info endpoint returned HTTP 403,
+while `PublicRegisterViewService.getRecordDetails` exposed the configured
+custom fields and still named no legacy identifier other than the empty
+`arcusbuiltenv__External_Id__c` field.
 
 The result is narrower than the earlier map conclusion: older-open discovery
 now has a credible union strategy, but complete collection does not. All 826
@@ -217,5 +234,7 @@ legacy PKIDs would need an official deterministic PKID-to-HGY-to-Salesforce
 crosswalk, with zero missing or ambiguous mappings, before their current
 status, detail, comments, and file metadata could be fetched and reconciled.
 Joining by address or proposal would be a content guess even when an exact
-sample happens to be unique. Qualification therefore remains fail-closed, the
-adapter stays `BROWSER_ONLY`, and no receipt or weekly-cycle credit is emitted.
+sample happens to be unique, and the independently reconciled decided layer
+has zero PKID overlap to exploit. Qualification therefore remains fail-closed,
+the adapter stays `BROWSER_ONLY`, and no receipt or weekly-cycle credit is
+emitted.
