@@ -64,7 +64,10 @@ completeness.
 
 The accepted local evidence directory is
 `.yimby/qualification-peak-district-2026-09-16`. Its typed
-`peak-district-qualification-v1.json` receipt records:
+`peak-district-qualification-proof-v1.json` proof retains the private 377-row
+identity inventory. The privacy-safe
+[committed receipt](../evidence/peak-district-qualification-2026-09-16.json)
+records:
 
 - the inclusive scope from 18 August through 16 September 2026;
 - the exact five-query inventory and a one-attempt transport policy;
@@ -74,7 +77,12 @@ The accepted local evidence directory is
 - zero pending or historical retry entries, failed sections, unmapped records,
   and attachment-body requests;
 - agreement among checkpoint, discovery queue, and retained applications;
-- database, evidence-path, and SHA-256 integrity for all 1,560 evidence rows;
+- 1,696 cumulative durable acquisition requests and 45,867,984 transferred
+  bytes across the authority's interrupted and successful runs;
+- database, evidence-path, and SHA-256 integrity for all 1,560 evidence rows,
+  plus 1,299 ordered current application-to-capture associations and 1,292
+  distinct current content digests;
+- persisted `LIVE_READY` readiness with HTTP transport;
 - an unchanged immediate rerun with zero requests and zero transferred bytes.
 
 During qualification, stored official evidence exposed windowed pagination on
@@ -94,9 +102,18 @@ refreshed the 95 records whose retained official overviews exposed decision
 dates, made 325 one-attempt requests, and again completed an immediate
 zero-request rerun.
 
+A later provenance audit found that same-day resume had overwritten the
+original acquisition cost with zero and that the store still carried the
+package-default blocked manifest. Qualification now writes the private proof
+before publishing its local receipt, recovers publication failure without
+network I/O, binds cumulative cost to authority-scoped durable run rows, rejects
+missing or inconsistent terminal proof, uses strict receipt schemas, and checks
+the persisted live-ready HTTP manifest. The committed mirror exposes only
+aggregate counts and SHA-256 commitments, not public-reference identities.
+
 ## Acceptance boundary
 
-The complete persisted live bootstrap is verified. This does not make the
-authority operationally qualified or `LIVE_READY`. Genuinely later weekly
-cycles remain pending for 23 September and 30 September 2026. Same-day reruns
-do not count toward those cycles.
+The complete persisted live bootstrap is verified, and the authority is
+`LIVE_READY` for this recorded HTTP contract. It is not operationally qualified:
+genuinely later weekly cycles remain pending for 23 September and 30 September
+2026. Same-day reruns do not count toward those cycles.
