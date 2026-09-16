@@ -19,6 +19,7 @@ from playwright.async_api import (
     Route,
     async_playwright,
 )
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import Field, HttpUrl
 
 from yimby.domain import EvidenceCapture, EvidenceDigest, FrozenModel, TransportMode
@@ -95,6 +96,14 @@ class CamdenBrowserBoundary(Protocol):
         """Release browser resources."""
 
 
+class CamdenChallengeTimeoutError(SourceUnavailableError):
+    """Camden's managed browser challenge did not clear in time."""
+
+    def __init__(self) -> None:
+        """Report a stable, sanitised managed-challenge timeout."""
+        super().__init__("Camden browser challenge did not clear within 60 seconds")
+
+
 class CamdenVisibleChromeBoundary:
     """One visible Chrome page that owns Cloudflare clearance and form navigation."""
 
@@ -151,10 +160,13 @@ class CamdenVisibleChromeBoundary:
             and headers.get("cf-mitigated", "").casefold() == "challenge"
             and urlsplit(raw_url).hostname == _CHALLENGE_HOST
         ):
-            await page.wait_for_function(
-                f"document.title !== {_CHALLENGE_TITLE!r}",
-                timeout=_CHALLENGE_TIMEOUT_MS,
-            )
+            try:
+                await page.wait_for_function(
+                    f"document.title !== {_CHALLENGE_TITLE!r}",
+                    timeout=_CHALLENGE_TIMEOUT_MS,
+                )
+            except PlaywrightTimeoutError as error:
+                raise CamdenChallengeTimeoutError from error
             await page.wait_for_load_state("domcontentloaded")
             status = 200
         body = (await page.content()).encode()

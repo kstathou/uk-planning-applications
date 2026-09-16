@@ -10,12 +10,14 @@ from typing import TYPE_CHECKING, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from pydantic import HttpUrl
 
 from yimby.authorities.camden import browser_session
 from yimby.authorities.camden.browser_session import (
     CamdenBrowserPayload,
     CamdenBrowserPortalSession,
+    CamdenChallengeTimeoutError,
     CamdenVisibleChromeBoundary,
 )
 from yimby.domain import TransportMode
@@ -354,4 +356,22 @@ def test_camden_visible_chrome_handles_plain_and_missing_responses() -> None:
 
     page.goto.return_value = None
     with pytest.raises(SourceUnavailableError, match="missing browser response"):
+        asyncio.run(boundary.request(_request()))
+
+
+def test_camden_visible_chrome_names_managed_challenge_timeout() -> None:
+    response = MagicMock()
+    response.status = 403
+    response.all_headers = AsyncMock(return_value={"cf-mitigated": "challenge"})
+    page = MagicMock()
+    page.goto = AsyncMock(return_value=response)
+    page.wait_for_function = AsyncMock(side_effect=PlaywrightTimeoutError("timeout"))
+    boundary = CamdenVisibleChromeBoundary(
+        cast("Playwright", MagicMock()),
+        cast("Browser", MagicMock()),
+        cast("BrowserContext", MagicMock()),
+        cast("Page", page),
+    )
+
+    with pytest.raises(CamdenChallengeTimeoutError, match="within 60 seconds"):
         asyncio.run(boundary.request(_request()))
