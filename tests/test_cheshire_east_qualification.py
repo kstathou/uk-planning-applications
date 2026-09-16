@@ -96,6 +96,29 @@ def _search_results() -> bytes:
     """
 
 
+def _live_search_form() -> bytes:
+    return _search_form().replace(b'name="fa" value="search"', b'name="fa" value=""')
+
+
+def _live_search_results() -> bytes:
+    return b"""
+    <div class="col-sm-12 col-md-12 animation-fadeIn application-list">
+    <table id="application_results_table">
+      <thead><tr><th>Application Reference</th><th>Application Type</th>
+      <th>Location Details</th><th>Proposal</th><th class="hidden-xs hidden-sm">Ward</th>
+      <th class="hidden-xs hidden-sm">Community</th><th>Consultation Closes</th>
+      <th class="hidden-xs hidden-sm">Decision</th><th>View</th></tr></thead>
+      <tbody><tr><td>26/3335/PRIOR-1A</td><td>Prior Approval</td>
+      <td>139 Abbey Road</td><td>Single storey rear extension.</td>
+      <td class="hidden-xs hidden-sm">Sandbach Elworth</td>
+      <td class="hidden-xs hidden-sm">Sandbach</td><td>06-10-2026</td><td></td>
+      <td><button class="btn btn-info btn-sm view_application" data-id="406569">
+      <i class="fa fa-link"></i> View</button></td></tr></tbody>
+    </table>
+    </div>
+    """
+
+
 def _weekly_results() -> bytes:
     rows = "".join(
         f"""
@@ -415,6 +438,36 @@ def test_cheshire_replays_exact_successful_search_controls() -> None:
     assert ("valid_date_from", "18-08-2026") in tuple(
         (field.name, field.value) for field in legend_request.form
     )
+
+
+def test_cheshire_accepts_current_live_search_form_contract() -> None:
+    form = cheshire.parse_search_form(_live_search_form())
+    request = cheshire.valid_date_request(
+        form,
+        DiscoveryWindow(
+            start=date(2026, 8, 18),
+            end=date(2026, 9, 16),
+            include_open=True,
+        ),
+    )
+
+    assert tuple((field.name, field.value) for field in request.form)[:2] == (
+        ("fa", ""),
+        ("submitted", ""),
+    )
+
+
+def test_cheshire_accepts_current_live_positive_result_contract() -> None:
+    boundary = cheshire.parse_search_boundary(_live_search_results())
+
+    assert boundary.explicit_zero is False
+    assert boundary.terminal_marker is False
+    assert boundary.reported_total is None
+    assert boundary.pagination_links == ()
+    assert tuple(result.public_reference for result in boundary.results) == (
+        "26/3335/PRIOR-1A",
+    )
+    assert tuple(result.detail_locator for result in boundary.results) == ("406569",)
 
 
 def test_cheshire_form_boundary_rejects_external_associated_controls() -> None:
