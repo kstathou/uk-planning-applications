@@ -52,26 +52,31 @@ officer, received and valid dates, status, proposal, location, decision fields,
 applicant and agent, and plural district, electoral-division, and parish labels.
 A dash in an optional date is retained as no date.
 
-Associated documents are already present in the returned HTML. Their
-`/Document/Download` links expose module, record number, plan identifier, image
+Associated documents are already present in the returned HTML behind the
+`PlanningdocTable` marker and `document-list` table. Their `/Document/Download`
+links expose module, record number, plan identifier, image
 identifier, plan flag, and filename metadata. The qualification retained 1,368
-current document metadata rows across 56 applications. It made zero attachment
-body requests. Public comments and consultee responses remain represented only
-as published document attachments, so their text is explicitly unavailable in
-the common comments section.
+current document metadata rows across 25 applications. The other 31 detail
+responses did not expose a document section and are recorded as unavailable,
+not empty, so they cannot overwrite previously known documents. The run made
+zero attachment body requests. Public comments and consultee responses remain
+represented only as published document attachments, so their text is explicitly
+unavailable in the common comments section.
 
 ## Live qualification receipt
 
 The durable receipt is
 `.yimby/qualification-devon-2026-09-16/devon-qualification-v1.json` with SHA-256
-`77612131ebd5cc1b3bb6de33e2d9986d4df22888d21d205c0d675c818017fe3d`.
+`5a9fab5eb5802d60a099c5c646db43210bc4ec8d4716be081d2c4f78c8628dbd`.
 It records:
 
 - 56 unique discovered references and 56 persisted applications;
-- 56 native, application, and document-section versions;
+- 56 native and application versions, plus 25 complete document-section
+  versions and 31 explicitly unavailable document sections;
 - zero pending retries, failed current sections, unmapped records, comment
   versions, and attachment body requests;
-- SQLite and content-addressed evidence integrity passing;
+- SQLite integrity and complete per-observation, registry, and
+  content-addressed evidence reconciliation passing;
 - 68 official requests and 6,648,256 transferred bytes on the first pass;
 - an immediate terminal rerun with 0 requests, 0 bytes, and 0 attachment bodies;
 - two succeeded run statuses for the qualification attempt; and

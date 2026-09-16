@@ -51,9 +51,10 @@ Raw HTML, JSON, browser objects, and SQLite rows stay behind their adapters. Int
 The transport accepts search, detail, and comment requests. It has no
 attachment-body request type. The live client blocks known attachment paths and
 download endpoints, rejects attachment media types or content dispositions
-before it consumes the response body, and aborts image and media browser
-subresources. The collector also compares retrieved request URLs with emitted
-document links.
+before it consumes the response body, validates every redirect destination
+against an optional request-owned origin and path boundary before following it,
+and aborts image and media browser subresources. The collector also compares
+retrieved request URLs with emitted document links.
 
 ## Storage invariants
 
@@ -79,7 +80,12 @@ The store enforces these invariants:
   than 90 days are next due after 90 days.
 - A normaliser rebuild reads retained native payloads and never contacts a portal.
 
-Evidence uses gzip-compressed, content-addressed files. The store writes the file before it commits its digest. A crash can leave an unreferenced file, but it cannot leave a database row that points to a missing file.
+Evidence uses gzip-compressed, content-addressed files. The store writes the
+file before it commits its digest, and every observation links to each evidence
+digest that produced it. Qualification reconciles those historical links, the
+complete evidence registry, canonical digest paths, decompressed body hashes,
+and the filesystem inventory. A crash can leave an unreferenced file, but it
+cannot leave a database row that points to a missing file.
 
 ## Module ownership
 

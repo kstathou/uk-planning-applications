@@ -34,7 +34,6 @@ from yimby.domain import (
     SourceReference,
     TransportMode,
     UnavailableSection,
-    collection_state,
 )
 from yimby.transport import (
     FormField,
@@ -61,6 +60,7 @@ _FIRST_PAGED_RESULT = 2
 _REDIRECT_BOUNDARY = RedirectBoundary(
     origin=HttpUrl(f"{BASE_URL}/"),
     exact_paths=(
+        "/Disclaimer",
         "/Disclaimer/Accept",
         "/Search/Advanced",
         "/Search/Results",
@@ -412,7 +412,12 @@ class DevonAdapter:
             ),
             documents=documents,
         )
-        return _snapshot(reference, payload, (detail,))
+        return _snapshot(
+            reference,
+            payload,
+            (detail,),
+            CompleteSection(item_count=len(documents)),
+        )
 
     async def _fetch_live(
         self,
@@ -432,7 +437,7 @@ class DevonAdapter:
         )
         if published != reference.reference:
             raise DevonReferenceMismatchError(reference.reference, published)
-        documents = _parse_documents(detail.body)
+        documents, document_state = _parse_documents(detail.body)
         payload = DevonApplicationV1(
             council_reference=published,
             application_type=_required_field(fields, "application type", "type"),
@@ -455,7 +460,7 @@ class DevonAdapter:
             applicant=_optional_field(fields, "applicant"),
             agent=_optional_field(fields, "agent"),
         )
-        return _snapshot(reference, payload, captures)
+        return _snapshot(reference, payload, captures, document_state)
 
     def normalise(
         self, snapshot: NativeSnapshot[DevonApplicationV1]
@@ -902,6 +907,7 @@ def _snapshot(
     reference: SourceReference,
     payload: DevonApplicationV1,
     evidence: tuple[EvidenceCapture, ...],
+    document_state: CompleteSection | UnavailableSection,
 ) -> NativeSnapshot[DevonApplicationV1]:
     return NativeSnapshot(
         reference=reference,
@@ -909,7 +915,7 @@ def _snapshot(
         payload=payload,
         completeness=Completeness(
             application=CompleteSection(item_count=1),
-            documents=collection_state(len(payload.documents)),
+            documents=document_state,
             comments=UnavailableSection(
                 reason="Devon responses are published only as document attachments"
             ),
@@ -1030,12 +1036,17 @@ def _parse_labelled_fields(body: bytes) -> dict[str, str]:
     return fields
 
 
-def _parse_documents(body: bytes) -> tuple[DevonDocumentV1, ...]:
+def _parse_documents(
+    body: bytes,
+) -> tuple[tuple[DevonDocumentV1, ...], CompleteSection | UnavailableSection]:
     soup = BeautifulSoup(body, "html.parser")
-    containers = soup.select("div#documents[hidden]")
-    if len(containers) != 1:
+    markers = soup.select("div#PlanningdocTable")
+    tables = soup.select("table.document-list")
+    if not markers and not tables:
+        return (), UnavailableSection(reason="Devon document section is not exposed")
+    if len(markers) != 1 or len(tables) != 1:
         _raise_parse("document section")
-    links = containers[0].select('a[href*="/Document/Download"]')
+    links = tables[0].select('a[href*="/Document/Download"]')
     if not links:
         _raise_parse("document links")
     documents = []
@@ -1059,7 +1070,8 @@ def _parse_documents(body: bytes) -> tuple[DevonDocumentV1, ...]:
                 filename=_query_value(query, "fileName", "filename"),
             )
         )
-    return tuple(documents)
+    items = tuple(documents)
+    return items, CompleteSection(item_count=len(items))
 
 
 def _query_value(values: dict[str, list[str]], *names: str) -> str | None:

@@ -323,10 +323,11 @@ def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
       <dt>Applicant</dt><dd>Applicant Two</dd>
       <dt>Agent</dt><dd>Agent Two</dd>
     </dl>
-    <div hidden id="documents">
+    <div id="PlanningdocTable" aria-label="Document grid"></div>
+    <table class="tblTest table sortable document-list"><tbody><tr><td>
       <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=1&amp;imageId=2&amp;isPlan=true&amp;fileName=site-plan.pdf">Site plan</a>
       <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=3&amp;imageId=4&amp;isPlan=false">Consultation response</a>
-    </div>
+    </td></tr></tbody></table>
     """.encode()
 
 
@@ -803,6 +804,9 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
 
 def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
     adapter = devon.DevonAdapter()
+    assert devon._REDIRECT_BOUNDARY.allows(
+        f"{devon.BASE_URL}/Disclaimer?returnUrl=%2FSearch%2FAdvanced"
+    )
     window = DiscoveryWindow(
         start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
@@ -1419,9 +1423,14 @@ def test_devon_result_and_pager_fail_closed_boundaries() -> None:
     assert devon._query_bool({}, "isPlan") is None
     with pytest.raises(devon.DevonParseError, match="document isPlan"):
         devon._query_bool({"isPlan": ["maybe"]}, "isPlan")
-    assert len(devon._parse_documents(_devon_detail())) == 2
+    documents, document_state = devon._parse_documents(_devon_detail())
+    assert len(documents) == 2
+    assert document_state.kind == "complete"
+    unavailable_documents, unavailable_state = devon._parse_documents(b"<html></html>")
+    assert unavailable_documents == ()
+    assert unavailable_state.kind == "unavailable"
     with pytest.raises(devon.DevonParseError, match="document section"):
-        devon._parse_documents(_devon_detail().replace(b'id="documents"', b""))
+        devon._parse_documents(_devon_detail().replace(b'id="PlanningdocTable"', b""))
     with pytest.raises(devon.DevonParseError, match="document links"):
         devon._parse_documents(
             _devon_detail().replace(b"/Document/Download", b"/changed")
