@@ -197,6 +197,14 @@ def _detail_page(reference: str, *, document_count: int = 2) -> bytes:
             (1, "21/08/2026", "Location Plan", "1mb"),
         )[:document_count]
     )
+    if document_count == 0:
+        rows = """
+        <tr class="rgNoRecords">
+          <td colspan="2" style="text-align:left;">
+            <div><br><strong>There are currently no scanned documents for this application.</strong></div>
+          </td>
+        </tr>
+        """
     return f"""
     <div id="ctl00_ContentPlaceHolder1_pvDetails">
       <span class="applabel">Application No</span><p class="appdata">{reference}</p>
@@ -1352,6 +1360,35 @@ def test_dorset_document_grid_accepts_exact_direct_telerik_proof() -> None:
         HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={RECEIVED[0].recno}"),
     )
     assert len(documents) == 2
+
+
+def test_dorset_detail_accepts_exact_no_documents_sentinel() -> None:
+    """The official Telerik zero-row sentinel proves an empty document section."""
+    reference = _live_reference()
+
+    native = dorset_adapter._parse_live_detail(
+        _detail_page(reference.reference, document_count=0),
+        reference,
+        HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={reference.locator}"),
+    )
+
+    assert native.documents == ()
+
+
+def test_dorset_detail_rejects_changed_no_documents_sentinel() -> None:
+    """An unrecognised empty-grid message cannot stand in for completeness proof."""
+    reference = _live_reference()
+    body = _detail_page(reference.reference, document_count=0).replace(
+        b"There are currently no scanned documents for this application.",
+        b"Documents are unavailable.",
+    )
+
+    with pytest.raises(ValueError, match="document grid"):
+        dorset_adapter._parse_live_detail(
+            body,
+            reference,
+            HttpUrl(f"{BASE_URL}/plandisp.aspx?recno={reference.locator}"),
+        )
 
 
 @pytest.mark.parametrize(
