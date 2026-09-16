@@ -820,7 +820,6 @@ class CheshireEastParseError(ValueError):
     """A required Cheshire East boundary value was absent."""
 
     def __init__(self, field: str) -> None:
-        """Name a safe parser field."""
         self.code = f"parse-{re.sub(r'[^a-z0-9]+', '-', field.casefold()).strip('-')}"
         super().__init__(f"missing Cheshire East field {field}")
 
@@ -833,7 +832,6 @@ class CheshireEastResultCompletenessUnavailableError(RuntimeError):
     """Live discovery is blocked because result completeness is unproved."""
 
     def __init__(self) -> None:
-        """Prevent the visible rows from becoming false completeness."""
         super().__init__("Cheshire East live discovery completeness is unproved")
 
 
@@ -841,7 +839,6 @@ class CheshireEastDetailUnavailableError(RuntimeError):
     """Live detail collection is disabled while the authority is blocked."""
 
     def __init__(self, reference: str) -> None:
-        """Identify the public reference only."""
         super().__init__(f"Cheshire East live detail is blocked for {reference}")
 
 
@@ -853,7 +850,6 @@ class CheshireEastRoutingError(ValueError):
     """A reference lacks the verified View locator."""
 
     def __init__(self, reference: str) -> None:
-        """Identify the public reference only."""
         super().__init__(f"Cheshire East cannot route reference {reference}")
 
 

@@ -132,7 +132,7 @@ class HttpxPortalSession:
         if _is_attachment_path(split.path):
             self._attachment_body_requests += 1
             raise _attachment_error(split.hostname)
-        body, media_type = await self._read_with_retries(
+        body, media_type = await self._read_with_retries_in_host_slot(
             request,
             raw_url,
             split.hostname or "",
@@ -146,21 +146,20 @@ class HttpxPortalSession:
             digest=EvidenceDigest(sha256(body).hexdigest()),
         )
 
-    async def _read_with_retries(
+    async def _read_with_retries_in_host_slot(
         self,
         portal_request: PortalRequest,
         url: str,
         host: str,
     ) -> tuple[bytes, str]:
-        """Hold the shared host slot through body reads and retry cooldowns."""
-        last_status: int | None = None
         safe_url = _safe_url(url)
         form = [(field.name, field.value) for field in portal_request.form]
         encoded_form = urlencode(form).encode() if form else None
         headers = (
             {"content-type": "application/x-www-form-urlencoded"} if form else None
         )
-        for attempt in range(1, self._max_attempts + 1):
+        attempt = 1
+        while True:
             try:
                 async with self._limiter.turn(host):
                     response: httpx.Response | None = None
@@ -174,7 +173,6 @@ class HttpxPortalSession:
                             ),
                             stream=True,
                         )
-                        last_status = response.status_code
                         if (
                             response.status_code in _RETRYABLE_STATUS
                             and attempt < self._max_attempts
@@ -189,6 +187,7 @@ class HttpxPortalSession:
                                 if retry_after is not None
                                 else _backoff(attempt)
                             )
+                            attempt += 1
                             continue
                         if not _SUCCESS_MIN <= response.status_code < _SUCCESS_MAX:
                             raise _status_error(safe_url, response.status_code)
@@ -212,8 +211,8 @@ class HttpxPortalSession:
                 if attempt == self._max_attempts:
                     raise _attempts_error(safe_url, attempt) from error
                 await self._sleep(_backoff(attempt))
+                attempt += 1
                 continue
-        raise _status_error(safe_url, last_status)  # pragma: no cover
 
     @property
     def requested_urls(self) -> tuple[str, ...]:
