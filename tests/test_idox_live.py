@@ -2315,3 +2315,149 @@ def test_west_suffolk_qualification_rejects_failed_current_sections(
     assert len(sessions) == 1
     assert sessions[0].closed is True
     assert not (data_dir / "west-suffolk-qualification-v1.json").exists()
+
+
+def test_west_suffolk_qualification_rejects_incoherent_terminal_checkpoints(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A terminal bit alone cannot certify a discovery scope."""
+    module = _qualification_module()
+    data_dir = tmp_path / "checkpoint-coherence"
+    sessions: list[_QualificationSession] = []
+
+    def session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        sessions.append(session)
+        return session
+
+    args = [
+        "--confirm-live",
+        "--resume",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-09-14",
+        "--end",
+        "2026-09-20",
+        "--include-open",
+    ]
+    assert module.main(args, session_factory=session_factory) == 0
+    capsys.readouterr()
+    store = _store(data_dir)
+    stored = store.discovery_state(AuthorityId("west-suffolk")).checkpoint
+    assert stored is not None
+    baseline = west_suffolk_adapter.WestSuffolkCheckpointV1.model_validate_json(
+        stored.payload_json
+    )
+    store.close()
+    assert len(baseline.completed_queries) == 10
+    assert len(baseline.seen_references) == 12
+
+    corruptions = (
+        baseline.model_copy(update={"completed_queries": ()}),
+        baseline.model_copy(
+            update={
+                "completed_queries": (
+                    *baseline.completed_queries,
+                    baseline.completed_queries[0],
+                )
+            }
+        ),
+        baseline.model_copy(
+            update={
+                "active_query": baseline.completed_queries[0],
+                "next_page": 2,
+                "query_row_count": 1,
+            }
+        ),
+        baseline.model_copy(update={"seen_references": baseline.seen_references[:-1]}),
+    )
+    receipt_path = data_dir / "west-suffolk-qualification-v1.json"
+    for checkpoint in corruptions:
+        store = _store(data_dir)
+        run_id = store.begin_run(AuthorityId("west-suffolk"))
+        store.commit_discovery(
+            run_id,
+            AuthorityId("west-suffolk"),
+            DurableDiscoveryBatch(
+                references=(),
+                next_checkpoint=StoredCheckpoint(
+                    schema_version=1,
+                    payload_json=checkpoint.model_dump_json(),
+                ),
+                complete=True,
+            ),
+        )
+        store.finish_run(
+            run_id,
+            AuthorityId("west-suffolk"),
+            RunOutcome(
+                status=RunStatus.SUCCEEDED,
+                metrics=RunMetrics(
+                    request_count=0,
+                    transferred_bytes=0,
+                    duration_ms=0,
+                    storage_growth_bytes=0,
+                ),
+                transport_mode=TransportMode.LIVE,
+            ),
+        )
+        store.close()
+        receipt_path.unlink()
+        sessions.clear()
+
+        assert module.main(args, session_factory=session_factory) == 1
+        error = json.loads(capsys.readouterr().err)
+        assert "terminal-checkpoint" in error["failed_checks"]
+        assert len(sessions) == 1
+        assert sessions[0].requested_urls == ()
+        assert sessions[0].closed is True
+        assert not receipt_path.exists()
+
+    empty_dir = tmp_path / "empty-terminal"
+    empty_store = _store(empty_dir)
+    run_id = empty_store.begin_run(AuthorityId("west-suffolk"))
+    empty = baseline.model_copy(update={"seen_references": ()})
+    empty_store.commit_discovery(
+        run_id,
+        AuthorityId("west-suffolk"),
+        DurableDiscoveryBatch(
+            references=(),
+            next_checkpoint=StoredCheckpoint(
+                schema_version=1,
+                payload_json=empty.model_dump_json(),
+            ),
+            complete=True,
+        ),
+    )
+    empty_store.finish_run(
+        run_id,
+        AuthorityId("west-suffolk"),
+        RunOutcome(
+            status=RunStatus.SUCCEEDED,
+            metrics=RunMetrics(
+                request_count=0,
+                transferred_bytes=0,
+                duration_ms=0,
+                storage_growth_bytes=0,
+            ),
+            transport_mode=TransportMode.LIVE,
+        ),
+    )
+    empty_store.close()
+    empty_sessions: list[_QualificationSession] = []
+
+    def empty_session_factory() -> _QualificationSession:
+        session = _QualificationSession(_IdoxMock(_WEST_SUFFOLK_CASE))
+        empty_sessions.append(session)
+        return session
+
+    empty_args = args.copy()
+    empty_args[3] = str(empty_dir)
+    assert module.main(empty_args, session_factory=empty_session_factory) == 1
+    error = json.loads(capsys.readouterr().err)
+    assert {"application-count", "terminal-checkpoint"}.issubset(error["failed_checks"])
+    assert len(empty_sessions) == 1
+    assert empty_sessions[0].requested_urls == ()
+    assert empty_sessions[0].closed is True
