@@ -144,16 +144,21 @@ def _qualification_module() -> ModuleType:
 
 
 class _QualificationSession:
-    def __init__(self, weekly_results: bytes | None = None) -> None:
+    def __init__(
+        self,
+        weekly_results: bytes | None = None,
+        search_form: bytes | None = None,
+    ) -> None:
         self.requests: list[PortalRequest] = []
         self._bytes = 0
         self._weekly_results = weekly_results or _weekly_results()
+        self._search_form = _search_form() if search_form is None else search_form
 
     async def fetch(self, request: PortalRequest) -> EvidenceCapture:
         self.requests.append(request)
         url = str(request.url)
         if url == cheshire._SEARCH_URL and request.method == RequestMethod.GET:
-            body = _search_form()
+            body = self._search_form
         elif url == cheshire._SEARCH_POST_URL:
             body = b"<main><p>No Results Found</p></main>"
         elif (
@@ -656,6 +661,9 @@ def test_cheshire_unavailable_search_form_becomes_an_offline_blocker_receipt(
             b"</table>",
             b'</table><nav class="pagination"><a href="?page=2">Next</a></nav>',
         ),
+        _weekly_results()
+        .replace(b"<table>", b'<table data-result-count="100">')
+        .replace(b"</table>", b"</table><button>All Results Loaded</button>"),
     ],
 )
 def test_cheshire_total_or_next_link_cannot_claim_weekly_terminality(
@@ -722,3 +730,38 @@ def test_cheshire_qualification_does_not_hide_programming_defects(
             session_factory=_BrokenSession,
             now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
         )
+
+
+def test_cheshire_changed_search_method_becomes_a_typed_blocker(
+    tmp_path: Path,
+) -> None:
+    module = _qualification_module()
+    data_dir = tmp_path / "qualification"
+    changed_form = _search_form().replace(b'method="post"', b'method="get"')
+
+    result = module.main(
+        [
+            "--confirm-live",
+            "--data-dir",
+            str(data_dir),
+            "--start",
+            "2026-08-18",
+            "--end",
+            "2026-09-16",
+            "--include-open",
+        ],
+        session_factory=lambda: _QualificationSession(search_form=changed_form),
+        now=lambda: datetime(2026, 9, 16, 9, tzinfo=UTC),
+    )
+
+    assert result == 1
+    receipt = module.CheshireEastQualificationBlockerReceiptV1.model_validate_json(
+        (data_dir / "cheshire-east-qualification-blocker-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert receipt.source_contract is None
+    assert tuple(blocker.code for blocker in receipt.blockers) == (
+        "official-search-form-unavailable",
+    )
+    assert receipt.costs.request_count == 1
