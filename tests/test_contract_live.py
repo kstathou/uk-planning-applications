@@ -198,16 +198,82 @@ def _devon_disclaimer(return_name: str) -> bytes:
     """.encode()
 
 
-def _devon_search(*, count: int = 1, pagination: bool = False) -> bytes:
-    pager = '<nav class="pagination">next</nav>' if pagination else ""
-    return f"""
-    <p>Found {count} records</p>{pager}
-    <dl class="searchResultsList">
-      <dt>Application number</dt>
-      <dd><a href="/Planning/Display/DCC/4473/2026">DCC/4473/2026</a></dd>
-      <dt>Proposal</dt><dd>Upgrade recycling centre</dd>
-    </dl>
-    """.encode()
+def _devon_advanced_form() -> bytes:
+    return b"""
+    <form id="advancedSearchForm" action="/Search/Results" method="post">
+      <input type="hidden" name="__RequestVerificationToken" value="sanitised">
+      <input type="hidden" name="AdvancedSearch" value="true">
+      <input type="checkbox" name="Outstanding" value="true">
+      <input type="hidden" name="Outstanding" value="false">
+      <input type="checkbox" name="SearchPlanning" value="true" checked>
+      <input type="hidden" name="SearchPlanning" value="false">
+      <input type="checkbox" name="SearchEnforcement" value="true">
+      <input type="hidden" name="SearchEnforcement" value="false">
+      <input type="checkbox" name="SearchAppeals" value="true">
+      <input type="hidden" name="SearchAppeals" value="false">
+      <input name="ApplicationOrDistrictNumbers" value="old">
+      <input name="Address" value="old">
+      <input name="Proposal" value="old">
+      <select name="Parish"><option value="" selected>Any</option></select>
+      <select name="Ward"><option value="" selected>Any</option></select>
+      <select name="District"><option value="" selected>Any</option></select>
+      <select name="Radius"><option value="" selected>Any</option></select>
+      <select name="Decision"><option value="" selected>Any</option></select>
+      <input name="DateReceivedFrom" value="old">
+      <input name="DateReceivedTo" value="old">
+      <input name="DateDeterminedFrom" value="old">
+      <input name="DateDeterminedTo" value="old">
+      <select name="ApplicationType"><option value="" selected>Any</option></select>
+      <select name="AppealMethod"><option value="" selected>Any</option></select>
+      <select name="AppealDecision"><option value="" selected>Any</option></select>
+      <input name="PinsRef" value="old">
+      <input name="DateAppealFrom" value="old">
+      <input name="DateAppealTo" value="old">
+      <input name="DateAppealDecisionFrom" value="old">
+      <input name="DateAppealDecisionTo" value="old">
+      <button type="submit" name="submit" value="Search">Search</button>
+    </form>
+    """
+
+
+def _devon_results(
+    references: tuple[str, ...],
+    *,
+    page: int = 1,
+    total_pages: int = 1,
+    current_markers: int = 1,
+    forward: bool | None = None,
+) -> bytes:
+    records = "".join(
+        f"""
+        <dl class="searchResultsList">
+          <dt>Application number</dt>
+          <dd><a href="/Planning/Display/{reference}">{reference}</a></dd>
+          <dt>Proposal</dt><dd>Upgrade recycling centre</dd>
+        </dl>
+        """
+        for reference in references
+    )
+    if total_pages == 1:
+        return records.encode()
+    numbered = []
+    for number in range(1, total_pages + 1):
+        href = "/Search/Results" if number == 1 else f"/Search/Results/{number}"
+        if number == page and current_markers:
+            numbered.extend(
+                f'<li class="active"><span>{number}</span></li>'
+                for _ in range(current_markers)
+            )
+        else:
+            numbered.append(f'<li><a href="{href}">{number}</a></li>')
+    has_forward = page < total_pages if forward is None else forward
+    next_item = (
+        f'<li><a rel="next" href="/Search/Results/{page + 1}">Next</a></li>'
+        if has_forward
+        else '<li class="disabled"><span>Next</span></li>'
+    )
+    pager = f'<ul class="pagination">{"".join(numbered)}{next_item}</ul>'
+    return f"{records}{pager}".encode()
 
 
 def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
@@ -219,20 +285,21 @@ def _devon_detail(reference: str = "DCC/4473/2026") -> bytes:
       <dt>Status</dt><dd>Under Consideration</dd>
       <dt>Location</dt><dd>North Devon recycling centre</dd>
       <dt>Case Officer</dt><dd>Officer Two</dd>
-      <dt>Received Date</dt><dd>20/06/2026</dd>
-      <dt>Validation Date</dt><dd>21 June 2026</dd>
-      <dt>Decision Date</dt><dd>2026-09-15</dd>
+      <dt>Date Received</dt><dd>20/08/2026</dd>
+      <dt>Date Valid</dt><dd>21 August 2026</dd>
+      <dt>Decision Date</dt><dd>-</dd>
+      <dt>Decision</dt><dd>Awaiting decision</dd>
     </dl>
     <dl class="details-grid">
-      <dt>District</dt><dd>North Devon</dd>
-      <dt>Electoral Division</dt><dd>Braunton Rural</dd>
-      <dt>Parish</dt><dd>Georgeham</dd>
+      <dt>District(s)</dt><dd>North Devon</dd>
+      <dt>Electoral Division(s)</dt><dd>Braunton Rural</dd>
+      <dt>Parish(es)</dt><dd>Georgeham</dd>
       <dt>Applicant</dt><dd>Applicant Two</dd>
       <dt>Agent</dt><dd>Agent Two</dd>
     </dl>
     <div hidden id="documents">
-      <a href="/Document/Download?record=4473&amp;plan=1&amp;image=2&amp;filename=site-plan.pdf">Site plan</a>
-      <a href="/Document/Download?recordNumber=4473&amp;planId=3&amp;imageId=4">Consultation response</a>
+      <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=1&amp;imageId=2&amp;isPlan=true&amp;fileName=site-plan.pdf">Site plan</a>
+      <a href="/Document/Download?module=pl&amp;recordNumber=4473&amp;planId=3&amp;imageId=4&amp;isPlan=false">Consultation response</a>
     </div>
     """.encode()
 
@@ -243,33 +310,77 @@ class _DevonMock:
         *,
         direct: bool = False,
         repeated_disclaimer: bool = False,
-        pagination: bool = False,
-        count: int = 1,
+        malformed_page: int | None = None,
+        shift_first_open: bool = False,
         mismatch_detail: bool = False,
     ) -> None:
         self.direct = direct
         self.repeated_disclaimer = repeated_disclaimer
-        self.pagination = pagination
-        self.count = count
+        self.malformed_page = malformed_page
+        self.shift_first_open = shift_first_open
         self.mismatch_detail = mismatch_detail
-        self.protected_seen: set[str] = set()
+        self.pending: tuple[str, int] | None = None
+        self.detail_reference: str | None = None
+        self.query_keys: list[str] = []
+
+    def _result(self) -> bytes:
+        assert self.pending is not None
+        kind, page = self.pending
+        if kind == "received":
+            return _devon_results(("DCC/4473/2026", "DCC/4472/2026", "PRE/1820/2026"))
+        if kind == "determined":
+            return _devon_detail("PRE/1820/2026")
+        start = (page - 1) * 10
+        if page == 1 and self.shift_first_open:
+            start += 1
+        references = tuple(f"OPEN/{number:03d}/2026" for number in range(start + 1, min(start + 11, 56)))
+        if self.malformed_page == page:
+            return _devon_results(references, page=page, total_pages=6, current_markers=0)
+        return _devon_results(references, page=page, total_pages=6)
+
+    def _select_query(self, request: PortalRequest) -> None:
+        values: dict[str, list[str]] = {}
+        for field in request.form:
+            values.setdefault(field.name, []).append(field.value)
+        if "true" in values.get("Outstanding", []):
+            key = "outstanding:planning:true"
+            kind = "outstanding"
+        elif values.get("DateReceivedFrom", [""])[0]:
+            key = "received:2026-08-18:2026-09-16"
+            kind = "received"
+        else:
+            key = "determined:2026-08-18:2026-09-16"
+            kind = "determined"
+        self.query_keys.append(key)
+        self.pending = kind, 1
 
     def __call__(self, request: PortalRequest) -> bytes:
         url = str(request.url)
         if request.method == RequestMethod.POST and "/Disclaimer/Accept" in url:
             if self.repeated_disclaimer:
                 return _devon_disclaimer("again")
-            if "search" in url:
-                return _devon_search(count=self.count, pagination=self.pagination)
-            return _devon_detail("WRONG/1" if self.mismatch_detail else "DCC/4473/2026")
-        if "/Search/Standard" in url:
-            if self.direct:
-                return _devon_search(count=self.count, pagination=self.pagination)
-            return _devon_disclaimer("search")
+            if "advanced" in url:
+                return _devon_advanced_form()
+            if "results" in url:
+                return self._result()
+            return _devon_detail(
+                "WRONG/1" if self.mismatch_detail else cast("str", self.detail_reference)
+            )
+        if url.rstrip("/") == devon._ADVANCED_FORM_URL:
+            return _devon_advanced_form() if self.direct else _devon_disclaimer("advanced")
+        if url.rstrip("/") == devon._RESULTS_URL and request.method == RequestMethod.POST:
+            self._select_query(request)
+            return self._result() if self.direct else _devon_disclaimer("results")
+        if "/Search/Results/" in url:
+            assert self.pending is not None and self.pending[0] == "outstanding"
+            self.pending = "outstanding", int(urlsplit(url).path.rsplit("/", 1)[-1])
+            return self._result() if self.direct else _devon_disclaimer("results")
         if "/Planning/Display/" in url:
+            reference = urlsplit(url).path.partition("/Planning/Display/")[2]
+            self.detail_reference = reference
             if self.direct:
                 return _devon_detail(
-                    "WRONG/1" if self.mismatch_detail else "DCC/4473/2026"
+                    "WRONG/1" if self.mismatch_detail else reference
                 )
             return _devon_disclaimer("detail")
         raise AssertionError(url)
@@ -431,11 +542,16 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
     store = _store(tmp_path)
     collector = Collector(_registry(package), store)
     window = DiscoveryWindow(
-        start=date(2026, 6, 19), end=date(2026, 9, 16), include_open=False
+        start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
-    session = _Session(_DevonMock())
+    responder = _DevonMock()
+    session = _Session(responder)
     report = asyncio.run(collector.collect(AuthorityId("devon"), window, session))
-    assert len(report.applications) == 1
+    assert len(report.applications) == 3
+    assert responder.query_keys == [
+        "received:2026-08-18:2026-09-16",
+        "determined:2026-08-18:2026-09-16",
+    ]
     stored = store.get_application(report.applications[0])
     assert sorted(item.title for item in stored.documents) == [
         "Consultation response",
@@ -444,14 +560,132 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
     assert stored.completeness.comments.kind == "excluded"
     assert report.attachment_body_requests == 0
     assert all("Document/Download" not in url for url in report.requested_urls)
-    assert (
-        sum(request.method == RequestMethod.POST for request in session.requests) == 2
-    )
+    assert sum(request.method == RequestMethod.POST for request in session.requests) == 9
     view = store.application_view(report.applications[0])
     assert view.metadata.address == "North Devon recycling centre"
-    assert view.metadata.decision_date == date(2026, 9, 15)
+    assert view.metadata.validated_date == date(2026, 8, 21)
+    assert view.metadata.decision_date is None
     store.close()
 
+
+def test_devon_exact_query_inventory_pagination_resume_and_replay() -> None:
+    adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
+    window = DiscoveryWindow(
+        start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=True
+    )
+    responder = _DevonMock()
+    session = _Session(responder)
+
+    async def partial() -> Any:
+        batches = cast("AsyncGenerator[Any]", adapter.discover(session, window, None))
+        received = await anext(batches)
+        determined = await anext(batches)
+        open_first = await anext(batches)
+        await batches.aclose()
+        return received, determined, open_first
+
+    received, determined, open_first = asyncio.run(partial())
+    assert [item.reference for item in received.references] == [
+        "DCC/4473/2026",
+        "DCC/4472/2026",
+        "PRE/1820/2026",
+    ]
+    assert determined.references == ()
+    assert [item.reference for item in open_first.references] == [
+        f"OPEN/{number:03d}/2026" for number in range(1, 11)
+    ]
+    assert responder.query_keys == [
+        "received:2026-08-18:2026-09-16",
+        "determined:2026-08-18:2026-09-16",
+        "outstanding:planning:true",
+    ]
+    submitted = [
+        request
+        for request in session.requests
+        if str(request.url).rstrip("/") == devon._RESULTS_URL
+        and request.method == RequestMethod.POST
+    ]
+    assert len(submitted) == 3
+    submitted_values = []
+    for request in submitted:
+        values: dict[str, list[str]] = {}
+        for field in request.form:
+            values.setdefault(field.name, []).append(field.value)
+        submitted_values.append(values)
+        assert values["__RequestVerificationToken"] == ["sanitised"]
+        assert values["SearchPlanning"] == ["true", "false"]
+        assert values["SearchEnforcement"] == ["false"]
+        assert values["SearchAppeals"] == ["false"]
+        assert values["ApplicationOrDistrictNumbers"] == [""]
+        assert values["Proposal"] == [""]
+    assert submitted_values[0]["DateReceivedFrom"] == ["18/08/2026"]
+    assert submitted_values[0]["DateReceivedTo"] == ["16/09/2026"]
+    assert submitted_values[0]["Outstanding"] == ["false"]
+    assert submitted_values[1]["DateDeterminedFrom"] == ["18/08/2026"]
+    assert submitted_values[1]["DateDeterminedTo"] == ["16/09/2026"]
+    assert submitted_values[1]["Outstanding"] == ["false"]
+    assert submitted_values[2]["Outstanding"] == ["true", "false"]
+
+    checkpoint = open_first.next_checkpoint
+    resumed_responder = _DevonMock()
+    resumed_session = _Session(resumed_responder)
+    resumed = asyncio.run(_batches(adapter, resumed_session, window, checkpoint))
+    assert [len(batch.references) for batch in resumed] == [10, 10, 10, 10, 5]
+    assert resumed[-1].complete
+    assert resumed_responder.query_keys == ["outstanding:planning:true"]
+    assert tuple(
+        urlsplit(str(request.url)).path
+        for request in resumed_session.requests
+        if request.method == RequestMethod.GET and "/Search/Results/" in str(request.url)
+    ) == tuple(f"/Search/Results/{page}" for page in range(2, 7))
+    final = resumed[-1].next_checkpoint
+    audit = devon.qualification_audit(final, window)
+    assert audit.terminal_coherent
+    assert audit.expected_queries == audit.completed_queries == (
+        "received:2026-08-18:2026-09-16",
+        "determined:2026-08-18:2026-09-16",
+        "outstanding:planning:true",
+    )
+    assert len(audit.references) == 58
+
+    with pytest.raises(devon.DevonCheckpointError, match="replay"):
+        asyncio.run(
+            _batches(
+                adapter,
+                _Session(_DevonMock(shift_first_open=True)),
+                window,
+                checkpoint,
+            )
+        )
+
+
+def test_peak_district_public_collector_keeps_loading_sections_failed(
+    tmp_path: Path,
+) -> None:
+    adapter = peak.PeakDistrictAdapter(today=lambda: date(2026, 9, 16))
+    package = AuthorityPackage(
+        adapter, peak.PeakDistrictApplicationV1, peak.PeakDistrictCheckpointV1
+    )
+    store = _store(tmp_path)
+    collector = Collector(_registry(package), store)
+    window = DiscoveryWindow(
+        start=date(2026, 9, 10), end=date(2026, 9, 16), include_open=False
+    )
+    report = asyncio.run(
+        collector.collect(AuthorityId("peak-district"), window, _Session(_PeakMock()))
+    )
+    assert len(report.applications) == 1
+    stored = store.get_application(report.applications[0])
+    assert stored.completeness.documents.kind == "failed"
+    assert stored.completeness.comments.kind == "failed"
+    assert (
+        store.discovery_state(AuthorityId("peak-district")).queued[0].locator
+        == f"{peak.LEGACY_BASE}/result/sanitised-0917"
+    )
+    view = store.application_view(report.applications[0])
+    assert view.metadata.aliases == ("PP-15234567",)
+    assert report.attachment_body_requests == 0
+    store.close()
 
 def test_camden_exact_resolution_and_public_package_collection() -> None:
     adapter = camden.CamdenAdapter()
@@ -551,17 +785,17 @@ def test_arun_resume_open_count_and_identity_boundaries() -> None:
         )
 
 
-def test_devon_window_disclaimer_cap_and_identity_boundaries() -> None:
+def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
     adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
     window = DiscoveryWindow(
-        start=date(2026, 6, 19), end=date(2026, 9, 16), include_open=False
+        start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
     with pytest.raises(devon.DevonWindowUnsupportedError):
         asyncio.run(
             _batches(
                 adapter,
                 _Session(_DevonMock()),
-                window.model_copy(update={"start": date(2026, 6, 20)}),
+                window.model_copy(update={"start": date(2026, 8, 17)}),
                 None,
             )
         )
@@ -571,21 +805,20 @@ def test_devon_window_disclaimer_cap_and_identity_boundaries() -> None:
                 adapter, _Session(_DevonMock(repeated_disclaimer=True)), window, None
             )
         )
-    with pytest.raises(devon.DevonSearchCapUnsupportedError):
+    with pytest.raises(devon.DevonPaginationError):
         asyncio.run(
-            _batches(adapter, _Session(_DevonMock(pagination=True)), window, None)
-        )
-    with pytest.raises(devon.DevonCountMismatchError):
-        asyncio.run(
-            _batches(adapter, _Session(_DevonMock(direct=True, count=2)), window, None)
-        )
-    open_window = window.model_copy(update={"include_open": True})
-    with pytest.raises(devon.DevonOpenEnumerationUnsupportedError):
-        asyncio.run(
-            _batches(adapter, _Session(_DevonMock(direct=True)), open_window, None)
+            _batches(
+                adapter,
+                _Session(_DevonMock(direct=True, malformed_page=1)),
+                window.model_copy(update={"include_open": True}),
+                None,
+            )
         )
     stale = devon.DevonCheckpointV1(
-        result_page="live", window_start=date(2020, 1, 1), window_end=date(2020, 1, 2)
+        result_page="live",
+        live_scope=devon.DevonDiscoveryScope(
+            start=date(2020, 1, 1), end=date(2020, 1, 2), include_open=False
+        ),
     )
     with pytest.raises(devon.DevonCheckpointError):
         asyncio.run(_batches(adapter, _Session(_DevonMock()), window, stale))
@@ -726,34 +959,50 @@ def test_arun_terminal_and_parser_boundaries() -> None:
 def test_devon_terminal_and_parser_boundaries() -> None:
     adapter = devon.DevonAdapter(today=lambda: date(2026, 9, 16))
     window = DiscoveryWindow(
-        start=date(2026, 6, 19), end=date(2026, 9, 16), include_open=False
+        start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
-    terminal = devon.DevonCheckpointV1(result_page="live", live_complete=True)
-    assert asyncio.run(_batches(adapter, _Session(_DevonMock()), window, terminal))[
-        0
-    ].complete
-    with pytest.raises(devon.DevonOpenEnumerationUnsupportedError):
-        asyncio.run(
-            _batches(
-                adapter,
-                _Session(_DevonMock()),
-                window.model_copy(update={"include_open": True}),
-                terminal,
-            )
-        )
+    scope = devon.DevonDiscoveryScope(
+        start=window.start, end=window.end, include_open=False
+    )
+    terminal = devon.DevonCheckpointV1(
+        result_page="live",
+        live_scope=scope,
+        completed_queries=devon._query_keys(scope),
+        seen_references=(
+            SourceReference(
+                source_id=devon.SOURCE,
+                reference="DCC/4473/2026",
+                locator=f"{devon.BASE_URL}/Planning/Display/DCC/4473/2026",
+            ),
+        ),
+        live_complete=True,
+    )
+    terminal_session = _Session(_DevonMock())
+    assert asyncio.run(_batches(adapter, terminal_session, window, terminal))[0].complete
+    assert terminal_session.requests == []
     with pytest.raises(devon.DevonParseError, match="accepted disclaimer"):
-        devon._parse_search_results(_devon_disclaimer("search"))
+        devon._parse_discovery_page(_devon_disclaimer("search"), expected_page=1)
     with pytest.raises(devon.DevonParseError, match="detail link"):
-        devon._parse_search_results(
-            b'<p>Found 1 record</p><dl class="searchResultsList"></dl>'
+        devon._parse_discovery_page(
+            b'<dl class="searchResultsList"></dl>', expected_page=1
         )
-    fallback = devon._parse_search_results(
-        b'<dl class="searchResultsList"><a href="/Planning/Display/DCC/1"></a></dl>'
+    fallback = devon._parse_discovery_page(
+        b'<dl class="searchResultsList"><a href="/Planning/Display/DCC/1"></a></dl>',
+        expected_page=1,
     )
-    assert fallback[0].reference == "DCC/1"
-    assert devon._parse_search_results(b"<p>No records</p>") == ()
+    assert fallback.references[0].reference == "DCC/1"
+    assert devon._parse_discovery_page(
+        b"<p>No records</p>", expected_page=1
+    ).references == ()
     with pytest.raises(devon.DevonParseError, match="no-records"):
-        devon._parse_search_results(b"<p>Unknown</p>")
+        devon._parse_discovery_page(b"<p>Unknown</p>", expected_page=1)
+    with pytest.raises(devon.DevonParseError, match="page-one singleton"):
+        devon._parse_discovery_page(_devon_detail(), expected_page=2)
+    with pytest.raises(devon.DevonPaginationError):
+        devon._parse_discovery_page(
+            _devon_results(tuple(f"DCC/{number}/2026" for number in range(10))),
+            expected_page=1,
+        )
     with pytest.raises(devon.DevonParseError, match="details-grid"):
         devon._parse_labelled_fields(b'<dl class="details-grid"><dt>Orphan</dt></dl>')
     assert devon._optional_field({"second": "value"}, "first", "second") == "value"
@@ -761,6 +1010,7 @@ def test_devon_terminal_and_parser_boundaries() -> None:
     with pytest.raises(devon.DevonParseError, match="detail missing"):
         devon._required_field({}, "missing")
     assert devon._optional_date({}, "date") is None
+    assert devon._optional_date({"date": "-"}, "date") is None
     with pytest.raises(devon.DevonParseError, match="date date"):
         devon._optional_date({"date": "bad"}, "date")
 
