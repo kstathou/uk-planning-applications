@@ -446,6 +446,7 @@ class _LeedsDetailMock:
         transient_summary_failures: int = 0,
         structural_document_cell: bool = False,
         invalid_document_cell_text: bool = False,
+        transient_document_failures: int = 0,
     ) -> None:
         self.reference = reference
         self.blank_optional = blank_optional
@@ -456,6 +457,7 @@ class _LeedsDetailMock:
         self.transient_summary_failures = transient_summary_failures
         self.structural_document_cell = structural_document_cell
         self.invalid_document_cell_text = invalid_document_cell_text
+        self.transient_document_failures = transient_document_failures
         self.tabs: list[str] = []
         self.attachment_paths: list[str] = []
 
@@ -482,6 +484,15 @@ class _LeedsDetailMock:
                     ),
                 )
             if tab == "documents":
+                if self.transient_document_failures:
+                    self.transient_document_failures -= 1
+                    return httpx.Response(
+                        200,
+                        content=(
+                            b"<p>Unable to perform this task. "
+                            b"A remote exception occurred.</p>"
+                        ),
+                    )
                 if self.failed_documents:
                     return httpx.Response(503)
                 return httpx.Response(
@@ -596,6 +607,24 @@ def test_leeds_retries_a_transient_summary_shell() -> None:
 
     assert snapshot.payload.application_reference == "26/05177/TR"
     assert mock.tabs == ["summary", "summary", "documents"]
+
+
+def test_leeds_retries_a_transient_document_shell() -> None:
+    """The observed HTTP-200 remote exception is bounded and retryable."""
+    mock = _LeedsDetailMock(transient_document_failures=1)
+
+    snapshot = asyncio.run(_fetch(mock))
+
+    assert len(snapshot.payload.documents) == 1
+    assert mock.tabs == ["summary", "documents", "documents"]
+
+
+def test_leeds_rejects_a_persistent_document_shell() -> None:
+    """A persistent document remote exception cannot become an empty index."""
+    with pytest.raises(RuntimeError) as raised:
+        asyncio.run(_fetch(_LeedsDetailMock(transient_document_failures=3)))
+
+    assert type(raised.value).__name__ == "LeedsDetailUnavailableError"
 
 
 @pytest.mark.parametrize("failure", ["malformed", "unavailable"])
