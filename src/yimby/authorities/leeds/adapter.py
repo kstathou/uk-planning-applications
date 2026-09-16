@@ -984,7 +984,12 @@ def _parse_documents(
 
 def _parse_document_row(row: Tag) -> LeedsDocumentV1:
     cells = row.find_all("td", recursive=False)
-    if len(cells) != _DOCUMENT_CELL_COUNT or cells[0].get_text(" ", strip=True):
+    if len(cells) != _DOCUMENT_CELL_COUNT:
+        _raise_parse("document metadata row")
+    selection_control = cells[0].select_one(
+        'label.hide + input[type="checkbox"][name="file"][value]'
+    )
+    if cells[0].get_text(" ", strip=True) and selection_control is None:
         _raise_parse("document metadata row")
     links = tuple(
         HttpUrl(urljoin(f"{BASE_URL}/", str(link.get("href", ""))))

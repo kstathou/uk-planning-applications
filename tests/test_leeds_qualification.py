@@ -493,7 +493,9 @@ class _LeedsDetailMock:
                             '<label class="hide">Select this document</label>'
                             '<input type="checkbox" name="file" value="plan.pdf">'
                             if self.structural_document_cell
-                            else "Unexpected" if self.invalid_document_cell_text else ""
+                            else "Unexpected"
+                            if self.invalid_document_cell_text
+                            else ""
                         ),
                     ),
                 )
