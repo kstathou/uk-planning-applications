@@ -524,11 +524,11 @@ class _DevonMock:
         if request.method == RequestMethod.POST and "/Disclaimer/Accept" in url:
             if self.repeated_disclaimer:
                 return _devon_disclaimer("again")
-            if "advanced" in url:
+            if "advanced" in url.casefold():
                 return _devon_advanced_form()
-            if "results" in url:
+            if "results" in url.casefold():
                 return self._result()
-            if "appeal-detail" in url:
+            if "/appeals/display/" in url.casefold():
                 return _devon_appeal_detail(cast("str", self.detail_reference))
             return _devon_detail(
                 "WRONG/1"
@@ -537,31 +537,37 @@ class _DevonMock:
             )
         if url.rstrip("/") == devon._ADVANCED_FORM_URL:
             return (
-                _devon_advanced_form() if self.direct else _devon_disclaimer("advanced")
+                _devon_advanced_form()
+                if self.direct
+                else _devon_disclaimer("/Search/Advanced")
             )
         if (
             url.rstrip("/") == devon._RESULTS_URL
             and request.method == RequestMethod.POST
         ):
             self._select_query(request)
-            return self._result() if self.direct else _devon_disclaimer("results")
+            return (
+                self._result() if self.direct else _devon_disclaimer("/Search/Results")
+            )
         if "/Search/Results/" in url:
             assert self.pending is not None
             assert self.pending[0] == "outstanding"
             self.pending = "outstanding", int(urlsplit(url).path.rsplit("/", 1)[-1])
-            return self._result() if self.direct else _devon_disclaimer("results")
+            return (
+                self._result() if self.direct else _devon_disclaimer(urlsplit(url).path)
+            )
         if "/Planning/Display/" in url:
             reference = urlsplit(url).path.partition("/Planning/Display/")[2]
             self.detail_reference = reference
             if self.direct:
                 return _devon_detail("WRONG/1" if self.mismatch_detail else reference)
-            return _devon_disclaimer("detail")
+            return _devon_disclaimer(urlsplit(url).path)
         if "/Appeals/Display/" in url:
             reference = urlsplit(url).path.partition("/Appeals/Display/")[2]
             self.detail_reference = reference
             if self.direct:
                 return _devon_appeal_detail(reference)
-            return _devon_disclaimer("appeal-detail")
+            return _devon_disclaimer(urlsplit(url).path)
         raise AssertionError(url)
 
 
@@ -767,6 +773,12 @@ def test_devon_public_collector_accepts_disclaimer_and_retains_metadata(
         "committee",
         "consultation-expiry",
     }
+    native = next(
+        devon.DevonApplicationV1.model_validate_json(item.native_json)
+        for item in store.retained_native_records()
+        if item.reference.reference == "DCC/4473/2026"
+    )
+    assert native.local_members == ("Member One", "Member Two")
     with closing(sqlite3.connect(tmp_path / "yimby.sqlite3")) as connection:
         metadata = tuple(
             connection.execute(
@@ -1109,6 +1121,9 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
     assert devon._REDIRECT_BOUNDARY.allows(
         f"{devon.BASE_URL}/Disclaimer?returnUrl=%2FSearch%2FAdvanced"
     )
+    assert not devon._REDIRECT_BOUNDARY.allows(
+        f"{devon.BASE_URL}/Search/Results?unexpected=value"
+    )
     window = DiscoveryWindow(
         start=date(2026, 8, 18), end=date(2026, 9, 16), include_open=False
     )
@@ -1195,7 +1210,7 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
             )
         assert session.requests == []
 
-    malicious_disclaimer = _devon_disclaimer("advanced").replace(
+    malicious_disclaimer = _devon_disclaimer("/Search/Advanced").replace(
         b'action="/Disclaimer/Accept',
         b'action="https://evil.test/Disclaimer/Accept',
     )
@@ -1211,6 +1226,14 @@ def test_devon_window_disclaimer_pager_and_identity_boundaries() -> None:
             )
         )
     assert len(session.requests) == 1
+    with pytest.raises(devon.DevonProtectedRouteError):
+        devon._validate_disclaimer_action(
+            HttpUrl(
+                f"{devon.BASE_URL}/Disclaimer/Accept"
+                "?returnUrl=%2FSearch%2FAdvanced&unexpected=value"
+            ),
+            HttpUrl(devon._ADVANCED_FORM_URL),
+        )
 
     class _RedirectingDisclaimerSession(_Session):
         async def fetch(self, request: PortalRequest) -> EvidenceCapture:
@@ -2063,10 +2086,10 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
         == 0
     )
     output = json.loads(capsys.readouterr().out)
-    receipt_path = data_dir / "devon-qualification-v4.json"
+    receipt_path = data_dir / "devon-qualification-v5.json"
     receipt = json.loads(receipt_path.read_text())
     assert output == receipt
-    assert receipt["schema_version"] == 4
+    assert receipt["schema_version"] == 5
     assert receipt["authority_id"] == "devon"
     assert receipt["scope"] == {
         "start": "2026-08-18",
@@ -2159,7 +2182,7 @@ def test_devon_qualification_persists_typed_receipt_and_zero_network_rerun(
     assert len(sessions) == 2
     assert sessions[0].requested_urls
     assert sessions[1].requested_urls == ()
-    assert not (data_dir / ".devon-qualification-v4.json.tmp").exists()
+    assert not (data_dir / ".devon-qualification-v5.json.tmp").exists()
     with closing(sqlite3.connect(data_dir / "yimby.sqlite3")) as connection:
         retained_status = next(
             connection.execute(
@@ -2316,6 +2339,253 @@ def test_devon_qualification_reconciles_registered_evidence(
     assert json.loads(capsys.readouterr().err) == {
         "error": "qualification-failed",
         "failed_checks": ["evidence-integrity"],
+    }
+
+
+def test_devon_qualification_resumes_an_interrupted_partial_run(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A missing receipt does not strand a durable nonterminal checkpoint."""
+    module = _devon_qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    class _FailFirstDetailSession(_Session):
+        async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+            if request.intent == RequestIntent.DETAIL:
+                raise SourceUnavailableError("interrupted detail")
+            return await super().fetch(request)
+
+    assert (
+        module.main(
+            arguments,
+            session_factory=lambda: _FailFirstDetailSession(_DevonMock()),
+        )
+        == 1
+    )
+    assert json.loads(capsys.readouterr().err)["error"] == "runtime-failure"
+    assert not (data_dir / "devon-qualification-v5.json").exists()
+
+    sessions: list[_Session] = []
+
+    def resumed_factory() -> _Session:
+        session = _Session(_DevonMock())
+        sessions.append(session)
+        return session
+
+    assert module.main([*arguments, "--resume"], session_factory=resumed_factory) == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == 5
+    assert receipt["costs"]["initial"]["request_count"] > 0
+    assert sessions[0].requested_urls
+    assert sessions[1].requested_urls == ()
+
+
+def test_devon_qualification_rejects_tampered_attachment_cost(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A preserved receipt cannot contradict its zero-attachment check."""
+    module = _devon_qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    session_factory = lambda: _Session(_DevonMock())  # noqa: E731
+    assert module.main(arguments, session_factory=session_factory) == 0
+    capsys.readouterr()
+    receipt_path = data_dir / "devon-qualification-v5.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["costs"]["initial"]["attachment_body_requests"] = 7
+    receipt_path.write_text(json.dumps(receipt))
+
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["preserved-live-receipt"],
+    }
+
+
+def test_devon_qualification_binds_evidence_to_its_subject(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Valid evidence bodies cannot be reassigned to other records or pages."""
+    module = _devon_qualification_module()
+    data_dir = tmp_path / "qualification"
+    arguments = [
+        "--confirm-live",
+        "--data-dir",
+        str(data_dir),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+    session_factory = lambda: _Session(_DevonMock())  # noqa: E731
+    assert module.main(arguments, session_factory=session_factory) == 0
+    capsys.readouterr()
+
+    database = data_dir / "yimby.sqlite3"
+    with closing(sqlite3.connect(database)) as connection:
+        observation_rows = tuple(
+            connection.execute(
+                """
+                SELECT linked.rowid, linked.observation_id,
+                    observation.application_id, linked.digest, evidence.path
+                FROM observation_evidence AS linked
+                JOIN observations AS observation
+                    ON observation.id = linked.observation_id
+                JOIN evidence ON evidence.digest = linked.digest
+                ORDER BY linked.observation_id, linked.digest
+                """
+            )
+        )
+        details = tuple(
+            row
+            for row in observation_rows
+            if b"Disclaimer/Accept"
+            not in gzip.decompress((data_dir / "evidence" / row[4]).read_bytes())
+        )
+        first = details[0]
+        second = next(row for row in details if row[1] != first[1])
+        rebuild_digests = {
+            row[0]: json.loads(row[1])
+            for row in connection.execute(
+                "SELECT application_id, evidence_digests_json "
+                "FROM native_rebuild_inputs WHERE application_id IN (?, ?)",
+                (first[2], second[2]),
+            )
+        }
+        temporary_digest = "f" * 64
+        connection.execute(
+            "UPDATE observation_evidence SET digest = ? WHERE rowid = ?",
+            (temporary_digest, first[0]),
+        )
+        connection.execute(
+            "UPDATE observation_evidence SET digest = ? WHERE rowid = ?",
+            (first[3], second[0]),
+        )
+        connection.execute(
+            "UPDATE observation_evidence SET digest = ? WHERE rowid = ?",
+            (second[3], first[0]),
+        )
+        first_digests = list(rebuild_digests[first[2]])
+        second_digests = list(rebuild_digests[second[2]])
+        first_digests[first_digests.index(first[3])] = second[3]
+        second_digests[second_digests.index(second[3])] = first[3]
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_digests_json = ? "
+            "WHERE application_id = ?",
+            (json.dumps(first_digests), first[2]),
+        )
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_digests_json = ? "
+            "WHERE application_id = ?",
+            (json.dumps(second_digests), second[2]),
+        )
+        connection.commit()
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["evidence-integrity"],
+    }
+
+    with closing(sqlite3.connect(database)) as connection:
+        connection.execute(
+            "UPDATE observation_evidence SET digest = ? WHERE rowid = ?",
+            (temporary_digest, first[0]),
+        )
+        connection.execute(
+            "UPDATE observation_evidence SET digest = ? WHERE rowid = ?",
+            (second[3], second[0]),
+        )
+        connection.execute(
+            "UPDATE observation_evidence SET digest = ? WHERE rowid = ?",
+            (first[3], first[0]),
+        )
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_digests_json = ? "
+            "WHERE application_id = ?",
+            (json.dumps(rebuild_digests[first[2]]), first[2]),
+        )
+        connection.execute(
+            "UPDATE native_rebuild_inputs SET evidence_digests_json = ? "
+            "WHERE application_id = ?",
+            (json.dumps(rebuild_digests[second[2]]), second[2]),
+        )
+        discovery_rows = tuple(
+            connection.execute(
+                """
+                SELECT linked.rowid, linked.digest, evidence.path
+                FROM discovery_evidence AS linked
+                JOIN evidence ON evidence.digest = linked.digest
+                WHERE linked.query_key LIKE 'received:%'
+                    AND linked.page = 1
+                ORDER BY linked.digest
+                """
+            )
+        )
+        first_discovery = next(
+            row
+            for row in discovery_rows
+            if b"Disclaimer/Accept"
+            not in gzip.decompress((data_dir / "evidence" / row[2]).read_bytes())
+        )
+        later_rows = tuple(
+            connection.execute(
+                """
+                SELECT linked.rowid, linked.digest, evidence.path
+                FROM discovery_evidence AS linked
+                JOIN evidence ON evidence.digest = linked.digest
+                WHERE linked.query_key = 'outstanding:planning:true'
+                    AND linked.page = 2
+                ORDER BY linked.digest
+                """
+            )
+        )
+        second_discovery = next(
+            row
+            for row in later_rows
+            if b"Disclaimer/Accept"
+            not in gzip.decompress((data_dir / "evidence" / row[2]).read_bytes())
+        )
+        temporary_digest = "f" * 64
+        connection.execute(
+            "UPDATE discovery_evidence SET digest = ? WHERE rowid = ?",
+            (temporary_digest, first_discovery[0]),
+        )
+        connection.execute(
+            "UPDATE discovery_evidence SET digest = ? WHERE rowid = ?",
+            (first_discovery[1], second_discovery[0]),
+        )
+        connection.execute(
+            "UPDATE discovery_evidence SET digest = ? WHERE rowid = ?",
+            (second_discovery[1], first_discovery[0]),
+        )
+        connection.commit()
+    assert module.main([*arguments, "--resume"], session_factory=session_factory) == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "qualification-failed",
+        "failed_checks": ["discovery-evidence"],
     }
 
 

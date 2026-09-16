@@ -630,6 +630,17 @@ def test_http_session_retains_allowed_redirect_destination() -> None:
     asyncio.run(exercise())
 
 
+def test_redirect_boundary_can_restrict_queries_to_observed_paths() -> None:
+    """A path allowlist does not silently admit queries on every route."""
+    boundary = RedirectBoundary(
+        origin=HttpUrl("https://example.test/"),
+        exact_paths=("/disclaimer", "/results"),
+        query_paths=("/disclaimer",),
+    )
+    assert boundary.allows("https://example.test/disclaimer?returnUrl=%2Fresults")
+    assert not boundary.allows("https://example.test/results?unexpected=value")
+
+
 def test_http_session_rate_limits_each_physical_redirect_hop() -> None:
     """Each request in an allowed redirect chain receives the host gap."""
     current = [10.0]
