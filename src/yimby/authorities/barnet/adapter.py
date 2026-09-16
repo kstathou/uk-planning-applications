@@ -373,13 +373,22 @@ class BarnetAdapter:
                 else 0
             )
             if progress.active_query == weekly_query.key and page > 1:
-                first_page = _parse_search_page(
-                    (await session.fetch(_weekly_request(form, weekly_query, 1))).body
-                )
+                prior_page_list = []
+                for prior_page in range(1, page):
+                    prior_page_list.append(
+                        _parse_search_page(
+                            (
+                                await session.fetch(
+                                    _weekly_request(form, weekly_query, prior_page)
+                                )
+                            ).body
+                        )
+                    )
+                prior_pages = tuple(prior_page_list)
                 progress = _restore_query_progress(
                     progress,
                     weekly_query.key,
-                    first_page,
+                    prior_pages,
                 )
             while True:
                 capture = await session.fetch(_weekly_request(form, weekly_query, page))
@@ -429,18 +438,27 @@ class BarnetAdapter:
                 else 0
             )
             if progress.active_query == advanced_query.key and page > 1:
-                first_page = _parse_advanced_search_page(
-                    (
-                        await session.fetch(
-                            _advanced_request(advanced_form, advanced_query, 1)
+                prior_page_list = []
+                for prior_page in range(1, page):
+                    prior_page_list.append(
+                        _parse_advanced_search_page(
+                            (
+                                await session.fetch(
+                                    _advanced_request(
+                                        advanced_form,
+                                        advanced_query,
+                                        prior_page,
+                                    )
+                                )
+                            ).body,
+                            page=prior_page,
                         )
-                    ).body,
-                    page=1,
-                )
+                    )
+                prior_pages = tuple(prior_page_list)
                 progress = _restore_query_progress(
                     progress,
                     advanced_query.key,
-                    first_page,
+                    prior_pages,
                 )
             while True:
                 capture = await session.fetch(
@@ -808,7 +826,7 @@ def _active_query_references(
 def _restore_query_progress(
     progress: BarnetCheckpointV1,
     query_key: str,
-    first_page: _SearchPage,
+    prior_pages: tuple[_SearchPage, ...],
 ) -> BarnetCheckpointV1:
     active_page = _ActivePage(
         query_key=query_key,
@@ -816,25 +834,39 @@ def _restore_query_progress(
         row_count=progress.query_row_count,
     )
     active_references = _active_query_references(progress, active_page)
-    first_references = tuple(reference.reference for reference in first_page.references)
+    known_locators = dict(
+        zip(progress.seen_references, progress.seen_locators, strict=False)
+    )
+    restored_references = []
+    restored_row_count = 0
+    reported_count = progress.query_reported_count
+    for search_page in prior_pages:
+        if reported_count is None:
+            reported_count = search_page.reported
+        elif reported_count != search_page.reported:
+            raise BarnetCountMismatchError(
+                query_key,
+                reported_count,
+                search_page.reported,
+            )
+        next_row_count = restored_row_count + len(search_page.references)
+        if search_page.displayed_range != (restored_row_count + 1, next_row_count):
+            _raise_parse("resumed search result identity")
+        for reference in search_page.references:
+            known_locator = known_locators.get(reference.reference)
+            if known_locator is not None and known_locator != reference.locator:
+                _raise_parse("resumed search result identity")
+            restored_references.append(reference.reference)
+        restored_row_count = next_row_count
     if (
-        first_page.displayed_range != (1, len(first_references))
-        or first_references != active_references[: len(first_references)]
-        or progress.query_row_count > first_page.reported
+        restored_row_count != progress.query_row_count
+        or tuple(restored_references) != active_references
+        or reported_count is None
     ):
         _raise_parse("resumed search result identity")
-    if (
-        progress.query_reported_count is not None
-        and progress.query_reported_count != first_page.reported
-    ):
-        raise BarnetCountMismatchError(
-            query_key,
-            progress.query_reported_count,
-            first_page.reported,
-        )
     return progress.model_copy(
         update={
-            "query_reported_count": first_page.reported,
+            "query_reported_count": reported_count,
             "active_query_references": active_references,
         }
     )
@@ -1122,7 +1154,6 @@ def _parse_result_list(
         reported = _reported_count(
             soup,
             row_count=len(references),
-            allow_empty_first_page_marker=terminal_first_page_marker == "",
         )
     except BarnetParseError:
         if not _is_uncounted_terminal_first_page(
@@ -1136,8 +1167,18 @@ def _parse_result_list(
     if not showing_ranges and soup.select_one('a[href*="pagedSearchResults.do"]'):
         _raise_parse("reported result count")
     displayed_range = None if not showing_ranges else showing_ranges[0][:2]
-    if showing_ranges and showing_ranges[0][2] != reported:
-        _raise_parse("reported result count")
+    if showing_ranges:
+        showing_range = showing_ranges[0]
+        if (
+            any(value != showing_range for value in showing_ranges[1:])
+            or showing_range[2] != reported
+        ):
+            _raise_parse("reported result count")
+        _validate_showing_pager(
+            soup,
+            showing_range,
+            allow_empty_first_page_marker=terminal_first_page_marker == "",
+        )
     return _SearchPage(
         references=tuple(references),
         reported=reported,
@@ -1189,7 +1230,6 @@ def _reported_count(
     soup: BeautifulSoup,
     *,
     row_count: int,
-    allow_empty_first_page_marker: bool = False,
 ) -> int:
     element = soup.select_one("[data-result-count]")
     if isinstance(element, Tag):
@@ -1199,29 +1239,7 @@ def _reported_count(
         return 0
     showing_ranges = _showing_ranges(soup, row_count=row_count)
     if showing_ranges:
-        displayed_range = showing_ranges[0]
-        if any(value != displayed_range for value in showing_ranges[1:]):
-            _raise_parse("reported result count")
-        visible_page = _visible_result_page(soup, displayed_range)
-        current_pages = (
-            (visible_page,)
-            if visible_page is not None
-            else _current_result_pages(
-                soup,
-                allow_empty_first_page_marker=allow_empty_first_page_marker,
-            )
-        )
-        numbered_pages = _numbered_result_pages(soup)
-        if (
-            displayed_range[1] == displayed_range[2]
-            and numbered_pages
-            and (
-                len(current_pages) != 1
-                or any(page > current_pages[0] for page in numbered_pages)
-            )
-        ):
-            _raise_parse("reported result count")
-        return displayed_range[2]
+        return showing_ranges[0][2]
     match = re.search(
         r"(?:showing\s+\d+\s*[-\N{EN DASH}]\s*\d+\s+of|"
         r"displaying.*?of|total)\s+(\d+)(?:\s+results?)?",
@@ -1231,6 +1249,33 @@ def _reported_count(
     if match is None:
         _raise_parse("reported result count")
     return int(match.group(1))
+
+
+def _validate_showing_pager(
+    soup: BeautifulSoup,
+    displayed_range: tuple[int, int, int],
+    *,
+    allow_empty_first_page_marker: bool,
+) -> None:
+    visible_page = _visible_result_page(soup, displayed_range)
+    current_pages = (
+        (visible_page,)
+        if visible_page is not None
+        else _current_result_pages(
+            soup,
+            allow_empty_first_page_marker=allow_empty_first_page_marker,
+        )
+    )
+    numbered_pages = _numbered_result_pages(soup)
+    if (
+        displayed_range[1] == displayed_range[2]
+        and numbered_pages
+        and (
+            len(current_pages) != 1
+            or any(page > current_pages[0] for page in numbered_pages)
+        )
+    ):
+        _raise_parse("reported result count")
 
 
 def _numbered_result_pages(soup: BeautifulSoup) -> tuple[int, ...]:

@@ -1206,9 +1206,7 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
         page=2,
         row_count=1,
     )
-    assert barnet_adapter._active_query_references(legacy_active, active_page) == (
-        "A",
-    )
+    assert barnet_adapter._active_query_references(legacy_active, active_page) == ("A",)
     with pytest.raises(BarnetCheckpointError, match="active query identities"):
         barnet_adapter._active_query_references(
             legacy_active.model_copy(update={"active_query": "other"}),
@@ -1225,13 +1223,19 @@ def test_barnet_result_count_boundaries_fail_closed() -> None:
         barnet_adapter._restore_query_progress(
             legacy_active.model_copy(update={"seen_references": ("B",)}),
             active_page.query_key,
-            resumable_first_page,
+            (resumable_first_page,),
+        )
+    with pytest.raises(BarnetParseError, match="resumed search result identity"):
+        barnet_adapter._restore_query_progress(
+            legacy_active,
+            active_page.query_key,
+            (resumable_first_page.model_copy(update={"displayed_range": (2, 2)}),),
         )
     with pytest.raises(BarnetCountMismatchError, match="expected 3 actual 2"):
         barnet_adapter._restore_query_progress(
             legacy_active.model_copy(update={"query_reported_count": 3}),
             active_page.query_key,
-            resumable_first_page,
+            (resumable_first_page,),
         )
 
     locator_checkpoint = legacy_active.model_copy(
