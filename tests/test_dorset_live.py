@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -880,6 +881,35 @@ def test_dorset_qualification_restarts_stale_partial_discovery(tmp_path: Path) -
     assert receipt.run_statuses == ("succeeded", "succeeded")
 
 
+def test_dorset_qualification_hashes_actual_application_identities(
+    tmp_path: Path,
+) -> None:
+    """Native rebuild inputs cannot mask tampering in the application table."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+    session_factory = lambda: _session(_DorsetMock())  # noqa: E731
+
+    assert module.main(arguments, session_factory=session_factory) == 0
+    receipt_path = tmp_path / "dorset-qualification-v1.json"
+    receipt_path.unlink()
+    with sqlite3.connect(tmp_path / "yimby.sqlite3") as connection:
+        connection.execute("UPDATE applications SET locator = '99999999'")
+
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=session_factory,
+        )
+        == 1
+    )
+    assert not receipt_path.exists()
+
+
 @pytest.mark.parametrize(
     ("arguments", "error"),
     [
@@ -1157,6 +1187,64 @@ def test_dorset_checkpoint_advance_rejects_contradictions(
             progress,
             query_key="received-valid",
             page=page,
+            query_keys=("received-valid", "outstanding"),
+        )
+
+
+def test_dorset_outstanding_query_clears_retained_received_dates() -> None:
+    """The complete open inventory cannot inherit a prior bounded date search."""
+
+    def retain_dates(soup: BeautifulSoup) -> None:
+        values = {
+            "ctl00$ContentPlaceHolder1$txtDateReceivedFrom": "2026-08-18",
+            "ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput": "18/08/2026",
+            "ctl00$ContentPlaceHolder1$txtDateReceivedTo": "2026-09-16",
+            "ctl00$ContentPlaceHolder1$txtDateReceivedTo$dateInput": "16/09/2026",
+        }
+        for name, value in values.items():
+            control = soup.select_one(f'input[name="{name}"]')
+            assert isinstance(control, Tag)
+            control["value"] = value
+
+    form = _form(_mutated(_advanced_form(), retain_dates))
+    request = dorset_adapter._advanced_request(
+        form,
+        dorset_adapter._LIVE_QUERIES[1],
+        dorset_adapter.DorsetDiscoveryScope(
+            start=WINDOW.start,
+            end=WINDOW.end,
+            include_open=True,
+        ),
+    )
+    values = {field.name: field.value for field in request.form}
+
+    assert values["ctl00$ContentPlaceHolder1$txtDateReceivedFrom"] == ""
+    assert values["ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput"] == ""
+    assert values["ctl00$ContentPlaceHolder1$txtDateReceivedTo"] == ""
+    assert values["ctl00$ContentPlaceHolder1$txtDateReceivedTo$dateInput"] == ""
+    assert json.loads(
+        values[
+            "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_dateInput_ClientState"
+        ]
+    )["valueAsString"] == ""
+    assert json.loads(
+        values["ctl00_ContentPlaceHolder1_txtDateReceivedTo_dateInput_ClientState"]
+    )["valueAsString"] == ""
+
+
+def test_dorset_checkpoint_requires_page_one_for_a_fresh_query() -> None:
+    """A terminal-looking later page cannot stand in for an unscanned query."""
+    with pytest.raises(ValueError, match="first page"):
+        dorset_adapter._advance_checkpoint(
+            dorset_adapter.DorsetCheckpointV1(),
+            query_key="received-valid",
+            page=dorset_adapter._ResultPage(
+                references=(_live_reference(),),
+                page=2,
+                total_pages=2,
+                form=(),
+                next_allowed=False,
+            ),
             query_keys=("received-valid", "outstanding"),
         )
 
