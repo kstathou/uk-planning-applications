@@ -46,6 +46,28 @@ ADVANCED_PATH = "/advsearch.aspx"
 RESULTS_PATH = "/searchresults.aspx"
 DISCLAIMER_PATH = "/disclaimer.aspx"
 NEXT_BUTTON = "ctl00$ContentPlaceHolder1$lvResults$RadDataPager1$ctl02$NextButton"
+CALENDAR_ACTIVE_DATES = "[[1980,1,1],[2099,12,30],[2026,9,16]]"
+NUMERIC_CLIENT_STATE = (
+    '{"enabled":true,"emptyMessage":"","validationText":"","valueAsString":"",'
+    '"minValue":-70368744177664,"maxValue":70368744177664,'
+    '"lastSetTextBoxValue":""}'
+)
+
+
+def _date_client_state(iso_value: str = "", display_value: str = "") -> str:
+    validation = f"{iso_value}-00-00-00" if iso_value else ""
+    return json.dumps(
+        {
+            "enabled": True,
+            "emptyMessage": "",
+            "validationText": validation,
+            "valueAsString": validation,
+            "minDateStr": "1980-01-01-00-00-00",
+            "maxDateStr": "2099-12-31-00-00-00",
+            "lastSetTextBoxValue": display_value,
+        },
+        separators=(",", ":"),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +106,10 @@ def _advanced_form() -> bytes:
       <input type="hidden" name="__EVENTVALIDATION" value="validation-state">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
+      <input type="checkbox" name="ctl00$ContentPlaceHolder1$chkOutstanding" value="on">
+      <input type="text" name="ctl00$ContentPlaceHolder1$txtEasting" value="">
+      <input type="hidden" name="ctl00_ContentPlaceHolder1_txtEasting_ClientState">
+      <input type="submit" name="ctl00$ContentPlaceHolder1$btnSearch2" value="Search">
       <input type="text" name="ctl00$ContentPlaceHolder1$txtDateReceivedFrom" value="">
       <input type="text" name="ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput" value="">
       <input type="hidden" name="ctl00_ContentPlaceHolder1_txtDateReceivedFrom_dateInput_ClientState">
@@ -96,9 +122,8 @@ def _advanced_form() -> bytes:
       <input type="hidden" name="ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_SD" value="[]">
       <input type="hidden" name="ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_AD" value="[[1980,1,1],[2099,12,30],[2026,9,16]]">
       <input type="hidden" name="ctl00_ContentPlaceHolder1_txtDateReceivedTo_ClientState">
-      <input type="checkbox" name="ctl00$ContentPlaceHolder1$chkOutstanding" value="on">
-      <input type="submit" name="ctl00$ContentPlaceHolder1$btnSearch2" value="Search">
       <input type="submit" name="ctl00$ContentPlaceHolder1$btnSearch3" value="Search">
+      <input type="text" name="after-submit" value="">
     </form>
     """
 
@@ -353,6 +378,8 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             ("__EVENTVALIDATION", "validation-state"),
             ("tag", "one"),
             ("tag", "two"),
+            ("ctl00$ContentPlaceHolder1$txtEasting", ""),
+            ("ctl00_ContentPlaceHolder1_txtEasting_ClientState", NUMERIC_CLIENT_STATE),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedFrom", "2026-08-18"),
             (
                 "ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput",
@@ -360,10 +387,13 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             ),
             (
                 "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_dateInput_ClientState",
-                "",
+                _date_client_state("2026-08-18", "18/08/2026"),
             ),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_SD", ""),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_AD", ""),
+            ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_SD", "[]"),
+            (
+                "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_AD",
+                CALENDAR_ACTIVE_DATES,
+            ),
             ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_ClientState", ""),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedTo", "2026-09-16"),
             (
@@ -372,12 +402,16 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             ),
             (
                 "ctl00_ContentPlaceHolder1_txtDateReceivedTo_dateInput_ClientState",
-                "",
+                _date_client_state("2026-09-16", "16/09/2026"),
             ),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_SD", ""),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_AD", ""),
+            ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_SD", "[]"),
+            (
+                "ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_AD",
+                CALENDAR_ACTIVE_DATES,
+            ),
             ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_ClientState", ""),
             ("ctl00$ContentPlaceHolder1$btnSearch3", "Search"),
+            ("after-submit", ""),
         ),
         (
             ("__EVENTTARGET", ""),
@@ -387,26 +421,35 @@ def test_dorset_live_discovery_replays_exact_forms_and_exhausts_both_queries() -
             ("__EVENTVALIDATION", "validation-state"),
             ("tag", "one"),
             ("tag", "two"),
+            ("ctl00$ContentPlaceHolder1$chkOutstanding", "on"),
+            ("ctl00$ContentPlaceHolder1$txtEasting", ""),
+            ("ctl00_ContentPlaceHolder1_txtEasting_ClientState", NUMERIC_CLIENT_STATE),
+            ("ctl00$ContentPlaceHolder1$btnSearch2", "Search"),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedFrom", ""),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedFrom$dateInput", ""),
             (
                 "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_dateInput_ClientState",
-                "",
+                _date_client_state(),
             ),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_SD", ""),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_AD", ""),
+            ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_SD", "[]"),
+            (
+                "ctl00_ContentPlaceHolder1_txtDateReceivedFrom_calendar_AD",
+                CALENDAR_ACTIVE_DATES,
+            ),
             ("ctl00_ContentPlaceHolder1_txtDateReceivedFrom_ClientState", ""),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedTo", ""),
             ("ctl00$ContentPlaceHolder1$txtDateReceivedTo$dateInput", ""),
             (
                 "ctl00_ContentPlaceHolder1_txtDateReceivedTo_dateInput_ClientState",
-                "",
+                _date_client_state(),
             ),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_SD", ""),
-            ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_AD", ""),
+            ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_SD", "[]"),
+            (
+                "ctl00_ContentPlaceHolder1_txtDateReceivedTo_calendar_AD",
+                CALENDAR_ACTIVE_DATES,
+            ),
             ("ctl00_ContentPlaceHolder1_txtDateReceivedTo_ClientState", ""),
-            ("ctl00$ContentPlaceHolder1$chkOutstanding", "on"),
-            ("ctl00$ContentPlaceHolder1$btnSearch2", "Search"),
+            ("after-submit", ""),
         ),
     ]
     assert _pairs(mock, RESULTS_PATH) == [
