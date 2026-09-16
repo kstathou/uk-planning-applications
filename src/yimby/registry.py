@@ -58,8 +58,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("camden"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "exact-reference detail and document collection are implemented; "
+        "bounded enumeration is unresolved",
+        "captured Camden JSF, Northgate, and CMWebDrawer contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("haringey"): _status(
@@ -70,20 +71,23 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("devon"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "rolling 90-day discovery and detail collection are implemented; "
+        "older-open and other windows are unresolved",
+        "captured Devon disclaimer, rolling search, detail, and document contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("peak-district"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "JavaScript-loaded sections still need a live adapter agreement",
-        "portal inventory records pending JavaScript section research",
+        "rolling weekly discovery and visible summary are implemented; "
+        "client-loaded sections and older-open are unresolved",
+        "captured Peak District weekly DataTable and legacy summary contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("arun"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "live detail agreement is not implemented by the fixture adapter",
-        "portal inventory records discovery and detail investigation",
+        "bounded received-date discovery and visible detail are implemented; "
+        "older-open and document actions are unresolved",
+        "captured Arun Ocella received search, show-all, and detail contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("opdc"): _status(
