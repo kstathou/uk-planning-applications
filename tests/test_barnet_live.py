@@ -915,6 +915,29 @@ def test_barnet_form_and_search_boundary_variants() -> None:
         barnet_adapter._parse_form(b"<html></html>")
     with pytest.raises(BarnetParseError, match="_csrf"):
         barnet_adapter._parse_form(b'<form><input name="week"></form>')
+    duplicate_weekly_form = WEEKLY_FORM.replace(
+        b"</body>",
+        b'<form action="weeklyListResults.do?action=firstPage" method="post">'
+        b'<input name="_csrf" value="second"></form></body>',
+    )
+    for malformed in (
+        WEEKLY_FORM.replace(b'method="post"', b'method="get"'),
+        WEEKLY_FORM.replace(
+            b"weeklyListResults.do?action=firstPage",
+            b"unexpected.do",
+        ),
+        WEEKLY_FORM.replace(b'name="searchCriteria.ward"', b'name="otherWard"'),
+        WEEKLY_FORM.replace(b'name="week"', b'name="otherWeek"'),
+        WEEKLY_FORM.replace(b'value="Application"', b'value="Other"'),
+        WEEKLY_FORM.replace(
+            b'<input type="radio" name="dateType" value="DC_Decided">',
+            b"",
+        ),
+        WEEKLY_FORM.replace(b'value="DC_Decided"', b'value="DC_Validated"'),
+        duplicate_weekly_form,
+    ):
+        with pytest.raises(BarnetParseError, match="weekly form"):
+            barnet_adapter._parse_form(malformed)
     with pytest.raises(BarnetParseError, match="advanced form status options"):
         barnet_adapter._parse_advanced_form(
             ADVANCED_FORM.replace(
