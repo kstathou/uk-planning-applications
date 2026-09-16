@@ -774,6 +774,16 @@ def test_arun_document_index_accepts_the_official_headerless_table() -> None:
     assert documents[0].description == "Application Form - Without Personal Data"
 
 
+def test_arun_document_index_accepts_the_official_empty_section() -> None:
+    documents = arun._parse_document_index(
+        b"<strong>Documents</strong><table><tr><td>"
+        b"There are no documents for this section"
+        b"</td></tr></table>"
+    )
+
+    assert documents == ()
+
+
 @pytest.mark.parametrize(
     "replacement",
     [
