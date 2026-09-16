@@ -925,6 +925,40 @@ def test_dorset_qualification_persists_exact_terminal_receipt(tmp_path: Path) ->
     assert not list(tmp_path.glob(".*.tmp"))
 
 
+def test_dorset_qualification_terminal_validation_retains_live_cost(
+    tmp_path: Path,
+) -> None:
+    """A validation-only resume still cites its successful live source run."""
+    module = _qualification_module()
+    arguments = [
+        "--confirm-live",
+        "--include-open",
+        "--data-dir",
+        str(tmp_path),
+    ]
+    session_factory = lambda: _session(_DorsetMock())  # noqa: E731
+
+    assert module.main(arguments, session_factory=session_factory) == 0
+    first = module.DorsetQualificationReceiptV1.model_validate_json(
+        (tmp_path / "dorset-qualification-v1.json").read_text()
+    )
+    assert (
+        module.main(
+            [*arguments, "--resume"],
+            session_factory=session_factory,
+        )
+        == 0
+    )
+    validated = module.DorsetQualificationReceiptV1.model_validate_json(
+        (tmp_path / "dorset-qualification-v1.json").read_text()
+    )
+
+    assert validated.source_run_id == first.source_run_id
+    assert validated.costs.initial == first.costs.initial
+    assert validated.costs.initial.fetch_calls == 29
+    assert validated.costs.rerun.fetch_calls == 0
+
+
 def test_dorset_qualification_spaces_every_redirect_hop() -> None:
     """Each automatic redirect remains a separate Dorset host-limiter turn."""
     module = _qualification_module()
