@@ -593,7 +593,7 @@ class DevonAdapter:
                     if value is not None
                 ),
                 application_type=payload.application_type,
-                decision=(
+                decision=_published_value(
                     payload.appeal_decision
                     if payload.record_kind == "appeal"
                     else payload.decision
