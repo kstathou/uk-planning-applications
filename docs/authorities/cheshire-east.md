@@ -17,22 +17,34 @@ portal census.
 The source census was repeated on 16 September 2026 before returning to the
 HTML register. The council's open-data page identifies Insight Cheshire East as
 its official data portal. Its ArcGIS organisation is
-`APHjSHuFMGWVZFgQ`. Exact ArcGIS catalogue searches returned no planning-
-application or weekly-list item, and the organisation's public service
-directory exposes no planning-application layer. The national Planning Data
-organisation page likewise exposes no Cheshire East application feed or
-endpoint. The available planning-related datasets are policy, boundary,
-brownfield, or aggregate datasets rather than the statutory application
-register.
+`APHjSHuFMGWVZFgQ`. The exact ArcGIS catalogue query was
+`orgid:APHjSHuFMGWVZFgQ AND ("planning application" OR "weekly list")` at
+`https://www.arcgis.com/sharing/rest/search?f=json&num=100&q=orgid%3AAPHjSHuFMGWVZFgQ%20AND%20%28%22planning%20application%22%20OR%20%22weekly%20list%22%29`.
+It returned no planning-application or weekly-list item, and
+`https://services3.arcgis.com/APHjSHuFMGWVZFgQ/ArcGIS/rest/services` exposed no
+planning-application service. The national Planning Data organisation page at
+`https://provide.planning.data.gov.uk/organisations/local-authority%3ACHE`
+likewise exposed no Cheshire East application feed or endpoint. The available
+planning-related datasets were policy, boundary, brownfield, or aggregate
+datasets rather than the statutory application register.
 
-The portal's interactive-map page does not provide an alternative application
-inventory. Its public council-direct script falls back to the generic
-`planning_demo` WFS namespace because the page publishes no council-specific
-GIS environment. The advertised available-layers route redirects to login, and
-the referenced Tascomi WFS returned HTTP 523 during the census. It publishes no
-Cheshire East namespace, freshness fact, total, or terminal boundary that could
-support qualification. These API, open-data, GIS, export, and dump candidates
-are therefore rejected before the HTML register is considered.
+The portal's interactive-map page at
+`https://pa.cheshireeast.gov.uk/planning/index.html?fa=search_map` did not
+provide an alternative application inventory. Its public script at
+`https://pa.cheshireeast.gov.uk/gis/systems/gb-council-direct/gis.js` fell back
+to the generic `planning_demo` WFS namespace because the page published no
+council-specific GIS environment. The advertised
+`https://pa.cheshireeast.gov.uk/gis/ajax.html?fa=getAvailableLayers` route
+redirected to login, and the referenced Tascomi WFS returned HTTP 523 during the
+census. It published no Cheshire East namespace, freshness fact, total, or
+terminal boundary that could support qualification. These API, open-data, GIS,
+export, and dump candidates were therefore rejected before the HTML register
+was considered.
+
+Those API-first results are reproducible observations from the named requests,
+not content-addressed qualification evidence: their response bodies were not
+added to the evidence store. They therefore constrain source selection but do
+not prove a live inventory or support promotion.
 
 ## Search contract
 
@@ -52,9 +64,9 @@ The search form is named `form`, uses `POST`, and submits to
   `committee_proposed_date_to`, `decision_issued_date_from`, and
   `decision_issued_date_to`
 
-The current browser form publishes empty hidden `fa` and `submitted` values;
-an earlier verified response published `fa=search`. The implementation replays
-either evidenced discriminator shape in source order. It sets both valid-date
+The current browser form was observed with empty hidden `fa` and `submitted`
+values; an earlier portal response used `fa=search`. The implementation replays
+either accepted discriminator shape in source order. It sets both valid-date
 bounds, blanks every documented filter including hidden address coordinates,
 omits checkbox and radio filters, and rejects unknown successful controls. A
 single-select filter must expose one enabled blank option. Browser-effective
@@ -66,9 +78,9 @@ The latest browser recheck returned exactly 30 rows for that valid-date request,
 including `26/3335/PRIOR-1A`, and exactly 30 rows for the unbounded visible
 `Not Determined` decision filter. Neither response published a result total,
 pagination control, continuation token, or all-results-loaded marker. The
-earlier explicit-zero response is retained as source-drift evidence, but is no
-longer treated as the current result. Neither current response proves a complete
-enumeration of recent or active records.
+earlier explicit-zero response was observed, but its body was not retained and
+it is no longer treated as the current result. Neither current response proves
+a complete enumeration of recent or active records.
 
 The parser treats only the rendered `strong.text-danger` value `No Results
 Found.` inside the unique `div.application-list > div.push-30-t` result
@@ -155,8 +167,15 @@ session is constructed.
 
 ## Verification status
 
-`VERIFIED` for the browser form inventory, weekly form, direct detail route,
-reference match, and complete five-row document metadata table.
+`OBSERVED` for the interactive-browser form inventory, weekly form, direct
+detail route, reference match, and five-row document metadata table. Those
+browser response bodies were not added to the content-addressed evidence store;
+the observed shapes are encoded as regression fixtures, not presented as
+retained qualification proof.
+
+`VERIFIED` for the retained automated blocker receipt: one 2,019-byte WAF
+response, zero attachment requests, no SQLite store, and zero source requests
+on immediate offline resume.
 
 `BLOCKED` for live collection. The current recent and not-determined searches
 both stop at exactly 30 rows without terminality; the historical weekly list
