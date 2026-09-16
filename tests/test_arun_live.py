@@ -1178,6 +1178,35 @@ def test_arun_qualification_requires_explicit_safe_options(
     assert created == 0
 
 
+def test_arun_qualification_reports_a_stable_parse_boundary(
+    tmp_path: "Path",
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _qualification_module()
+    args = [
+        "--confirm-live",
+        "--data-dir",
+        str(tmp_path / "bad-source"),
+        "--start",
+        "2026-08-18",
+        "--end",
+        "2026-09-16",
+        "--include-open",
+    ]
+
+    result = module.main(
+        args,
+        session_factory=lambda: _Session(lambda request: b"<html></html>"),
+    )
+
+    assert result == 1
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "runtime-failure",
+        "exception": "ArunParseError",
+        "source_error": "parse-planning-search-form",
+    }
+
+
 def test_arun_qualification_receipt_proves_exact_state_and_zero_network_rerun(
     tmp_path: "Path",
     capsys: pytest.CaptureFixture[str],
