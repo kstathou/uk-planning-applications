@@ -295,6 +295,14 @@ def test_camden_result_pages_reconcile_counts_rows_and_pager() -> None:
             0,
             "result table",
         ),
+        (
+            _results_page(offset=0, total=12, rows=10, next_offset=10).replace(
+                b"StdResults.aspx?",
+                b"https://attacker.example/StdResults.aspx?",
+            ),
+            0,
+            "forward pager origin",
+        ),
     ],
 )
 def test_camden_result_pages_fail_closed(
