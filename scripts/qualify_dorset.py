@@ -311,13 +311,14 @@ def _reference_hash(references: Sequence[SourceReference]) -> str:
 def _reference_agreement(
     store: SqliteStore,
     checkpoint: DorsetCheckpointV1,
-    retained_references: Sequence[SourceReference],
 ) -> DorsetReferenceAgreementV1:
     checkpoint_references = _canonical_references(checkpoint.seen_references)
     durable_references = _canonical_references(
         store.discovery_state(_AUTHORITY_ID).queued
     )
-    application_references = _canonical_references(retained_references)
+    application_references = _canonical_references(
+        store.application_references(_AUTHORITY_ID)
+    )
     if (
         not checkpoint_references
         or len(set(checkpoint_references)) != len(checkpoint_references)
@@ -335,7 +336,7 @@ def _reference_agreement(
 
 def _evidence_proof(
     store: SqliteStore,
-) -> tuple[DorsetEvidenceProofV1, tuple[SourceReference, ...]]:
+) -> DorsetEvidenceProofV1:
     retained = store.retained_native_records()
     captures: dict[str, bytes] = {}
     failed: set[str] = set()
@@ -358,7 +359,7 @@ def _evidence_proof(
     )
     if failed:
         raise QualificationFailedError(("evidence-integrity",))
-    return proof, tuple(record.reference for record in retained)
+    return proof
 
 
 def _counts(snapshot: QualificationSnapshot) -> DorsetQualificationCounts:
@@ -505,16 +506,16 @@ async def _qualify(
     initial = await _collect_once(collector, window, session_factory)
     first_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     checkpoint = _terminal_checkpoint(store, config.scope)
-    proof, retained_references = _evidence_proof(store)
-    agreement = _reference_agreement(store, checkpoint, retained_references)
+    proof = _evidence_proof(store)
+    agreement = _reference_agreement(store, checkpoint)
     initial_checks = _base_checks(store, first_snapshot, initial, proof, agreement)
     _require(initial_checks)
 
     rerun = await _collect_once(collector, window, session_factory)
     final_snapshot = store.qualification_snapshot(_AUTHORITY_ID)
     final_checkpoint = _terminal_checkpoint(store, config.scope)
-    final_proof, final_references = _evidence_proof(store)
-    final_agreement = _reference_agreement(store, final_checkpoint, final_references)
+    final_proof = _evidence_proof(store)
+    final_agreement = _reference_agreement(store, final_checkpoint)
     run_statuses = store.run_statuses()[prior_status_count:]
     final_checks = (
         *_base_checks(store, final_snapshot, initial, final_proof, final_agreement),

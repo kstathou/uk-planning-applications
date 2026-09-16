@@ -897,8 +897,12 @@ def test_dorset_qualification_hashes_actual_application_identities(
     assert module.main(arguments, session_factory=session_factory) == 0
     receipt_path = tmp_path / "dorset-qualification-v1.json"
     receipt_path.unlink()
-    with sqlite3.connect(tmp_path / "yimby.sqlite3") as connection:
+    connection = sqlite3.connect(tmp_path / "yimby.sqlite3")
+    try:
         connection.execute("UPDATE applications SET locator = '99999999'")
+        connection.commit()
+    finally:
+        connection.close()
 
     assert (
         module.main(

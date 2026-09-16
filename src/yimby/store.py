@@ -608,6 +608,26 @@ class SqliteStore:
             checkpoint=checkpoint,
         )
 
+    def application_references(
+        self,
+        authority_id: AuthorityId,
+    ) -> tuple[SourceReference, ...]:
+        """Return identities from the authority's durable application rows."""
+        return tuple(
+            SourceReference(
+                source_id=SourceId(row["source_id"]),
+                reference=row["reference"],
+                locator=row["locator"],
+            )
+            for row in self._connection.execute(
+                """
+                SELECT source_id, reference, locator FROM applications
+                WHERE authority_id = ? ORDER BY source_id, reference
+                """,
+                (authority_id,),
+            )
+        )
+
     def semantic_version_count(
         self,
         application_id: ApplicationId,

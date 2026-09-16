@@ -456,11 +456,7 @@ def _advance_checkpoint(
     page: _ResultPage,
     query_keys: tuple[str, ...],
 ) -> tuple[DorsetCheckpointV1, tuple[SourceReference, ...], bool]:
-    if progress.active_query == query_key:
-        if progress.total_pages != page.total_pages or progress.next_page != page.page:
-            _raise_checkpoint("active page")
-    elif progress.active_query is not None:
-        _raise_checkpoint("active query")
+    _validate_page_position(progress, query_key, page)
     active_references = {
         (reference.reference, reference.locator)
         for reference in progress.active_references
@@ -509,6 +505,20 @@ def _advance_checkpoint(
         )
     query_references = (*progress.active_new_references, *fresh) if terminal else ()
     return checkpoint, query_references, terminal
+
+
+def _validate_page_position(
+    progress: DorsetCheckpointV1,
+    query_key: str,
+    page: _ResultPage,
+) -> None:
+    if progress.active_query == query_key:
+        if progress.total_pages != page.total_pages or progress.next_page != page.page:
+            _raise_checkpoint("active page")
+    elif progress.active_query is not None:
+        _raise_checkpoint("active query")
+    elif page.page != 1:
+        _raise_checkpoint("first page")
 
 
 def _validate_progress(
@@ -999,7 +1009,13 @@ def _advanced_request(
             f"{_RECEIVED_TO}$dateInput": scope.end.strftime("%d/%m/%Y"),
         }
     else:
-        overrides = {_OUTSTANDING: "on"}
+        overrides = {
+            _OUTSTANDING: "on",
+            _RECEIVED_FROM: "",
+            f"{_RECEIVED_FROM}$dateInput": "",
+            _RECEIVED_TO: "",
+            f"{_RECEIVED_TO}$dateInput": "",
+        }
     controls = _successful_controls(
         form,
         frozenset((*overrides, query.submit_name)),
