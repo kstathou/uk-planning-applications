@@ -339,9 +339,9 @@ def test_cheshire_search_and_form_failure_boundaries() -> None:
             b'name="valid_date_from" value="" disabled',
         ),
         _search_form().replace(
-            b"<textarea name=\"proposal\">House</textarea>",
-            b"<textarea name=\"proposal\">House</textarea>"
-            b"<input name=\"proposal\" value=\"Other\">",
+            b'<textarea name="proposal">House</textarea>',
+            b'<textarea name="proposal">House</textarea>'
+            b'<input name="proposal" value="Other">',
         ),
     ):
         with pytest.raises(cheshire.CheshireEastParseError):
@@ -903,9 +903,9 @@ def test_cheshire_qualification_does_not_hide_programming_defects(
             b'name="valid_date_from" value="" disabled',
         ),
         _search_form().replace(
-            b"<textarea name=\"proposal\">House</textarea>",
-            b"<textarea name=\"proposal\">House</textarea>"
-            b"<input name=\"proposal\" value=\"Other\">",
+            b'<textarea name="proposal">House</textarea>',
+            b'<textarea name="proposal">House</textarea>'
+            b'<input name="proposal" value="Other">',
         ),
     ],
     ids=("method", "discriminator", "disabled-date", "duplicate-successful-name"),

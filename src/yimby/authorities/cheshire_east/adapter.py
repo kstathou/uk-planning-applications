@@ -265,6 +265,9 @@ def parse_search_form(body: bytes) -> Tag:
     }
     if controls["fa"].get("value") != "search":
         _raise_parse("search form discriminator")
+    successful_names = _successful_field_names(form)
+    if len(successful_names) != len(set(successful_names)):
+        _raise_parse("duplicate successful search control")
     return form
 
 
@@ -329,6 +332,10 @@ def _successful_form_fields(
     return tuple(fields)
 
 
+def _successful_field_names(form: Tag) -> tuple[str, ...]:
+    return tuple(field.name for field in _successful_form_fields(form, {}))
+
+
 def parse_weekly_form(body: bytes) -> Tag:
     """Validate the official weekly-received form boundary."""
     soup = BeautifulSoup(body, "html.parser")
@@ -345,6 +352,8 @@ def parse_weekly_form(body: bytes) -> Tag:
     discriminator = _enabled_named_control(form, "fa")
     if discriminator.get("value") != "":
         _raise_parse("weekly received discriminator")
+    if _successful_field_names(form) != ("week", "fa"):
+        _raise_parse("weekly received successful controls")
     return form
 
 
