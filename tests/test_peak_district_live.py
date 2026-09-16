@@ -204,6 +204,7 @@ def _documents_page(
     reported: int,
     page: int = 0,
     page_size: int = 2,
+    visible_pages: tuple[int, ...] | None = None,
 ) -> bytes:
     if reported == 0:
         return b'<div id="tabDocumentsMain"><form id="frmDocumentsMain"><strong>No record(s) found</strong></form></div>'
@@ -221,7 +222,7 @@ def _documents_page(
     pages = (reported + page_size - 1) // page_size
     links = "".join(
         f"<a onclick=\"PagingClick('{index}')\">{index + 1}</a>"
-        for index in range(pages)
+        for index in (range(pages) if visible_pages is None else visible_pages)
     )
     return f"""
     <div id="tabDocumentsMain"><form id="frmDocumentsMain">
@@ -1020,6 +1021,20 @@ def test_peak_district_detail_and_document_parser_failure_boundaries() -> None: 
         peak._parse_document_page(empty, reference="A/1", expected_page=1)
     document = _PeakDetailMock.documents[:1]
     page = _documents_page(document, reported=1)
+    large_documents = _documents_page(
+        _PeakDetailMock.documents[:2],
+        reported=25,
+        page_size=2,
+        visible_pages=tuple(range(10)),
+    )
+    assert (
+        peak._parse_document_page(
+            large_documents,
+            reference="NP/DDD/0926/0909",
+            expected_page=0,
+        ).reported
+        == 25
+    )
     document_failures = (
         (page.replace(b"Total record(s): 1", b"Unknown"), "reported count"),
         (
