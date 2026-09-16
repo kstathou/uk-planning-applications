@@ -321,12 +321,11 @@ def test_pilot_registry_ownership() -> None:
 
 
 def test_unresolved_source_boundaries_do_not_claim_discovery_support() -> None:
-    """Blocked and map-only source shells retain unknown live capabilities."""
+    """Unimplemented and map-only source shells retain unknown capabilities."""
     registry = pilot_registry()
     unresolved = {
         AuthorityId("opdc"),
         AuthorityId("dorset"),
-        AuthorityId("blackburn-with-darwen"),
         AuthorityId("birmingham"),
     }
     assert {
