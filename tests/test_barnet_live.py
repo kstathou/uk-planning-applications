@@ -39,7 +39,13 @@ from yimby.domain import (
 from yimby.evidence import EvidenceStore
 from yimby.http_transport import HostRateLimiter, HttpxPortalSession
 from yimby.store import SqliteStore
-from yimby.transport import FormField, PortalRequest, RequestIntent, RequestMethod
+from yimby.transport import (
+    FormField,
+    PortalRequest,
+    RateLimitedError,
+    RequestIntent,
+    RequestMethod,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -271,6 +277,7 @@ class _BarnetMock:
         open_message: bytes = b"Too many results found. Please enter some more parameters.",
         child_failure: bool = False,
         child_unavailable: bool = False,
+        child_rate_limited: bool = False,
         summary: bytes = SUMMARY,
         advanced_multi_page: bool = False,
     ) -> None:
@@ -279,6 +286,7 @@ class _BarnetMock:
         self.open_message = open_message
         self.child_failure = child_failure
         self.child_unavailable = child_unavailable
+        self.child_rate_limited = child_rate_limited
         self.summary = summary
         self.advanced_multi_page = advanced_multi_page
         self.active_advanced: tuple[str, str] | None = None
@@ -400,6 +408,8 @@ class _BarnetMock:
             assert request.url.params["keyVal"] == "KEY-1"
             if active_tab == "summary":
                 return httpx.Response(200, content=self.summary)
+            if self.child_rate_limited:
+                return httpx.Response(429)
             if self.child_unavailable:
                 return httpx.Response(404)
             if active_tab == "documents":
@@ -699,6 +709,27 @@ def test_live_collection_persists_locator_metadata_and_child_failures(
     assert store.semantic_version_count(application_id, "comments") == 1
     assert failing_mock.attachment_paths == []
     store.close()
+
+
+def test_live_child_rate_limit_stops_before_later_sections() -> None:
+    mock = _BarnetMock(child_rate_limited=True)
+    session = _session(mock)
+    reference = SourceReference(
+        source_id=SourceId("barnet-idox-current"),
+        reference="TCP/0001/26",
+        locator="KEY-1",
+    )
+
+    async def fetch() -> None:
+        with pytest.raises(RateLimitedError, match="HTTP 429"):
+            await BARNET_PACKAGE.collect(session, reference)
+        await session.aclose()
+
+    asyncio.run(fetch())
+    detail_requests = [
+        request for request in mock.requests if request[1].endswith("applicationDetails.do")
+    ]
+    assert len(detail_requests) == 2
 
 
 def test_live_fetch_requires_locator_and_form_transport_preserves_pairs() -> None:

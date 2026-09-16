@@ -409,9 +409,12 @@ def test_barnet_qualification_rejects_failed_current_sections(
     module = _qualification_module()
     data_dir = tmp_path / "failed-sections"
     sessions: list[_QualificationSession] = []
+    failed_documents = True
 
     def session_factory() -> _QualificationSession:
-        session = _QualificationSession(_BarnetQualificationMock(failed_documents=True))
+        session = _QualificationSession(
+            _BarnetQualificationMock(failed_documents=failed_documents)
+        )
         sessions.append(session)
         return session
 
@@ -422,6 +425,22 @@ def test_barnet_qualification_rejects_failed_current_sections(
     assert len(sessions) == 1
     assert sessions[0].closed
     assert not (data_dir / "barnet-qualification-v1.json").exists()
+
+    failed_documents = False
+    sessions.clear()
+    assert (
+        module.main(
+            _args(data_dir, "--resume"),
+            session_factory=session_factory,
+        )
+        == 0
+    )
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["counts"]["failed_sections"] == 0
+    assert receipt["counts"]["pending_retries"] == 0
+    assert len(sessions) == 2
+    assert sessions[0].requested_urls
+    assert sessions[1].requested_urls == ()
 
 
 def test_barnet_qualification_reports_source_failures_without_masking_defects(

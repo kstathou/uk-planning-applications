@@ -66,6 +66,7 @@ from yimby.transport import (
     AttachmentBodyBlockedError,
     FixtureSession,
     PortalRequest,
+    RateLimitedError,
     RequestIntent,
     SourceUnavailableError,
 )
@@ -507,6 +508,21 @@ def test_http_session_errors_are_bounded_and_sanitised() -> None:
         await status_session.aclose()
 
     asyncio.run(status_error())
+
+    rate_limited_session = HttpxPortalSession(
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(429))
+        ),
+        limiter=HostRateLimiter(0),
+        max_attempts=1,
+    )
+
+    async def rate_limited_error() -> None:
+        with pytest.raises(RateLimitedError, match="HTTP 429"):
+            await rate_limited_session.fetch(_request("https://failed.test/limited"))
+        await rate_limited_session.aclose()
+
+    asyncio.run(rate_limited_error())
 
     def retryable(request: httpx.Request) -> httpx.Response:
         return httpx.Response(503, headers={"retry-after": "invalid"})
