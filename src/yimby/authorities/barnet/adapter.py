@@ -863,10 +863,7 @@ def _restore_query_progress(
             restored_references.append(reference.reference)
             restored_locators.append(reference.locator)
         restored_row_count = next_row_count
-    if (
-        restored_row_count != progress.query_row_count
-        or reported_count is None
-    ):
+    if restored_row_count != progress.query_row_count or reported_count is None:
         _raise_parse("resumed search result identity")
     return _apply_restored_query_progress(
         progress,
@@ -1021,10 +1018,7 @@ def _parse_advanced_form(body: bytes) -> Tag:
         "date(applicationReceivedEnd)",
     }.issubset(field_names):
         _raise_parse("advanced form")
-    if any(
-        field.name != "_csrf" and field.value
-        for field in _form_fields(form)
-    ):
+    if any(field.name != "_csrf" and field.value for field in _form_fields(form)):
         _raise_parse("advanced form neutral filters")
     return form
 

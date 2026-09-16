@@ -314,6 +314,4 @@ def _status_error(safe_url: str, status: int | None) -> SourceUnavailableError:
     error_type = (
         RateLimitedError if status == _RATE_LIMIT_STATUS else SourceUnavailableError
     )
-    return error_type(
-        f"source unavailable: {safe_url} HTTP {status or 'unknown'}"
-    )
+    return error_type(f"source unavailable: {safe_url} HTTP {status or 'unknown'}")

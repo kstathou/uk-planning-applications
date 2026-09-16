@@ -387,9 +387,10 @@ def _receipt_anchor(
         created_at.date() + timedelta(days=7),
         created_at.date() + timedelta(days=14),
     )
-    if tuple(
-        refresh.due_on for refresh in receipt.weekly_refreshes
-    ) != expected_due_dates:
+    if (
+        tuple(refresh.due_on for refresh in receipt.weekly_refreshes)
+        != expected_due_dates
+    ):
         return None
     return created_at
 

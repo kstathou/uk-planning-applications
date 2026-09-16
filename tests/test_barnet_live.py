@@ -579,6 +579,8 @@ def test_live_discovery_exhausts_exact_open_and_appeal_inventory() -> None:
     received_post = dict(advanced_posts[0])
     assert received_post["date(applicationReceivedStart)"] == "14/09/2026"
     assert received_post["date(applicationReceivedEnd)"] == "20/09/2026"
+
+
 def test_live_advanced_discovery_resumes_by_reposting_first_page() -> None:
     adapter = BarnetAdapter()
     first_session = _session(_BarnetMock(advanced_multi_page=True))
@@ -743,7 +745,9 @@ def test_live_child_rate_limit_stops_before_later_sections(
 
     asyncio.run(fetch())
     detail_requests = [
-        request for request in mock.requests if request[1].endswith("applicationDetails.do")
+        request
+        for request in mock.requests
+        if request[1].endswith("applicationDetails.do")
     ]
     assert len(detail_requests) == expected_detail_requests
 
