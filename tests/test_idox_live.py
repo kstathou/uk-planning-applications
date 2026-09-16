@@ -36,6 +36,9 @@ if TYPE_CHECKING:
     from pathlib import Path
     from types import ModuleType
 
+    from yimby.domain import EvidenceCapture, TransportMode
+    from yimby.transport import PortalRequest
+
 WEEK = DiscoveryWindow(
     start=date(2026, 9, 14),
     end=date(2026, 9, 20),
@@ -123,7 +126,7 @@ def _weekly_form() -> bytes:
         <option value="21/09/2026">Following Monday</option>
       </select>
       <input type="hidden" name="dateType" value="DC_Validated">
-      <input type="hidden" name="searchType" value="Weekly List">
+      <input type="hidden" name="searchType" value="Application">
       <input type="hidden" name="tag" value="one">
       <input type="hidden" name="tag" value="two">
       <input type="submit" name="submit" value="Search">
@@ -228,14 +231,14 @@ class _IdoxMock:
             )
         if path.endswith("/weeklyListResults.do"):
             assert request.headers.get("cookie") == "JSESSIONID=sanitised"
-            assert fields[:6] == (
+            assert fields[:5] == (
                 ("_csrf", "sanitised-token"),
                 ("searchCriteria.parish", ""),
                 ("searchCriteria.ward", ""),
                 ("week", "14/09/2026"),
                 ("dateType", dict(fields)["dateType"]),
-                ("searchType", "Weekly List"),
             )
+            assert fields[5][0] == "searchType"
             assert fields[-2:] == (("tag", "one"), ("tag", "two"))
             self.current_date_type = dict(fields)["dateType"]
             if self.current_date_type == "DC_Decided":
@@ -347,8 +350,74 @@ def _session(mock: _IdoxMock) -> HttpxPortalSession:
     )
 
 
+class _PortalRequestSpy:
+    def __init__(self, inner: HttpxPortalSession) -> None:
+        self.inner = inner
+        self.requests: list[PortalRequest] = []
+
+    async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+        self.requests.append(request)
+        return await self.inner.fetch(request)
+
+    @property
+    def requested_urls(self) -> tuple[str, ...]:
+        return self.inner.requested_urls
+
+    @property
+    def attachment_body_requests(self) -> int:
+        return self.inner.attachment_body_requests
+
+    @property
+    def transferred_bytes(self) -> int:
+        return self.inner.transferred_bytes
+
+    @property
+    def browser_time_ms(self) -> int:
+        return self.inner.browser_time_ms
+
+    @property
+    def mode(self) -> TransportMode:
+        return self.inner.mode
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
 def _store(root: Path) -> SqliteStore:
     return SqliteStore(root / "yimby.sqlite3", EvidenceStore(root / "evidence"))
+
+
+@pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
+def test_weekly_request_preserves_authoritative_hidden_form_fields(
+    case: _Case,
+) -> None:
+    """Weekly search changes its query fields but preserves portal-owned state."""
+    mock = _IdoxMock(case)
+    session = _PortalRequestSpy(_session(mock))
+    package = pilot_registry().get(case.authority_id)
+
+    async def discover_first_page() -> None:
+        batches = cast(
+            "AsyncGenerator[DurableDiscoveryBatch]",
+            package.discover(session, WEEK, None),
+        )
+        await anext(batches)
+        await batches.aclose()
+        await session.aclose()
+
+    asyncio.run(discover_first_page())
+    request = next(request for request in session.requests if request.form)
+
+    assert tuple((field.name, field.value) for field in request.form) == (
+        ("_csrf", "sanitised-token"),
+        ("searchCriteria.parish", ""),
+        ("searchCriteria.ward", ""),
+        ("week", "14/09/2026"),
+        ("dateType", "DC_Validated"),
+        ("searchType", "Application"),
+        ("tag", "one"),
+        ("tag", "two"),
+    )
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: str(case.authority_id))
