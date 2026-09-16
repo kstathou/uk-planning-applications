@@ -30,11 +30,14 @@ The search form is named `form`, uses `POST`, and submits to
   `committee_proposed_date_to`, `decision_issued_date_from`, and
   `decision_issued_date_to`
 
-The implementation serialises the successful controls in source order and
-overrides both valid-date bounds for an exact request. Browser-effective
-disabled fieldsets, including the first-legend exception, are applied before a
-control can be validated or submitted. The qualification scope was the
-inclusive 30-day range 18 August through 16 September 2026.
+The implementation preserves the exact discriminator and submission marker in
+source order. It sets both valid-date bounds, blanks every documented filter
+including hidden address coordinates, omits checkbox and radio filters, and
+rejects unknown successful controls. A
+single-select filter must expose one enabled blank option. Browser-effective
+disabled fieldsets, form ownership, encoding, and option disabledness are
+validated before submission. The qualification scope was the inclusive
+30-day range 18 August through 16 September 2026.
 
 The browser returned an explicit no-results response for that valid-date
 request. It also returned no results when `decision_type_id` was set to the
@@ -46,11 +49,12 @@ enumeration of the requested recent or active records.
 The parser treats only the rendered `strong.text-danger` value `No Results
 Found.` inside the unique `div.application-list > div.push-30-t` result
 boundary as terminal for that zero response. Hidden, duplicated, unscoped, or
-mixed result boundaries fail closed, including non-rendering ancestors. The
-same rendered-boundary check applies to a positive table. A positive result table publishes no
-result total, pagination boundary, or all-results-loaded marker, so a non-empty
-page remains explicitly unproved rather than being treated as the complete
-30-day inventory.
+mixed result boundaries fail closed, including non-rendering ancestors,
+Bootstrap hide and closed-collapse states, and closed native containers. The
+same rendered-boundary check applies to a positive table. A positive result
+table publishes no result total, pagination boundary, or all-results-loaded
+marker, so a non-empty page remains explicitly unproved rather than being
+treated as the complete 30-day inventory.
 
 The register states that appeals are not visible and points users to the
 Planning Inspectorate.
@@ -109,12 +113,16 @@ attempted GET URL independently of the transport-sanitised evidence URL. Its
 immediate `--resume` rerun read only the receipt and evidence. The intended
 recent, weekly-form, historical-week, and direct-detail requests are recorded
 as pending rather than falsely reported as run. Any later parser drift also
-retains every completed response in an offline-resumable typed blocker. Resume
-reparses each retained form, every complete result and weekly row, the detail
-including grid coordinates, and each document-metadata row, then requires the
-reconstructed contract to equal the receipt. Blocker explanations are fixed by
-their typed codes. `--resume` without its receipt fails during configuration
-before a portal session is constructed.
+records the decision stage while retaining every completed request, response,
+and cumulative byte cost in an offline-resumable typed blocker. Resume reparses
+each retained form, every complete result and weekly row, the detail including
+finite British National Grid coordinates, and each document-metadata row, then
+requires the reconstructed contract to equal the receipt. Evidence files and
+their newly created directory chain are synced before a completed journal stage
+is published. A crash before initial journal publication can recover under the
+process lock. Blocker explanations are fixed by their typed codes. `--resume`
+without a receipt or durable journal fails during configuration before a portal
+session is constructed.
 
 ## Verification status
 
