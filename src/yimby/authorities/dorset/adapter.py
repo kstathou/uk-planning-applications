@@ -150,8 +150,8 @@ class DorsetLiveApplicationV1(FrozenModel):
     address: str
     easting: float
     northing: float
-    ward: str
-    parish: str
+    ward: str | None
+    parish: str | None
     documents: tuple[DorsetDocumentV1, ...]
     source_url: HttpUrl
 
@@ -721,8 +721,8 @@ def _parse_live_detail(
         address=_nonempty_value(location, "Address"),
         easting=_parse_coordinate(_nonempty_value(location, "Easting"), "Easting"),
         northing=_parse_coordinate(_nonempty_value(location, "Northing"), "Northing"),
-        ward=_nonempty_value(location, "Ward"),
-        parish=_nonempty_value(location, "Parish"),
+        ward=location["Ward"] or None,
+        parish=location["Parish"] or None,
         documents=_parse_documents_grid(soup, source_url),
         source_url=source_url,
     )
