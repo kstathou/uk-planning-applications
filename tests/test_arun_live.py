@@ -3,13 +3,25 @@
 
 """Arun live discovery and qualification contracts."""
 
+import asyncio
 from datetime import date, timedelta
+from hashlib import sha256
 from itertools import pairwise
+from typing import TYPE_CHECKING
 
 import pytest
 
 import yimby.authorities.arun.adapter as arun
-from yimby.transport import RequestMethod
+from yimby.domain import (
+    EvidenceCapture,
+    EvidenceDigest,
+    SourceReference,
+    TransportMode,
+)
+from yimby.transport import PortalRequest, RequestMethod
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, Callable
 
 
 def _search_form() -> bytes:
@@ -49,6 +61,87 @@ def _partial_results(query_fields: str) -> bytes:
       <input type="submit" value="Show all results">
     </form>
     """.encode()
+
+
+def _complete_results(references: tuple[str, ...]) -> bytes:
+    rows = "".join(
+        '<tr><td><a href="planningDetails?reference='
+        f'{reference}&amp;from=planningSearch">{reference}</a></td></tr>'
+        for reference in references
+    )
+    return f"<table><tr><th>Reference</th></tr>{rows}</table>".encode()
+
+
+class _Session:
+    def __init__(self, responder: "Callable[[PortalRequest], bytes]") -> None:
+        self.responder = responder
+        self.requests: list[PortalRequest] = []
+
+    async def fetch(self, request: PortalRequest) -> EvidenceCapture:
+        self.requests.append(request)
+        body = self.responder(request)
+        return EvidenceCapture(
+            url=request.url,
+            media_type="text/html",
+            body=body,
+            digest=EvidenceDigest(sha256(body).hexdigest()),
+        )
+
+    @property
+    def requested_urls(self) -> tuple[str, ...]:
+        return tuple(str(request.url) for request in self.requests)
+
+    @property
+    def attachment_body_requests(self) -> int:
+        return 0
+
+    @property
+    def transferred_bytes(self) -> int:
+        return 0
+
+    @property
+    def browser_time_ms(self) -> int:
+        return 0
+
+    @property
+    def mode(self) -> TransportMode:
+        return TransportMode.LIVE
+
+    async def aclose(self) -> None:
+        return None
+
+
+class _DiscoveryResponder:
+    references = ("BR/1/26/PL", "BR/2/26/PL")
+
+    def __call__(self, request: PortalRequest) -> bytes:
+        if request.method == RequestMethod.GET:
+            return _search_form()
+        values = {field.name: field.value for field in request.form}
+        if values.get("showall") == "showall":
+            return _complete_results(self.references)
+        if (
+            values.get("receivedFrom") == "18-08-26"
+            and values.get("undecided") == ""
+        ):
+            fields = "".join(
+                f'<input type="hidden" name="{name}" value="{value}">'
+                for name, value in values.items()
+                if name != "action"
+            )
+            return _partial_results(fields)
+        return b"No applications found for entered search criteria"
+
+
+async def _batches(
+    adapter: arun.ArunAdapter,
+    session: _Session,
+    window: arun.DiscoveryWindow,
+    checkpoint: arun.ArunCheckpointV1 | None,
+) -> tuple[object, ...]:
+    return tuple(
+        [batch async for batch in adapter.discover(session, window, checkpoint)]
+    )
 
 
 def test_arun_canonical_query_plan_is_complete_and_non_overlapping() -> None:
@@ -180,3 +273,98 @@ def test_arun_result_parser_fails_closed_on_the_portal_cap() -> None:
     )
     assert empty.reported == 0
     assert empty.references == ()
+
+
+def test_arun_discovery_resumes_show_all_and_terminal_rerun_has_no_io() -> None:
+    adapter = arun.ArunAdapter()
+    window = arun.DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=True,
+    )
+
+    async def first_batch() -> object:
+        batches = adapter.discover(_Session(_DiscoveryResponder()), window, None)
+        first = await anext(batches)
+        await batches.aclose()
+        return first
+
+    first = asyncio.run(first_batch())
+    assert isinstance(first, arun.DiscoveryBatch)
+    assert [reference.reference for reference in first.references] == ["BR/1/26/PL"]
+    assert isinstance(first.next_checkpoint.cursor, arun.ArunLiveCursor)
+    assert isinstance(first.next_checkpoint.cursor.progress, arun.ArunAwaitingShowAll)
+
+    resumed_session = _Session(_DiscoveryResponder())
+    resumed = asyncio.run(
+        _batches(adapter, resumed_session, window, first.next_checkpoint)
+    )
+    assert [
+        reference.reference
+        for batch in resumed
+        for reference in batch.references
+    ] == ["BR/2/26/PL"]
+    terminal = resumed[-1].next_checkpoint
+    assert resumed[-1].complete
+    assert isinstance(terminal.cursor, arun.ArunLiveCursor)
+    assert isinstance(terminal.cursor.progress, arun.ArunComplete)
+    assert len(terminal.cursor.progress.completed) == 60
+    assert terminal.cursor.progress.seen_references == _DiscoveryResponder.references
+
+    terminal_session = _Session(_DiscoveryResponder())
+    rerun = asyncio.run(_batches(adapter, terminal_session, window, terminal))
+    assert len(rerun) == 1
+    assert rerun[0].complete
+    assert rerun[0].references == ()
+    assert terminal_session.requests == []
+
+
+def test_arun_live_checkpoint_rejects_a_different_scope() -> None:
+    adapter = arun.ArunAdapter()
+    window = arun.DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=False,
+    )
+    scope = arun.ArunDiscoveryScope.model_validate(window.model_dump())
+    plan = arun._canonical_query_plan(scope)
+    checkpoint = arun.ArunCheckpointV1(
+        cursor=arun.ArunLiveCursor(
+            scope=scope,
+            plan=plan,
+            progress=arun.ArunReady(next_query=0),
+        )
+    )
+    changed = window.model_copy(update={"start": date(2026, 8, 19)})
+
+    with pytest.raises(arun.ArunCheckpointError):
+        asyncio.run(_batches(adapter, _Session(_DiscoveryResponder()), changed, checkpoint))
+
+
+def test_arun_reference_identity_is_unique_across_overlapping_queries() -> None:
+    adapter = arun.ArunAdapter()
+    window = arun.DiscoveryWindow(
+        start=date(2026, 8, 18),
+        end=date(2026, 9, 16),
+        include_open=True,
+    )
+    session = _Session(_DiscoveryResponder())
+
+    batches = asyncio.run(_batches(adapter, session, window, None))
+
+    references = tuple(
+        reference.reference
+        for batch in batches
+        for reference in batch.references
+    )
+    assert references == _DiscoveryResponder.references
+    assert all(
+        reference.source_id == arun.SOURCE
+        for batch in batches
+        for reference in batch.references
+    )
+    assert not any(
+        isinstance(reference, SourceReference) and reference.reference == ""
+        for batch in batches
+        for reference in batch.references
+    )
