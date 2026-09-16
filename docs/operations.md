@@ -97,8 +97,27 @@ uv run python scripts/smoke_west_suffolk.py --confirm-live --week 2026-09-14
 ```
 
 Without `--confirm-live`, every smoke exits before constructing a live session.
-Each accepts a non-secret state path for resumable pagination. Leeds stops at
-its explicit unverified-detail boundary even when discovery succeeds.
+Each accepts a non-secret state path for resumable pagination. A smoke remains
+a bounded diagnostic and does not substitute for a persisted bootstrap.
+
+Leeds has a separate qualification command for its exact 30-day bootstrap and
+older-open reconciliation:
+
+```sh
+uv run python scripts/qualify_leeds.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-leeds-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+The command refuses a nonempty data directory unless `--resume` is supplied.
+It checkpoints each durable discovery batch and can safely continue the same
+scope after a portal interruption. A successful run writes a typed receipt only
+after every query and retained record passes, then proves an immediate rerun
+uses zero network and zero attachment bodies. The receipt leaves two genuinely
+later weekly cycles pending and never promotes Leeds to `live-ready`.
 
 The captured non-IDOX contracts have matching opt-in smokes:
 

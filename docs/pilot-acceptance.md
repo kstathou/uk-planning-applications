@@ -33,7 +33,7 @@ requirement.
 | Cheshire East | Verified | Form, result table, and numeric View locators recorded; same-day fidelity contradicted | Valid-date-from discovery adapter stops explicitly before unverified total, pagination, window fidelity, or detail | Open | Open |
 | Blackburn with Darwen | Verified | Source blocked | Blocked | Open | Open |
 | Birmingham | Verified | Source blocked | Blocked | Open | Open |
-| Leeds | Verified | Discovery route recorded; detail blocked | Live weekly discovery completed with 293 unique references across both date types; detail remains unverified | Open | Open |
+| Leeds | Verified | Weekly and advanced discovery, summary, two document-table shapes, restricted documents, and transient source shells recorded | Authority-owned 43-query bootstrap with resumable pagination, typed detail extraction, metadata-only documents, and zero-network terminal rerun proof | Blocked at query 11 after 1,148 of 1,148 discovered applications were retained; no receipt | Open |
 | Cornwall | Verified | Discovery, detail, document index, and empty comment count recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | Durham County Council | Verified | Discovery, detail, document index, and unavailable public comment text recorded | Real HTTP adapter implemented; live run pending | Open | Open |
 | West Suffolk | Verified | Discovery, detail, document index, and representation metadata recorded | Live weekly discovery completed for 3 validated and 14 decided applications; one bounded detail fetched with no attachment body | Open | Open |
@@ -49,9 +49,10 @@ remain in coverage denominators and failure reporting until those checks
 succeed.
 
 Current source-health checks on 16 September 2026 returned an empty reply from
-Cornwall and timed out at Durham after bounded retries. West Suffolk and Leeds
-were healthy for completed weekly discovery smokes. These results do not move
-their live-bootstrap cells because the smokes checkpoint discovery but do not
-persist every discovered application through the operational collection store.
-West Suffolk fetched one bounded detail; Leeds stopped explicitly before its
-unverified detail surface.
+Cornwall and timed out at Durham after bounded retries. West Suffolk completed
+its bounded weekly smoke. Leeds later persisted 1,148 applications with exact
+discovery/application agreement, zero failed sections, and zero pending retries
+while completing all ten weekly partitions. Its first advanced-date partition
+stopped at page 10 after one unparseable response and repeated bounded source
+unavailability. The saved checkpoint can resume, but 10 of 43 queries do not
+establish a complete bootstrap and no receipt was issued.

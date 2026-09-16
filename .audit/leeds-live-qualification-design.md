@@ -69,28 +69,29 @@ The advanced parser requires the exact action, `POST` method, enabled control in
 The checkpoint stays close to the proven West Suffolk structure. It records the exact scope, ordered completed query keys and reported totals, active query key, next page, active row count, stable source identities, and a terminal flag. It does not persist form secrets, form contracts, page bodies, or page-level proof objects.
 
 ```python
-class LeedsQueryCompletionV1(FrozenModel):
-    key: str
-    reported_total: int
-
-
 class LeedsReferenceIdentityV1(FrozenModel):
     reference: str
     locator: str
 
 
-class LeedsCheckpointV2(FrozenModel):
+class LeedsCheckpointV1(FrozenModel):
     result_page: str
-    live_scope: LeedsDiscoveryScope | None
-    completed_queries: tuple[LeedsQueryCompletionV1, ...]
-    active_query: str | None
-    next_page: int
-    query_row_count: int
-    seen_references: tuple[LeedsReferenceIdentityV1, ...]
-    live_complete: bool
+    live_scope: LeedsDiscoveryScope | None = None
+    completed_queries: tuple[str, ...] = ()
+    query_totals: tuple[int, ...] = ()
+    active_query: str | None = None
+    next_page: int = 1
+    query_row_count: int = 0
+    seen_references: tuple[str, ...] = ()
+    seen_identities: tuple[LeedsReferenceIdentityV1, ...] = ()
+    live_complete: bool = False
 ```
 
-The same reference cannot acquire another locator. The same locator cannot acquire another reference. A terminal checkpoint returns a complete empty batch before form access. A resumed page above one replays the query's first-page POST to restore the portal session, then requests the saved page. One `_advance_checkpoint` helper owns state transitions after row and reported-total checks pass.
+The same reference cannot acquire another locator. A terminal checkpoint returns
+a complete empty batch before form access. A resumed page above one replays the
+query's first-page POST to restore the portal session, then requests the saved
+page. One `_advance_checkpoint` helper owns state transitions after row and
+reported-total checks pass.
 
 ## Detail boundary
 
@@ -98,7 +99,15 @@ The adapter fetches only summary and document-index pages. It preserves the veri
 
 `Reference`, `Proposal`, and `Status` are required and nonblank. `Application Validated`, `Address`, `Application Type`, `Appeal Status`, and `Appeal Decision` are optional native values because the successful sample did not prove that every older record populates them.
 
-The live document table has six cells per row. The first is a proven empty structural cell. The remaining cells are `Date Published`, `Document Type`, `Measure`, `Description`, and `View`. The parser stores metadata and resolved view URLs but never requests them. A header-only documents table is an empty section. A missing or malformed table without an explicit empty marker is a failed section. Public comment text is `UnavailableSection` under the verified Leeds policy, and comment tabs are not fetched.
+The live document index has two explicit shapes. The six-cell shape contains a
+selection cell followed by `Date Published`, `Document Type`, `Measure`,
+`Description`, and `View`; the selection cell can contain the portal's hidden
+label and checkbox. The four-cell compact shape omits selection and measure.
+The parser stores metadata and resolved view URLs but never requests them. A
+header-only table or explicit no-documents response is empty. The exact
+permission-denied response is unavailable. Every other missing or malformed
+table remains failed. Public comment text is `UnavailableSection` under the
+verified Leeds policy, and comment tabs are not fetched.
 
 Normalisation maps proposal, status, optional address and validated date, and document metadata. It retains appeal fields only in the native payload and advances to `leeds-v2`.
 
@@ -116,7 +125,9 @@ The first run must leave a nonzero application set, no retry, no current failed 
 - `src/yimby/authorities/leeds/__init__.py` binds the evolved Leeds application and checkpoint models.
 - `scripts/qualify_leeds.py` owns CLI safety, process locking, receipt types, public store checks, the immediate rerun, and atomic receipt writing.
 - `tests/test_idox_live.py` owns deterministic live-shaped behavior tests unless the file becomes an observed maintenance problem.
-- `docs/authorities/leeds.md`, `docs/portal-inventory.md`, `docs/pilot-acceptance.md`, `docs/operations.md`, and `src/yimby/registry.py` report only what the persisted receipt proves.
+- `docs/authorities/leeds.md`, `docs/portal-inventory.md`,
+  `docs/pilot-acceptance.md`, `docs/operations.md`, and `src/yimby/registry.py`
+  distinguish partial persisted evidence from a successful receipt.
 - `.yimby/qualification-leeds-2026-09-16` owns the local database, indexed evidence, and receipt.
 
 No generic IDOX layer, shared store migration, or transport change is introduced.

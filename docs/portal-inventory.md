@@ -15,7 +15,7 @@ This reference records the browser census taken on 15 September 2026. A successf
 | Cheshire East | `pa.cheshireeast.gov.uk/planning/index.html?fa=search` | Custom register | A valid-date search and its field inventory were verified. A selected result did not yield readable detail content. See `authorities/cheshire-east.md`. |
 | Blackburn with Darwen | `planning.blackburn.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned the same maintenance page. See `authorities/blackburn-with-darwen.md`. |
 | Birmingham | `eplanning.birmingham.gov.uk/Northgate/PlanningExplorer/` | Northgate Planning Explorer | Two checks returned HTTP 503. See `authorities/birmingham.md`. |
-| Leeds | `publicaccess.leeds.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery returned explicit zero and 156-record outcomes for adjacent weeks. The selected detail returned a remote exception. See `authorities/leeds.md`. |
+| Leeds | `publicaccess.leeds.gov.uk/online-applications/` | IDOX Public Access | Weekly and advanced search forms, paginated results, live summaries, six- and four-cell document indexes, restricted documents, and transient error shells were recorded. A resumable bootstrap retained 1,148 applications before the source became unavailable. See `authorities/leeds.md`. |
 | Cornwall | `planning.cornwall.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery, one current detail, explicit section counts, and its complete 16-row document index were verified without opening attachment bodies. See `authorities/cornwall.md`. |
 | Durham County Council | `publicaccess.durham.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery, one detail record, the comment-section shape, and its six-row document index were verified without opening attachment bodies. See `authorities/durham.md`. |
 | West Suffolk | `planning.westsuffolk.gov.uk/online-applications/` | IDOX Public Access | Weekly discovery, one detail record, and its six-row document index were verified without opening attachment bodies. See `authorities/west-suffolk.md`. |
@@ -34,4 +34,11 @@ The collector must keep source-specific comment semantics. West Suffolk publishe
 
 ## Verification status
 
-Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, Peak District, and West Suffolk have recorded detail paths. Cheshire East and Leeds have recorded discovery paths but inconclusive detail retrieval. Dorset has a verified map-client boundary without bounded application discovery. Blackburn, Birmingham, and OPDC are blocked at their entry points. Every authority now has a dated walkthrough, while the unresolved paths remain explicit.
+Arun, Barnet, Camden, Cornwall, Devon, Durham, Haringey, Leeds, Peak District,
+and West Suffolk have recorded detail paths. Leeds also has a partially
+completed persisted bootstrap, but the source outage prevented its exhaustive
+43-query receipt. Cheshire East has a recorded discovery path but inconclusive
+detail retrieval. Dorset has a verified map-client boundary without bounded
+application discovery. Blackburn, Birmingham, and OPDC are blocked at their
+entry points. Every authority has a dated walkthrough, while unresolved paths
+remain explicit.

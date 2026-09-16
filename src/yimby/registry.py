@@ -122,8 +122,9 @@ PILOT_LIVE_STATUS: dict[AuthorityId, LiveStatus] = {
     ),
     AuthorityId("leeds"): _status(
         LiveReadiness.DISCOVERY_ONLY,
-        "weekly discovery is implemented but the verified detail route fails remotely",
-        "captured Leeds IDOX weekly pagination and remote-exception contracts",
+        "the resumable live bootstrap is incomplete after an official source outage",
+        "captured Leeds weekly and advanced discovery, summary, document, "
+        "restriction, and retry contracts",
         LiveTransportKind.HTTP,
     ),
     AuthorityId("cornwall"): _status(

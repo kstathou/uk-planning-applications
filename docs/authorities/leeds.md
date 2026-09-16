@@ -1,65 +1,97 @@
-# Leeds portal walkthrough
+# Leeds portal walkthrough and live qualification
 
-Observed on 15 September 2026.
+Initial walkthrough: 15 September 2026. Live qualification evidence: 16
+September 2026.
 
-## Source
+## Source and register boundary
 
 - Portal: `https://publicaccess.leeds.gov.uk/online-applications/`
-- Shape: Idox Public Access
-- Register boundary: planning applications only. Building control and licensing are separate services.
+- Shape: IDOX Public Access
+- Covered register: planning applications and associated appeals, conditions,
+  consultations, relationships, and published document metadata
+- Excluded registers: building control and licensing
 
-## Weekly discovery
+The portal uses a server-side session. Every live request is serialized per
+host with a minimum two-second gap. Portal locators (`keyVal`) are source-local
+routing data; the published planning reference remains the human alias.
 
-The weekly-list form exposed parish, ward, week, and date-type controls. The date type distinguishes applications validated in the selected week from applications decided in it. The page warned that the published weekly list does not necessarily contain every record with a matching validation or decision date, so advanced date searches are also required for reconciliation.
+## Exhaustive bootstrap discovery
 
-The current week beginning 14 September 2026 returned an explicit `No results found` response. The preceding week beginning 7 September 2026 returned 156 records. Results were paginated at 10 per page, with 16 pages implied by the reported count. The page allowed 5, 10, 20, 50, or 100 results per page.
+The initial 30-day window is 18 August through 16 September 2026 and includes
+older open applications. One typed, ordered inventory reconciles 43 searches:
 
-Each result exposed a portal key, reference, proposal, address, validation date, status, and sometimes an open-for-comment marker. One visible record was reference `26/05013/FU`, keyed by `TKZTIUJBL8700`.
+1. validated and decided weekly lists for each of five intersecting weeks;
+2. advanced validated-date and decision-date searches bounded to the window;
+3. `Current` searches partitioned across the 30 observed case types; and
+4. one `Appeal lodged` search for active appeals whose application status is
+   not necessarily current.
 
-## Detail path
+The unpartitioned current search exceeds the portal result cap. A capped query
+is a qualification failure, never an empty result. The adapter therefore
+requires the exact observed case-type taxonomy, exhausts every page, reconciles
+displayed totals, and fails closed if the form or taxonomy drifts.
 
-Opening the visible `26/05013/FU` detail link returned the portal's own error page with `Unable to perform this task. A remote exception occurred.` No retry or alternate detail was used during this bounded walkthrough.
+The clean live run completed all ten weekly partitions with totals
+`116, 162, 154, 140, 102, 101, 156, 140, 0, 93`. It then reached page 10 and
+row 90 of the first advanced validated-date partition. At that checkpoint,
+1,148 unique references exactly matched 1,148 retained applications, with zero
+failed current sections and zero pending retries.
 
-This is a failed detail request, not an empty application. Discovery is verified
-for the recorded weekly-list path. Extraction, documents, and comments remain
-inconclusive until the detail service succeeds. Complete weekly pagination is
-verified by the live adapter run below.
+The first page-10 attempt returned an unparseable portal response. Three
+bounded resumed sessions then failed with `SourceUnavailableError`. The
+checkpoint remains resumable at
+`advanced|validated|2026-08-18|2026-09-16`, page 10, row 90. Because only 10 of
+43 queries are complete, no qualification receipt exists and the live
+bootstrap remains blocked.
 
-A live adapter smoke on 16 September 2026 exhausted both validated and decided
-weekly lists for the week beginning 7 September. It retained 293 unique
-references after deduplicating overlap between the date types. The adapter then
-stopped with `LeedsDetailUnverifiedError` before treating the unverified detail
-surface as extracted data.
+## Detail and section contracts
 
-## Collection consequences
+Successful live records established the summary and document-index contracts.
+`Reference`, `Proposal`, and `Status` are required. Address, application type,
+validated date, appeal status, and appeal decision remain optional native
+values because older records can leave them blank. The summary reference must
+equal the queued reference.
 
-- Use the weekly list for enumeration, but reconcile with advanced received, validated, and decision searches.
-- Exhaust all result pages and check the reported count against queued references.
-- Treat the portal key as source-local routing data and the planning reference as an alias, not as a cross-authority identity key.
-- Preserve an explicit source failure when the detail endpoint reports a remote exception.
-- Leeds states elsewhere in the public service that comment text is not published. Model that as unavailable when confirmed for a successfully loaded record, not as an empty comment set.
+Document metadata is retained without opening attachment bodies. Two exact
+table shapes were observed:
 
-## Verification status
+- six cells: selection, date published, document type, measure, description,
+  and view; and
+- four cells: date published, document type, description, and view.
 
-`VERIFIED` for the two weekly-list outcomes and the 156-record pagination contract. `INCONCLUSIVE` for the application detail and every child section because the selected record returned a remote exception.
+The selection cell may contain the portal's accessibility label and checkbox.
+Unknown headers, row widths, dates, links, or pagination remain failed sections.
+The exact Leeds permission-denied page maps to unavailable documents rather
+than empty documents. A header-only table or the explicit no-documents wording
+maps to empty.
 
-## Request contract capture
+The portal intermittently returns an HTTP-200 remote-exception shell for
+summary or documents. The adapter retries that exact response three times. A
+persistent shell remains a retryable whole-record failure and never replaces a
+previous section with empty data. Leeds states that public comment text is not
+published, so comments are represented as unavailable and attachment bodies
+are not used as a substitute.
 
-The weekly-list request was rechecked on 16 September 2026. It posts to
-`weeklyListResults.do?action=firstPage` with the current session, `_csrf`,
-`searchCriteria.parish`, `searchCriteria.ward`, `week`, `dateType`, and
-`searchType`. The date-type values were `DC_Validated` and `DC_Decided`. The
-adapter preserves the form-supplied `searchType` value as portal-owned state
-rather than replacing it with an inferred weekly-list value.
+## Qualification and readiness
 
-Selecting the week beginning 7 September 2026 again produced 156 records. The
-response used `li.searchresult` rows and
-`pagedSearchResults.do?action=page&searchCriteria.page=...`; the first ten page
-links and a next-page link were visible, so enumeration must continue until the
-reported 156 rows are queued. Each summary link carried the portal key in
-`applicationDetails.do?keyVal=...&activeTab=summary`, while the result row
-published the human reference, proposal, address, validated date, and status.
-The live smoke subsequently exhausted both date-type queries, retained 293
-unique references, and completed with zero attachment-body requests. It made no
-claim about detail or child-section completeness, and it did not persist a full
-application bootstrap.
+The isolated live command is:
+
+```sh
+uv run python scripts/qualify_leeds.py \
+  --confirm-live \
+  --data-dir .yimby/qualification-leeds-2026-09-16 \
+  --start 2026-08-18 \
+  --end 2026-09-16 \
+  --include-open
+```
+
+Add `--resume` when continuing the recorded checkpoint. A successful command
+must complete all 43 searches, prove exact checkpoint/queue/application-set
+agreement, verify retained evidence and SQLite integrity, leave no failed or
+pending work, make no attachment-body request, and perform an immediate
+zero-network rerun. Only then does it atomically write
+`leeds-qualification-v1.json`.
+
+Even that receipt proves only the bootstrap. Successful live refreshes around
+23 and 30 September 2026 are still required for operational qualification.
+Leeds therefore remains below `live-ready`.
